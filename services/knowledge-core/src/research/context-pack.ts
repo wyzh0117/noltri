@@ -76,7 +76,7 @@ export function buildContextPack(input: ContextPackInput): { blocks: ContextPack
       body: `${project.name}${charter?.currentStage ? `（${charter.currentStage}）` : ''}`,
     },
     {
-      heading: 'Current Research Questions',
+      heading: 'Current Research Question',
       body: lines(questions.map((question) => `[${question.questionCode}] ${question.questionText}（${question.status}）`)),
     },
     { heading: 'Core Contribution', body: charter?.coreContribution?.trim() || EMPTY },

@@ -58,5 +58,7 @@ export async function createResearchRepository(
 export * from './types';
 export * from './research-types';
 export { InMemoryRepository, createInMemoryRepository } from './in-memory';
+export { InMemoryResearchRepository, createInMemoryResearchRepository } from './research-in-memory';
 export type { SupabaseRepositoryOptions } from './supabase';
 export type { SupabaseResearchRepositoryOptions } from './research-supabase';
+export { SupabaseResearchRepository, createSupabaseResearchRepository } from './research-supabase';

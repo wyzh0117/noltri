@@ -432,7 +432,7 @@ describe('research context pack', () => {
     const pack = await domain.buildContextPack(projectId, USER);
     expect(pack.blocks.map((block) => block.heading)).toEqual([
       'PROJECT',
-      'Current Research Questions',
+      'Current Research Question',
       'Core Contribution',
       'Research Boundary',
       'Claim Boundary',
@@ -447,7 +447,7 @@ describe('research context pack', () => {
 
     const byHeading = new Map(pack.blocks.map((block) => [block.heading, block.body]));
     expect(byHeading.get('PROJECT')).toBe('碳定价研究（写作）');
-    expect(byHeading.get('Current Research Questions')).toContain('[RQ1] 碳定价是否降低排放？（open）');
+    expect(byHeading.get('Current Research Question')).toContain('[RQ1] 碳定价是否降低排放？（open）');
     expect(byHeading.get('Current Method')).toBe('双重差分；面板回归');
     expect(byHeading.get('Confirmed Claims')).toContain('[C1] 排放下降 8%。');
     expect(byHeading.get('Confirmed Claims')).not.toContain('C2');

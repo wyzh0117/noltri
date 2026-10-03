@@ -1152,7 +1152,7 @@ function buildContextPack(project: ResearchProject, state: ResearchState): unkno
   const blocks = [
     { heading: 'PROJECT', body: `${project.name} · ${charter?.currentStage ?? '未标注阶段'}` },
     {
-      heading: 'Current Research Questions',
+      heading: 'Current Research Question',
       body: questions.map((entry) => `${entry.questionCode} ${entry.questionText}（${entry.status}）`).join('\n') || '（无）',
     },
     { heading: 'Core Contribution', body: charter?.coreContribution ?? '（未填写）' },
