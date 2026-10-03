@@ -31,6 +31,7 @@ import { silentLogger, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
 import type { ActorContext, CoreDeps } from './types';
+import type { ResearchDomain } from './research';
 import { retryCapture, runCapture } from './pipeline/capture';
 import { getTree } from './services/tree';
 import { getNodeDetail, patchNode as patchNodeRecord } from './services/node';
@@ -44,10 +45,14 @@ export interface KnowledgeCoreOptions {
   provider: AIProvider;
   config: CoreConfig;
   logger?: Logger;
+  /** Research Domain extension (Research V1). Optional so knowledge-only embeds stay possible. */
+  research?: ResearchDomain;
 }
 
 export interface KnowledgeCore {
   readonly deps: CoreDeps;
+  /** Research Domain facade (Research V1); absent only in knowledge-only embeddings. */
+  readonly research?: ResearchDomain;
   /** Validate -> save RawSource first -> extract -> normalize -> embed -> similarity -> classify -> persist. */
   capture(input: CaptureRequest, actor: ActorContext): Promise<CaptureResult>;
   /** Re-runs extraction onward from the stored raw text of a previously failed source. */
@@ -74,6 +79,7 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
 
   return {
     deps,
+    research: options.research,
     capture: (input, actor) => runCapture(deps, actor, input),
     retryCapture: (rawSourceId, actor) => retryCapture(deps, actor, rawSourceId),
     getTree: (query, actor) => getTree(deps, actor, query),

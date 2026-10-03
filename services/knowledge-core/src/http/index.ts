@@ -8,19 +8,22 @@
 import type { AIProvider } from '@noltri/ai-provider';
 import { createProvider } from '@noltri/ai-provider';
 import { createLogger, currentEnv, type EnvSource, type Logger } from '@noltri/shared';
-import { createRepository, type KnowledgeRepository } from '@noltri/storage';
+import { createRepository, createResearchRepository, type KnowledgeRepository, type ResearchRepository } from '@noltri/storage';
 import { loadCoreConfig, type CoreConfig } from '../config';
 import { createKnowledgeCore, type KnowledgeCore } from '../core';
+import { createResearchDomain, type ResearchDomain } from '../research';
 import { createRequestHandler, type RequestHandler, type RouterDeps } from './router';
 
 export interface CoreBundle {
   readonly handle: RequestHandler;
   readonly core: KnowledgeCore;
   readonly repository: KnowledgeRepository;
+  readonly researchRepository: ResearchRepository;
+  readonly research: ResearchDomain;
   readonly provider: AIProvider;
   readonly config: CoreConfig;
   readonly logger: Logger;
-  /** Releases a Postgres pool when the driver owns one; the memory driver has nothing to close. */
+  /** Releases Postgres pools when the driver owns them; the memory driver has nothing to close. */
   close(): Promise<void>;
 }
 
@@ -34,8 +37,10 @@ export async function buildHandler(
 ): Promise<CoreBundle> {
   const logger = options.logger ?? createLogger('knowledge-core', config.ai.driver === 'offline' ? 'info' : 'info');
   const repository = await createRepository(config.storage);
+  const researchRepository = await createResearchRepository(config.storage);
   const provider = createProvider(config.ai);
-  const core = createKnowledgeCore({ repository, provider, config, logger });
+  const research = createResearchDomain(researchRepository);
+  const core = createKnowledgeCore({ repository, provider, config, logger, research });
 
   logger.info('knowledge core ready', {
     storageDriver: repository.driver,
@@ -45,15 +50,19 @@ export async function buildHandler(
   });
 
   return {
-    handle: createRequestHandler({ core, config, logger } satisfies RouterDeps),
+    handle: createRequestHandler({ core, config, logger, research } satisfies RouterDeps),
     core,
     repository,
+    researchRepository,
+    research,
     provider,
     config,
     logger,
     close: async () => {
       const closable = repository as { close?: () => Promise<void> };
       if (typeof closable.close === 'function') await closable.close();
+      const closableResearch = researchRepository as { close?: () => Promise<void> };
+      if (typeof closableResearch.close === 'function') await closableResearch.close();
     },
   };
 }
