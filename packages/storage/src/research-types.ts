@@ -193,4 +193,5 @@ export interface ResearchRepository {
 }
 
 export type { StorageDriverName };
+export type { CharterFields };
 export type ResearchJsonValue = JsonValue;

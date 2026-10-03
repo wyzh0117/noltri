@@ -29,6 +29,21 @@ const NINE_TABLES = [
   'version_records',
 ] as const;
 
+/** Research V1 is additive (research doc §29): new tables only, the nine V1 tables never change. */
+const RESEARCH_TABLES = [
+  'claims',
+  'drift_findings',
+  'entity_relations',
+  'evidence',
+  'manuscript_sections',
+  'research_changes',
+  'research_charters',
+  'research_decisions',
+  'research_projects',
+  'research_questions',
+  'timeline_events',
+] as const;
+
 /** The slice of a zod enum this file needs, kept structural so every enum fits. */
 interface EnumLike {
   readonly options: readonly string[];
@@ -190,8 +205,8 @@ describe('supabase/migrations', () => {
     const enabled = [...sql.matchAll(/alter table public\.(\w+) enable row level security/g)]
       .map((match) => match[1] ?? '')
       .sort();
-    expect(enabled).toEqual([...NINE_TABLES].sort());
-    expect(sql.match(/create policy/g)?.length).toBeGreaterThanOrEqual(NINE_TABLES.length);
+    expect(enabled).toEqual([...NINE_TABLES, ...RESEARCH_TABLES].sort());
+    expect(sql.match(/create policy/g)?.length).toBeGreaterThanOrEqual(NINE_TABLES.length + RESEARCH_TABLES.length);
     expect(sql).toContain('auth.uid()');
     expect(sql).toContain('user_id = auth.uid()::text');
     expect(sql).toContain('to authenticated');

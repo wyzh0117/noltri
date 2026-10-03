@@ -59,3 +59,4 @@ export * from './types';
 export * from './research-types';
 export { InMemoryRepository, createInMemoryRepository } from './in-memory';
 export type { SupabaseRepositoryOptions } from './supabase';
+export type { SupabaseResearchRepositoryOptions } from './research-supabase';
