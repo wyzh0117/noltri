@@ -60,6 +60,26 @@
 - MCP Client 连接验证脚本 `pnpm --filter @noltri/mcp-server run verify`（真实 `@modelcontextprotocol/sdk` Client 经 StreamableHTTPClientTransport 连接，已实测通过并产生真实数据）
 - 客户端使用指引 `skills/knowledge-skill/SKILL.md`（工具地图 + 诚实规则：只用工具返回的节点 id、失败如实上报、原文不可改）
 
+### Research Project（Research V1；§34 核心链路端到端测试通过）
+- Research Project Type：research 项目创建/加载/列表/状态维护；Coding/知识树行为零变化（全仓 11 包测试基线计数不变）
+- Research Charter：15 字段含 Research Boundary / Claim Boundary / Core Contribution / Research Method / Target Journal / Current Stage；一项目一章程 upsert（research-domain 测试）
+- Research Question 独立实体：RQ 编码/正文/状态（open/answered/revised/dropped）/rationale/relatedMethod
+- Evidence 实体：11 类型 + source_reference / source_location / reliability_note 溯源字段
+- Claim 实体：7 类型 + status / confidence / boundary
+- 通用 EntityRelation：E supports/partially_supports/contradicts/qualifies/contextualizes C、C answers RQ、C appears_in Section；五元组幂等创建、仅删链接不删实体（research 契约 13 项）
+- Manuscript Section：section_name / section_reference / 顺序
+- Research Decision 与 Research Change：append-only 历史对象（接口无 update/delete），创建自动写入 Timeline
+- Research Timeline：Decision / Change / 里程碑三源合并，occurredAt 倒序，可查 What/Why/Related
+- Research Map：RQ→Evidence→Claim→Section→Contribution 分层数据 + 无支持证据 Claim 标记（列式可读布局）
+- Research Drift Checker 六类：RQ / Contribution / Evidence / Causality / Method / Journal（确定性纯函数、**V1 不调用模型**；(type,source,target) 对 open findings 去重；severity info/warning/critical；research-drift 26 项测试）
+- Research Context Pack：§33 十二段 markdown + blocks（含 Confirmed Claims / Key Evidence / Drift Warnings）
+- Research REST API 21 端点 `/api/research/*`（身份只取凭证、跨项目一律 not_found；research-http + research-demo 共 8 端点 HTTP 闭环实测）
+- Research Web 代理 21 端点 `/api/web/research/*`（全部经共享 ApiClient；research-proxy 31 项测试）
+- Research 工作台 UI：顶栏「知识库 / 研究项目」切换 + 9 面板（Charter/RQ/Evidence/Claims+关系/Section/Map/Timeline/Drift/Context Pack）；§34 链路每步可达；**next build 通过、未在真实浏览器实机验收**（research-view 10 项 + research-proxy 31 项测试）
+- 「Noltri Research Demo」§36 测试种子：RQ×2 / Evidence×5 / Claim×5 / Decision×2 / Change×2 / Section×4，运行 Drift Checker 产生 ≥3 条 findings（evidence/causality/journal 三类）；§34 最小成功链路 e2e 全绿
+- Research 存储双驱动：InMemory 全量契约 13 项实测 + Supabase(Postgres) 实现；11 张 research 表迁移（只新增不改旧表、RLS、16 个枚举 CHECK↔zod 机器门禁）；**迁移 SQL 未在真实库执行**，Supabase research 契约 30 项待 `NOLTRI_PG_TEST_URL` 自动启用
+- 测试规模：knowledge-core 121 项（66 基线 + 55 research）、storage 41 项 + 31 skip、web 96 项；`pnpm gate` 与全仓 `pnpm test` 全绿
+
 ## 后续实现
 
 ### 验证缺口（代码已就绪，需真实环境补验）
@@ -70,6 +90,7 @@
 - Web Supabase Auth 策略对真实 Supabase 项目的登录实测
 - 真实模型调用（BYOK 网关）下的抽取/嵌入/对话质量验证
 - Supabase SQL 在真实库的执行（当前仅静态审查）
+- Research V1：research 迁移 SQL 真实 Postgres 执行 + 30 项 Supabase research 契约测试实测；Research 工作台真实浏览器实机验收
 
 ### V1 收尾项
 - 发布物整理：扩展打包产物上架准备、桌面 dmg、部署文档
@@ -90,3 +111,12 @@
 - 节点 / 章节掌握度汇总
 - AI 解释、出题、应用与复习基础
 - 最终 UX 整合
+
+### Research Project（后续）
+- Research Inbox（开发文档 §26：未分类科研输入 → 确认入图）
+- Agent Integration 完整版（Phase 7：判断新输入实体类型、Relation 建议、Change Proposal；MCP research 工具）
+- Research Drift Checker 模型增强（V1 为确定性规则）
+- Research Map 图形化布局（V1 为可读列式布局）
+- `JsonValue` 类型放宽为真正 JSON 值联合（`relatedEntities` 当前不支持数组值）
+- DB 层加固：drift open 去重唯一索引、Decision/Change 触发器级禁改删
+- Literature Evidence Parser / PDF 结构抽取 / Zotero·DOI 集成 / 审稿意见矩阵等（开发文档 §41 候选清单）
