@@ -114,7 +114,7 @@ Web 代理 `/api/web/research/*` 必须经 `ApiClient` 调 core（`apps/web/lib/
 
 返回 `{markdown, blocks, generatedAt}`；`blocks` 顺序即 §33 列表，`markdown` 为同内容的拼接：
 
-PROJECT（项目名 + currentStage）→ Current Research Questions（code+text+status）→ Core Contribution →
+PROJECT（项目名 + currentStage）→ Current Research Question（code+text+status；区块名按开发文档 §33 用单数）→ Core Contribution →
 Research Boundary → Claim Boundary → Current Method（researchMethod + relatedMethod）→
 Confirmed Claims（status==='confirmed'，含 code+text）→ Key Evidence（支撑 confirmed claim 的证据 title+type）→
 Important Decisions（最近 5 条，title+decision）→ Recent Changes（最近 5 条，changeType+before→after）→

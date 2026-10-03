@@ -114,9 +114,12 @@
 
 ### Research Project（后续）
 - Research Inbox（开发文档 §26：未分类科研输入 → 确认入图）
+- Research 版 Capture → Compile（开发文档 §25：科研输入自动判断实体类型/潜在 Claim Boundary 并关联）
+- 正文自动解析管线（当前 RQ/Contribution Drift 依赖手工粘贴正文片段）
 - Agent Integration 完整版（Phase 7：判断新输入实体类型、Relation 建议、Change Proposal；MCP research 工具）
 - Research Drift Checker 模型增强（V1 为确定性规则）
 - Research Map 图形化布局（V1 为可读列式布局）
 - `JsonValue` 类型放宽为真正 JSON 值联合（`relatedEntities` 当前不支持数组值）
+- 迁移回滚 down 脚本（当前仅 up 迁移；回滚依赖迁移文件审阅）
 - DB 层加固：drift open 去重唯一索引、Decision/Change 触发器级禁改删
 - Literature Evidence Parser / PDF 结构抽取 / Zotero·DOI 集成 / 审稿意见矩阵等（开发文档 §41 候选清单）
