@@ -1,0 +1,24 @@
+{
+  "name": "noltri",
+  "private": true,
+  "version": "0.1.0",
+  "description": "知序 Noltri — personal knowledge compilation system",
+  "packageManager": "pnpm@11.21.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "gate": "pnpm --filter @noltri/knowledge-core run gate",
+    "core": "pnpm --filter @noltri/knowledge-core dev",
+    "mcp": "pnpm --filter @noltri/mcp-server dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "turbo": "^2.11.6",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

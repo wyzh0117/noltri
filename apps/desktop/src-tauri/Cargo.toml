@@ -1,0 +1,28 @@
+[package]
+name = "noltri-companion"
+version = "0.1.0"
+description = "知序 Noltri Desktop Companion — macOS 选区捕获 + Setup Manager"
+authors = ["知序 Noltri"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "noltri_companion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
+[features]
+# `cargo tauri dev` runs with --no-default-features so the frontend is served by vite;
+# `cargo tauri build` re-enables custom-protocol so ../dist is embedded.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

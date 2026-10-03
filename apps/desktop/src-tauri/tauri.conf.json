@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "知序 Companion",
+  "version": "0.1.0",
+  "identifier": "com.noltri.companion",
+  "build": {
+    "beforeDevCommand": "pnpm exec vite",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "知序 · Setup Manager",
+        "url": "main.html",
+        "width": 1080,
+        "height": 780,
+        "minWidth": 820,
+        "minHeight": 560,
+        "center": true,
+        "resizable": true,
+        "visible": true
+      },
+      {
+        "label": "overlay",
+        "title": "知序",
+        "url": "overlay.html",
+        "width": 300,
+        "height": 132,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visibleOnAllWorkspaces": true,
+        "acceptFirstMouse": true,
+        "focus": false,
+        "focusable": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "Productivity",
+    "publisher": "知序 Noltri",
+    "copyright": "© 知序 Noltri",
+    "shortDescription": "macOS 选区捕获与知识收纳引导",
+    "longDescription": "知序 Companion 在 macOS 上用系统辅助功能读取选区，把值得复用的内容一键归纳进知识树，并引导 ChatGPT / Claude / Cursor 等 MCP 客户端完成连接。",
+    "icon": []
+  }
+}

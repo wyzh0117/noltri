@@ -1,0 +1,26 @@
+{
+  "name": "@noltri/ai-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@noltri/ai-provider": "workspace:*",
+    "@noltri/schema": "workspace:*",
+    "@noltri/shared": "workspace:*",
+    "dotenv": "^18.0.5",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

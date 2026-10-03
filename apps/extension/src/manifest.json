@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "知序 Noltri",
+  "version": "0.1.0",
+  "description": "选中网页文字，一键归纳进你自己的知识树。所有分类与知识树逻辑由 Knowledge Core 完成。",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "知序 Noltri"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "permissions": ["contextMenus", "storage", "activeTab"],
+  "host_permissions": [
+    "http://localhost:8787/*",
+    "http://127.0.0.1:8787/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"]
+}

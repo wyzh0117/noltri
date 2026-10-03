@@ -1,0 +1,239 @@
+/**
+ * HTTP contract tests: the same handler Next.js will mount and node:http will serve (V1 §8).
+ * Responses are parsed with the schema package so the wire contract holds in both directions.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  apiErrorSchema,
+  captureResultSchema,
+  healthResponseSchema,
+  knowledgeNodeSchema,
+  moveNodeResponseSchema,
+  nodeChatResponseSchema,
+  nodeContextSchema,
+  nodeDetailSchema,
+  searchResponseSchema,
+  treeResponseSchema,
+} from '@noltri/schema';
+import { attachItemRecord, captureOf, CHINESE_TEXT, createNodeRecord, makeHarness, testConfig, type Harness } from './fakes';
+import { createRequestHandler, type RequestHandler } from '../src/http/router';
+
+function handlerOf(harness: Harness): RequestHandler {
+  return createRequestHandler({ core: harness.core, config: harness.config });
+}
+
+async function jsonOf(response: Response): Promise<unknown> {
+  return (await response.json()) as unknown;
+}
+
+async function seedWorkspace(): Promise<Harness> {
+  const harness = makeHarness();
+  const rootId = await createNodeRecord(harness, 'Python');
+  const childId = await createNodeRecord(harness, '数据结构', rootId);
+  await attachItemRecord(harness, childId, '元组一旦创建就不能修改。');
+  return harness;
+}
+
+describe('http router', () => {
+  it('serves health without any credential', async () => {
+    const handle = handlerOf(makeHarness());
+    const response = await handle(new Request('http://core.local/api/health'));
+    expect(response.status).toBe(200);
+    expect(healthResponseSchema.parse(await jsonOf(response)).status).toBe('ok');
+  });
+
+  it('answers CORS preflight before identity exists', async () => {
+    const handle = handlerOf(makeHarness());
+    const response = await handle(new Request('http://core.local/api/capture', { method: 'OPTIONS' }));
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+    expect(response.headers.get('access-control-allow-headers')).toContain('authorization');
+  });
+
+  it('runs the full capture loop over the wire and the result satisfies CaptureResult', async () => {
+    const harness = await seedWorkspace();
+    const handle = handlerOf(harness);
+    const response = await handle(
+      new Request('http://core.local/api/capture', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-noltri-client': 'extension' },
+        body: JSON.stringify(captureOf(CHINESE_TEXT, 'extension', { title: 'Python 教程', url: 'https://example.com/py' })),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const result = captureResultSchema.parse(await jsonOf(response));
+    expect(result.processingStatus).toBe('done');
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.items[0]?.nodePath.length).toBeGreaterThan(0);
+
+    const tree = treeResponseSchema.parse(await jsonOf(await handle(new Request('http://core.local/api/tree'))));
+    expect(tree.totalNodes).toBeGreaterThanOrEqual(2);
+  });
+
+  it('rejects an invalid payload with the shared error envelope', async () => {
+    const handle = handlerOf(makeHarness());
+    const response = await handle(
+      new Request('http://core.local/api/capture', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '短', source: { type: 'web' }, capture: { capturedAt: '2026-01-01T00:00:00Z', client: 'extension' } }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(apiErrorSchema.parse(await jsonOf(response)).error.code).toBe('invalid_request');
+  });
+
+  it('distinguishes 404 unknown endpoint from 405 wrong method', async () => {
+    const handle = handlerOf(makeHarness());
+    const missing = await handle(new Request('http://core.local/api/definitely-not-here'));
+    expect(missing.status).toBe(404);
+    expect(apiErrorSchema.parse(await jsonOf(missing)).error.code).toBe('not_found');
+
+    const wrongMethod = await handle(new Request('http://core.local/api/capture'));
+    expect(wrongMethod.status).toBe(405);
+    expect(apiErrorSchema.parse(await jsonOf(wrongMethod)).error.code).toBe('invalid_request');
+  });
+
+  it('serves node detail, patch, search, context and chat over the wire', async () => {
+    const harness = await seedWorkspace();
+    const handle = handlerOf(harness);
+    const tree = treeResponseSchema.parse(await jsonOf(await handle(new Request('http://core.local/api/tree'))));
+    const child = tree.nodes[0]?.children?.[0];
+    expect(child).toBeDefined();
+    const nodeId = child?.id ?? '';
+
+    const detail = await handle(new Request(`http://core.local/api/nodes/${nodeId}`));
+    expect(detail.status).toBe(200);
+    const parsedDetail = nodeDetailSchema.parse(await jsonOf(detail));
+    expect(parsedDetail.stats.itemCount).toBe(1);
+    expect(parsedDetail.items[0]?.sources.length).toBeGreaterThan(0);
+
+    const patched = await handle(
+      new Request(`http://core.local/api/nodes/${nodeId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: '数据结构与元组' }),
+      }),
+    );
+    expect(patched.status).toBe(200);
+    expect(knowledgeNodeSchema.parse(await jsonOf(patched)).title).toBe('数据结构与元组');
+
+    const search = await handle(
+      new Request('http://core.local/api/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: '元组', mode: 'keyword' }),
+      }),
+    );
+    expect(search.status).toBe(200);
+    expect(searchResponseSchema.parse(await jsonOf(search)).hits.length).toBeGreaterThan(0);
+
+    const context = await handle(
+      new Request('http://core.local/api/node-context', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodeId, scope: 'current_node' }),
+      }),
+    );
+    expect(nodeContextSchema.parse(await jsonOf(context)).node.id).toBe(nodeId);
+
+    const chat = await handle(
+      new Request('http://core.local/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodeId, scope: 'current_node', messages: [{ role: 'user', content: '元组能变吗' }] }),
+      }),
+    );
+    expect(nodeChatResponseSchema.parse(await jsonOf(chat)).context.scope).toBe('current_node');
+  });
+
+  it('moving a parent under its own child is a 409 and leaves the tree untouched', async () => {
+    const harness = await seedWorkspace();
+    const handle = handlerOf(harness);
+    const tree = treeResponseSchema.parse(await jsonOf(await handle(new Request('http://core.local/api/tree'))));
+    const rootId = tree.nodes[0]?.id ?? '';
+    const childId = tree.nodes[0]?.children?.[0]?.id ?? '';
+
+    const response = await handle(
+      new Request(`http://core.local/api/nodes/${rootId}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ targetParentId: childId }),
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(apiErrorSchema.parse(await jsonOf(response)).error.code).toBe('conflict');
+
+    const after = treeResponseSchema.parse(await jsonOf(await handle(new Request('http://core.local/api/tree'))));
+    expect(after.nodes[0]?.id).toBe(rootId);
+  });
+
+  it('a legal move returns the new path and writes a version record attributed to the client', async () => {
+    const harness = await seedWorkspace();
+    const handle = handlerOf(harness);
+    const tree = treeResponseSchema.parse(await jsonOf(await handle(new Request('http://core.local/api/tree'))));
+    const rootId = tree.nodes[0]?.id ?? '';
+    const childId = tree.nodes[0]?.children?.[0]?.id ?? '';
+
+    const response = await handle(
+      new Request(`http://core.local/api/nodes/${childId}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-noltri-client': 'desktop' },
+        body: JSON.stringify({ targetParentId: null }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const moved = moveNodeResponseSchema.parse(await jsonOf(response));
+    expect(moved.node.parentId).toBeNull();
+    expect(moved.path).toHaveLength(1);
+    expect(moved.versionRecordId.length).toBeGreaterThan(0);
+
+    const records = await harness.repository.listVersionRecords(harness.actor.userId, childId);
+    expect(records[0]?.actor).toBe('desktop');
+    expect(records[0]?.before).toMatchObject({ parentId: rootId });
+    expect(records[0]?.after).toMatchObject({ parentId: null });
+  });
+
+  it('enforces the dev token when NOLTRI_DEV_REQUIRE_TOKEN is on', async () => {
+    const harness = makeHarness({ config: testConfig({ devTokenRequired: true, devToken: 'secret-dev-token' }) });
+    const handle = handlerOf(harness);
+
+    const without = await handle(
+      new Request('http://core.local/api/capture', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(captureOf(CHINESE_TEXT, 'web_app')),
+      }),
+    );
+    expect(without.status).toBe(401);
+    expect(apiErrorSchema.parse(await jsonOf(without)).error.code).toBe('unauthorized');
+
+    const wrong = await handle(
+      new Request('http://core.local/api/capture', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer not-the-token' },
+        body: JSON.stringify(captureOf(CHINESE_TEXT, 'web_app')),
+      }),
+    );
+    expect(wrong.status).toBe(401);
+
+    const correct = await handle(
+      new Request('http://core.local/api/capture', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer secret-dev-token' },
+        body: JSON.stringify(captureOf(CHINESE_TEXT, 'web_app')),
+      }),
+    );
+    expect(correct.status).toBe(200);
+  });
+
+  it('never echoes internals on an unexpected failure', async () => {
+    const handle = handlerOf(makeHarness());
+    const response = await handle(
+      new Request('http://core.local/api/nodes/%2e%2e%2fetc', { method: 'GET' }),
+    );
+    const body = apiErrorSchema.parse(await jsonOf(response));
+    expect(JSON.stringify(body).toLowerCase()).not.toContain('stack');
+    expect(response.status).toBe(404);
+  });
+});

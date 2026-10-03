@@ -1,0 +1,49 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "stream",
+  "globalEnv": [
+    "NODE_ENV",
+    "NOLTRI_ENV",
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "DATABASE_URL",
+    "DIRECT_URL",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_KNOWLEDGE_API_URL",
+    "KNOWLEDGE_API_URL",
+    "NOLTRI_API_BASE_URL",
+    "NOLTRI_ACCESS_TOKEN",
+    "NOLTRI_DEV_USER_ID",
+    "AI_PROVIDER",
+    "AI_API_KEY",
+    "AI_BASE_URL",
+    "AI_CHAT_MODEL",
+    "AI_EMBED_MODEL",
+    "AI_EMBEDDING_DIM",
+    "AI_REQUEST_TIMEOUT_MS",
+    "PORT",
+    "MCP_PORT",
+    "CORS_ORIGIN"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", ".output/**"]
+    },
+    "typecheck": {
+      "dependsOn": []
+    },
+    "test": {
+      "dependsOn": []
+    },
+    "gate": {
+      "dependsOn": []
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}
