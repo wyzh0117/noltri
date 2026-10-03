@@ -46,6 +46,14 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   return send<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) });
 }
 
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  return send<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) });
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  return send<T>(path, { method: 'DELETE' });
+}
+
 async function send<T>(path: string, init: RequestInit, query?: QueryInput): Promise<T> {
   const url = withQuery(path, query);
   let response: Response;

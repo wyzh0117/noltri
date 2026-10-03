@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { ReactElement } from 'react';
 import type { HealthResponse } from '@noltri/schema';
 import SearchBox from './SearchBox';
+import ProjectTypeSwitch, { type ProjectMode } from './ProjectTypeSwitch';
 import { clearServerSession } from '@/lib/auth';
 import type { SessionStrategy } from '@/lib/cookie';
 
@@ -11,10 +12,14 @@ export interface TopBarProps {
   strategy: SessionStrategy;
   health: HealthResponse | null;
   healthProblem: string | null;
-  domainCount: number;
-  nodeCount: number;
-  itemCount: number;
-  onPickNode: (nodeId: string) => void;
+  /** Knowledge-tree stats; omitted in the research workbench, where the badge is hidden. */
+  domainCount?: number;
+  nodeCount?: number;
+  itemCount?: number;
+  onPickNode?: (nodeId: string) => void;
+  /** Project Type switch; absent when the caller has no second workbench to switch to. */
+  mode?: ProjectMode;
+  onSwitchMode?: (mode: ProjectMode) => void;
 }
 
 /** Top bar holds exactly four things: identity of the app, search, connection/user state, logout. */
@@ -26,6 +31,8 @@ export default function TopBar({
   nodeCount,
   itemCount,
   onPickNode,
+  mode,
+  onSwitchMode,
 }: TopBarProps): ReactElement {
   const [signingOut, setSigningOut] = useState(false);
 
@@ -44,16 +51,24 @@ export default function TopBar({
         <span className="brand-mark">Noltri</span>
       </div>
 
-      <SearchBox onPickNode={onPickNode} />
+      {onSwitchMode !== undefined ? (
+        <ProjectTypeSwitch mode={mode ?? 'knowledge'} onSwitchMode={onSwitchMode} />
+      ) : null}
+
+      {onPickNode !== undefined && (mode ?? 'knowledge') === 'knowledge' ? (
+        <SearchBox onPickNode={onPickNode} />
+      ) : null}
 
       <div className="top-bar-spacer" />
 
       <div className="session-state">
         <span className={`dot dot-${state.tone}`} aria-hidden="true" />
         <span title={state.detail}>{state.label}</span>
-        <span className="badge badge-quiet" title="知识领域 / 节点 / 知识点">
-          {domainCount} 领域 · {nodeCount} 节点 · {itemCount} 知识点
-        </span>
+        {domainCount !== undefined && nodeCount !== undefined && itemCount !== undefined ? (
+          <span className="badge badge-quiet" title="知识领域 / 节点 / 知识点">
+            {domainCount} 领域 · {nodeCount} 节点 · {itemCount} 知识点
+          </span>
+        ) : null}
         <span className="badge">{strategy === 'supabase' ? 'Supabase 登录' : '本地开发登录'}</span>
         <button type="button" className="btn" onClick={() => void signOut()} disabled={signingOut}>
           {signingOut ? '正在退出…' : '退出登录'}

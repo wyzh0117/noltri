@@ -30,14 +30,18 @@ import {
   type ArrowKey,
 } from '@/lib/tree-view';
 import type { SessionStrategy } from '@/lib/cookie';
+import type { ProjectMode } from './ProjectTypeSwitch';
 
 const NAVIGATION_KEYS: readonly string[] = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'];
 
 export interface WorkspaceProps {
   strategy: SessionStrategy;
+  /** Project Type switch state, owned by the workbench shell; the tree stays the default body. */
+  mode?: ProjectMode;
+  onSwitchMode?: (mode: ProjectMode) => void;
 }
 
-export default function Workspace({ strategy }: WorkspaceProps): ReactElement {
+export default function Workspace({ strategy, mode, onSwitchMode }: WorkspaceProps): ReactElement {
   const [fullNodes, setFullNodes] = useState<TreeNode[]>([]);
   const [centreNodes, setCentreNodes] = useState<TreeNode[]>([]);
   const [totalNodes, setTotalNodes] = useState(0);
@@ -240,6 +244,8 @@ export default function Workspace({ strategy }: WorkspaceProps): ReactElement {
         nodeCount={summary.nodeCount}
         itemCount={summary.itemCount}
         onPickNode={selectNode}
+        mode={mode}
+        onSwitchMode={onSwitchMode}
       />
 
       <div className="workspace">

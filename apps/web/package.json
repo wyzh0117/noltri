@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/tree-view.test.ts test/proxy.test.ts"
+    "test": "node --import tsx --test test/tree-view.test.ts test/proxy.test.ts test/research-view.test.ts test/research-proxy.test.ts"
   },
   "dependencies": {
     "@noltri/api-client": "workspace:*",
