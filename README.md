@@ -7,20 +7,22 @@ create（新建节点）/ merge（合并）三种决策把知识点挂进知识�
 
 总控文档：`PROJECT_MASTER.md`（架构与铁律）、`V1_DEVELOPMENT.md`（V1 开发计划）、
 `FUNCTION_MAP.md`（已实现 / 后续实现 清单，唯一事实来源）。
+Research V1：`Noltri Research V1 开发文档.md`（科研连续性工作台规格）、
+`docs/research-contract.md`（实现契约：REST 表、Drift 规则、Context Pack 格式）。
 
 ## 仓库结构
 
 | 位置 | 内容 |
 | --- | --- |
-| `packages/schema` | zod 契约（CaptureRequest / CaptureResult / KnowledgeNode / …），前后端共用 |
+| `packages/schema` | zod 契约（CaptureRequest / KnowledgeNode / Research 实体 …），前后端共用 |
 | `packages/shared` | 时间、ID、纯文本渲染（树形渲染、知识点行）、KnowledgeError 等 |
-| `packages/api-client` | 对 core REST 的类型安全客户端（全部入口共用） |
-| `packages/storage` | InMemory + Supabase(Postgres) 两套仓储，同一接口 |
+| `packages/api-client` | 对 core REST 的类型安全客户端（全部入口共用，含 27 个 research 方法） |
+| `packages/storage` | InMemory + Supabase(Postgres) 两套仓储，同一接口（知识域 + Research 域各一对） |
 | `packages/ai-provider` | AI 抽象：`offline`（确定性测试）与 `openai`（BYOK，OpenAI 兼容 chat+embeddings） |
-| `services/knowledge-core` | Knowledge Core：唯一知识逻辑来源，REST API，架构门禁 `pnpm gate` |
+| `services/knowledge-core` | Knowledge Core：唯一知识逻辑来源，REST API + Research Domain，架构门禁 `pnpm gate` |
 | `services/ai` | 归纳管线编排（原文落库 → 抽取 → 嵌入 → 相似度 → 分类决策 → 持久化） |
 | `services/mcp-server` | MCP 服务器（Streamable HTTP，7 个工具），只经 ApiClient 访问 core |
-| `apps/web` | Next.js 16 知识树 Web 应用 + `/api/web/*` 代理（supabase / dev-token 两种鉴权） |
+| `apps/web` | Next.js 16 知识树 Web 应用 + Research 工作台 + `/api/web/*` 代理（supabase / dev-token 两种鉴权） |
 | `apps/desktop` | Tauri 2 macOS 桌面伴侣：AX 选区观察、胶囊 UI、手动粘贴窗、设置管理器、MCP 配置写入 |
 | `apps/extension` | Chrome MV3 扩展（选区捕获，SDK 打包内联） |
 | `supabase/migrations` | Postgres 建表 SQL（静态审查通过；未在真实库执行过） |
@@ -94,8 +96,35 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 真实云数据库（Supabase）同理：代码与迁移已就绪并静态审查，但本仓库提交时不携带任何
 真实项目凭据，接入时自行配置 `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`。
 
+## Research V1：科研文章连续性工作台
+
+Research 是 Noltri 新增的 Project Type（不是独立 App）：把一篇科研文章管理成
+Question → Evidence → Claim → Argument → Manuscript → Evolution 的长期项目。
+知识树仍是首屏主体；顶栏「知识库 / 研究项目」切换进入 Research 工作台。
+
+核心链路（开发文档 §34）每步均可达并有端到端测试：
+
+```text
+创建 Research Project → Research Charter（含 Research/Claim Boundary）→ RQ
+→ Evidence → Claim → Evidence supports Claim → Claim answers RQ → Claim appears_in Section
+→ Research Map（RQ→Evidence→Claim→Section→Contribution）
+→ Drift Checker（六类：RQ/Contribution/Evidence/Causality/Method/Journal）
+→ Research Context Pack
+```
+
+- 领域层：`services/knowledge-core/src/research/`（Drift Checker 为确定性纯函数，V1 不调用模型）；
+- API：`/api/research/*` 21 端点 + `/api/web/research/*` 21 代理（全经共享 ApiClient）；
+- 数据：11 张 research 表（只新增、不改旧表，RLS + 枚举 CHECK 门禁）；
+- 测试种子：`buildResearchDemoData()` / `seedResearchDemo()`（§36「Noltri Research Demo」），
+  在 `services/knowledge-core/test/research-demo.test.ts` 中驱动 §34 全链路验收。
+
 ## 验证状态（诚实边界）
 
 以下能力有自动化测试或运行时证据支撑；凡未列出的（真实浏览器加载扩展、桌面 GUI 实机
 运行、真实模型调用、真实 Supabase 实例、桌面打包签名）均未验证，详见 `FUNCTION_MAP.md`
 的「后续实现」。
+
+Research V1 同此口径：§34 核心链路、六类 Drift 规则、§36 Demo 种子与 21 端点 HTTP 闭环
+均有自动化测试（knowledge-core 121 项、storage 41+31skip、web 96 项）；Research 工作台
+`next build` 通过但**未在真实浏览器实机验收**，research 迁移 SQL 静态校验通过但**未在真实
+Postgres 执行**（`NOLTRI_PG_TEST_URL` 就绪后 30 项 Supabase research 契约测试自动启用）。
