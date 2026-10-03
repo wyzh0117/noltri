@@ -1,0 +1,432 @@
+import { z } from 'zod';
+import { jsonValueSchema, type JsonValue } from './knowledge';
+
+/**
+ * Research Domain contracts (Noltri Research V1).
+ *
+ * Research is a Project Type extension on top of the common layer, not a second system:
+ * entities follow the same shape discipline as `knowledge.ts` (id / userId / timestamps,
+ * explicit enums, create-input schemas without identity fields — identity always comes from
+ * credentials on the server side).
+ */
+
+// --- enums -----------------------------------------------------------------
+
+export const researchProjectStatusSchema = z.enum(['active', 'archived', 'completed']);
+export type ResearchProjectStatus = z.infer<typeof researchProjectStatusSchema>;
+
+export const researchQuestionStatusSchema = z.enum(['open', 'answered', 'revised', 'dropped']);
+export type ResearchQuestionStatus = z.infer<typeof researchQuestionStatusSchema>;
+
+export const evidenceTypeSchema = z.enum([
+  'literature',
+  'dataset',
+  'analysis_result',
+  'figure',
+  'table',
+  'interview',
+  'expert_judgement',
+  'document',
+  'note',
+  'external_source',
+  'other',
+]);
+export type EvidenceType = z.infer<typeof evidenceTypeSchema>;
+
+export const claimTypeSchema = z.enum([
+  'descriptive',
+  'empirical',
+  'methodological',
+  'interpretive',
+  'theoretical',
+  'contribution',
+  'limitation',
+]);
+export type ClaimType = z.infer<typeof claimTypeSchema>;
+
+export const claimStatusSchema = z.enum(['draft', 'proposed', 'confirmed', 'revised', 'dropped']);
+export type ClaimStatus = z.infer<typeof claimStatusSchema>;
+
+export const researchChangeTypeSchema = z.enum([
+  'research_question',
+  'method',
+  'scope',
+  'claim',
+  'contribution',
+  'journal',
+  'structure',
+  'evidence',
+  'other',
+]);
+export type ResearchChangeType = z.infer<typeof researchChangeTypeSchema>;
+
+export const driftTypeSchema = z.enum([
+  'rq_drift',
+  'contribution_drift',
+  'evidence_drift',
+  'causality_drift',
+  'method_drift',
+  'journal_drift',
+]);
+export type DriftType = z.infer<typeof driftTypeSchema>;
+
+export const driftSeveritySchema = z.enum(['info', 'warning', 'critical']);
+export type DriftSeverity = z.infer<typeof driftSeveritySchema>;
+
+export const driftFindingStatusSchema = z.enum(['open', 'acknowledged', 'resolved', 'dismissed']);
+export type DriftFindingStatus = z.infer<typeof driftFindingStatusSchema>;
+
+export const researchEntityTypeSchema = z.enum([
+  'research_project',
+  'research_charter',
+  'research_question',
+  'evidence',
+  'claim',
+  'research_decision',
+  'research_change',
+  'drift_finding',
+  'manuscript_section',
+]);
+export type ResearchEntityType = z.infer<typeof researchEntityTypeSchema>;
+
+/**
+ * Generic relation vocabulary (one `entity_relations` table — see research doc §27):
+ * evidence→claim: supports / partially_supports / contradicts / qualifies / contextualizes;
+ * claim→question: answers; claim→section: appears_in; decision/change→anything: changes / affects.
+ */
+export const researchRelationTypeSchema = z.enum([
+  'supports',
+  'partially_supports',
+  'contradicts',
+  'qualifies',
+  'contextualizes',
+  'answers',
+  'appears_in',
+  'changes',
+  'affects',
+  'relates_to',
+]);
+export type ResearchRelationType = z.infer<typeof researchRelationTypeSchema>;
+
+export const timelineEventTypeSchema = z.enum(['decision', 'change', 'milestone']);
+export type TimelineEventType = z.infer<typeof timelineEventTypeSchema>;
+
+export const timelineSourceSchema = z.enum(['research_decision', 'research_change', 'manual']);
+export type TimelineSource = z.infer<typeof timelineSourceSchema>;
+
+// --- entities --------------------------------------------------------------
+
+export const researchProjectSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  status: researchProjectStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ResearchProject = z.infer<typeof researchProjectSchema>;
+
+export const researchCharterSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  workingTitle: z.string(),
+  researchTopic: z.string().nullable(),
+  researchProblem: z.string().nullable(),
+  researchGap: z.string().nullable(),
+  researchQuestionsText: z.string().nullable(),
+  coreContribution: z.string().nullable(),
+  theoreticalLens: z.string().nullable(),
+  researchContext: z.string().nullable(),
+  unitOfAnalysis: z.string().nullable(),
+  researchMethod: z.string().nullable(),
+  targetArticleType: z.string().nullable(),
+  targetJournal: z.string().nullable(),
+  researchBoundary: z.string().nullable(),
+  claimBoundary: z.string().nullable(),
+  currentStage: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ResearchCharter = z.infer<typeof researchCharterSchema>;
+
+export const researchQuestionSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  questionCode: z.string(),
+  questionText: z.string(),
+  status: researchQuestionStatusSchema,
+  rationale: z.string().nullable(),
+  relatedMethod: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ResearchQuestion = z.infer<typeof researchQuestionSchema>;
+
+export const evidenceSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  type: evidenceTypeSchema,
+  title: z.string(),
+  description: z.string().nullable(),
+  sourceReference: z.string().nullable(),
+  sourceLocation: z.string().nullable(),
+  reliabilityNote: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Evidence = z.infer<typeof evidenceSchema>;
+
+export const claimSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  claimCode: z.string(),
+  claimText: z.string(),
+  claimType: claimTypeSchema,
+  status: claimStatusSchema,
+  confidence: z.number().min(0).max(1),
+  boundary: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Claim = z.infer<typeof claimSchema>;
+
+export const manuscriptSectionSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  sectionName: z.string(),
+  sectionReference: z.string().nullable(),
+  sortOrder: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ManuscriptSection = z.infer<typeof manuscriptSectionSchema>;
+
+export const entityRelationSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  sourceType: researchEntityTypeSchema,
+  sourceId: z.string(),
+  relationType: researchRelationTypeSchema,
+  targetType: researchEntityTypeSchema,
+  targetId: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type EntityRelation = z.infer<typeof entityRelationSchema>;
+
+/** Decisions are append-only history objects (research doc §18): never rewritten, only superseded. */
+export const researchDecisionSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  title: z.string(),
+  decision: z.string(),
+  reason: z.string().nullable(),
+  alternatives: z.string().nullable(),
+  rejectedAlternatives: z.string().nullable(),
+  impact: z.string().nullable(),
+  relatedEntities: jsonValueSchema,
+  createdAt: z.string(),
+});
+export type ResearchDecision = z.infer<typeof researchDecisionSchema>;
+
+export const researchChangeSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  changeType: researchChangeTypeSchema,
+  before: z.string(),
+  after: z.string(),
+  reason: z.string().nullable(),
+  impact: z.string().nullable(),
+  relatedEntities: jsonValueSchema,
+  createdAt: z.string(),
+});
+export type ResearchChange = z.infer<typeof researchChangeSchema>;
+
+export const driftFindingSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  driftType: driftTypeSchema,
+  severity: driftSeveritySchema,
+  description: z.string(),
+  sourceEntityType: researchEntityTypeSchema.nullable(),
+  sourceEntityId: z.string().nullable(),
+  targetEntityType: researchEntityTypeSchema.nullable(),
+  targetEntityId: z.string().nullable(),
+  reason: z.string().nullable(),
+  recommendedAction: z.string().nullable(),
+  status: driftFindingStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type DriftFinding = z.infer<typeof driftFindingSchema>;
+
+export const timelineEventSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  eventType: timelineEventTypeSchema,
+  occurredAt: z.string(),
+  title: z.string(),
+  summary: z.string().nullable(),
+  sourceType: timelineSourceSchema.nullable(),
+  sourceId: z.string().nullable(),
+  relatedEntities: jsonValueSchema,
+  createdAt: z.string(),
+});
+export type TimelineEvent = z.infer<typeof timelineEventSchema>;
+
+// --- create inputs (no identity fields: userId/projectId are set server-side
+//     at the storage layer, never parsed from a request body) ----------------
+
+export const createResearchProjectInputSchema = z.object({
+  userId: z.string(),
+  name: z.string().min(1).max(200),
+  description: z.string().max(4000).nullable().optional(),
+});
+export type CreateResearchProjectInput = z.infer<typeof createResearchProjectInputSchema>;
+
+export const charterFieldsSchema = z.object({
+  workingTitle: z.string().min(1).max(300),
+  researchTopic: z.string().max(4000).nullable().optional(),
+  researchProblem: z.string().max(4000).nullable().optional(),
+  researchGap: z.string().max(4000).nullable().optional(),
+  researchQuestionsText: z.string().max(4000).nullable().optional(),
+  coreContribution: z.string().max(4000).nullable().optional(),
+  theoreticalLens: z.string().max(4000).nullable().optional(),
+  researchContext: z.string().max(4000).nullable().optional(),
+  unitOfAnalysis: z.string().max(4000).nullable().optional(),
+  researchMethod: z.string().max(4000).nullable().optional(),
+  targetArticleType: z.string().max(300).nullable().optional(),
+  targetJournal: z.string().max(300).nullable().optional(),
+  researchBoundary: z.string().max(4000).nullable().optional(),
+  claimBoundary: z.string().max(4000).nullable().optional(),
+  currentStage: z.string().max(300).nullable().optional(),
+});
+export type CharterFields = z.infer<typeof charterFieldsSchema>;
+
+export const upsertCharterInputSchema = charterFieldsSchema.extend({
+  userId: z.string(),
+  projectId: z.string(),
+});
+export type UpsertCharterInput = z.infer<typeof upsertCharterInputSchema>;
+
+export const createResearchQuestionInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  questionCode: z.string().min(1).max(50),
+  questionText: z.string().min(1).max(4000),
+  status: researchQuestionStatusSchema.optional(),
+  rationale: z.string().max(4000).nullable().optional(),
+  relatedMethod: z.string().max(1000).nullable().optional(),
+});
+export type CreateResearchQuestionInput = z.infer<typeof createResearchQuestionInputSchema>;
+
+export const createEvidenceInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  type: evidenceTypeSchema,
+  title: z.string().min(1).max(300),
+  description: z.string().max(8000).nullable().optional(),
+  sourceReference: z.string().max(1000).nullable().optional(),
+  sourceLocation: z.string().max(1000).nullable().optional(),
+  reliabilityNote: z.string().max(4000).nullable().optional(),
+});
+export type CreateEvidenceInput = z.infer<typeof createEvidenceInputSchema>;
+
+export const createClaimInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  claimCode: z.string().min(1).max(50),
+  claimText: z.string().min(1).max(8000),
+  claimType: claimTypeSchema,
+  status: claimStatusSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  boundary: z.string().max(4000).nullable().optional(),
+});
+export type CreateClaimInput = z.infer<typeof createClaimInputSchema>;
+
+export const createManuscriptSectionInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  sectionName: z.string().min(1).max(300),
+  sectionReference: z.string().max(300).nullable().optional(),
+  sortOrder: z.number().int().optional(),
+});
+export type CreateManuscriptSectionInput = z.infer<typeof createManuscriptSectionInputSchema>;
+
+export const createEntityRelationInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  sourceType: researchEntityTypeSchema,
+  sourceId: z.string().min(1),
+  relationType: researchRelationTypeSchema,
+  targetType: researchEntityTypeSchema,
+  targetId: z.string().min(1),
+  note: z.string().max(2000).nullable().optional(),
+});
+export type CreateEntityRelationInput = z.infer<typeof createEntityRelationInputSchema>;
+
+export const createResearchDecisionInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  title: z.string().min(1).max(300),
+  decision: z.string().min(1).max(8000),
+  reason: z.string().max(8000).nullable().optional(),
+  alternatives: z.string().max(8000).nullable().optional(),
+  rejectedAlternatives: z.string().max(8000).nullable().optional(),
+  impact: z.string().max(8000).nullable().optional(),
+  relatedEntities: jsonValueSchema.optional(),
+});
+export type CreateResearchDecisionInput = z.infer<typeof createResearchDecisionInputSchema>;
+
+export const createResearchChangeInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  changeType: researchChangeTypeSchema,
+  before: z.string().min(1).max(8000),
+  after: z.string().min(1).max(8000),
+  reason: z.string().max(8000).nullable().optional(),
+  impact: z.string().max(8000).nullable().optional(),
+  relatedEntities: jsonValueSchema.optional(),
+});
+export type CreateResearchChangeInput = z.infer<typeof createResearchChangeInputSchema>;
+
+export const createDriftFindingInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  driftType: driftTypeSchema,
+  severity: driftSeveritySchema,
+  description: z.string().min(1).max(8000),
+  sourceEntityType: researchEntityTypeSchema.nullable().optional(),
+  sourceEntityId: z.string().nullable().optional(),
+  targetEntityType: researchEntityTypeSchema.nullable().optional(),
+  targetEntityId: z.string().nullable().optional(),
+  reason: z.string().max(8000).nullable().optional(),
+  recommendedAction: z.string().max(8000).nullable().optional(),
+});
+export type CreateDriftFindingInput = z.infer<typeof createDriftFindingInputSchema>;
+
+export const createTimelineEventInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  eventType: timelineEventTypeSchema,
+  occurredAt: z.string(),
+  title: z.string().min(1).max(300),
+  summary: z.string().max(8000).nullable().optional(),
+  sourceType: timelineSourceSchema.nullable().optional(),
+  sourceId: z.string().nullable().optional(),
+  relatedEntities: jsonValueSchema.optional(),
+});
+export type CreateTimelineEventInput = z.infer<typeof createTimelineEventInputSchema>;
+
+export type Nullable<T> = { [K in keyof T]: T[K] | null | undefined };
