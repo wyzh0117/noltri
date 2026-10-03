@@ -1,17 +1,30 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  claimStatusSchema,
+  claimTypeSchema,
   conversationRoleSchema,
   contextScopeSchema,
+  driftFindingStatusSchema,
+  driftSeveritySchema,
+  driftTypeSchema,
   edgeRelationSchema,
   embeddingStatusSchema,
+  evidenceTypeSchema,
   itemLinkRelationSchema,
   knowledgeItemStatusSchema,
   masteryLevelSchema,
   nodeStatusSchema,
   processingStatusSchema,
+  researchChangeTypeSchema,
+  researchEntityTypeSchema,
+  researchProjectStatusSchema,
+  researchQuestionStatusSchema,
+  researchRelationTypeSchema,
   sourceTypeSchema,
   structureOperationSchema,
+  timelineEventTypeSchema,
+  timelineSourceSchema,
   versionedEntitySchema,
 } from '@noltri/schema';
 
@@ -65,6 +78,22 @@ const ENUM_COLUMNS: ReadonlyArray<{ table: string; column: string; schema: EnumL
   { table: 'version_records', column: 'operation', schema: structureOperationSchema },
   { table: 'conversations', column: 'scope', schema: contextScopeSchema },
   { table: 'conversation_messages', column: 'role', schema: conversationRoleSchema },
+  { table: 'research_projects', column: 'status', schema: researchProjectStatusSchema },
+  { table: 'research_questions', column: 'status', schema: researchQuestionStatusSchema },
+  { table: 'evidence', column: 'type', schema: evidenceTypeSchema },
+  { table: 'claims', column: 'claim_type', schema: claimTypeSchema },
+  { table: 'claims', column: 'status', schema: claimStatusSchema },
+  { table: 'research_changes', column: 'change_type', schema: researchChangeTypeSchema },
+  { table: 'drift_findings', column: 'drift_type', schema: driftTypeSchema },
+  { table: 'drift_findings', column: 'severity', schema: driftSeveritySchema },
+  { table: 'drift_findings', column: 'status', schema: driftFindingStatusSchema },
+  { table: 'drift_findings', column: 'source_entity_type', schema: researchEntityTypeSchema },
+  { table: 'drift_findings', column: 'target_entity_type', schema: researchEntityTypeSchema },
+  { table: 'entity_relations', column: 'source_type', schema: researchEntityTypeSchema },
+  { table: 'entity_relations', column: 'target_type', schema: researchEntityTypeSchema },
+  { table: 'entity_relations', column: 'relation_type', schema: researchRelationTypeSchema },
+  { table: 'timeline_events', column: 'event_type', schema: timelineEventTypeSchema },
+  { table: 'timeline_events', column: 'source_type', schema: timelineSourceSchema },
 ];
 
 /** Only labels quoted inside a CHECK clause count, so the comparison cannot be steered by comments. */
