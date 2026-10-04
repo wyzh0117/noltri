@@ -49,6 +49,7 @@ import type {
   NodeVectorMatch,
   PathSegment,
   StorageDriverName,
+  StorageHealth,
   VectorSearchOptions,
 } from './types';
 
@@ -71,6 +72,15 @@ const MAX_TREE_DEPTH = 128;
 
 type DbRow = Record<string, unknown>;
 type Parser<T> = { parse(data: unknown): T };
+
+/** Health may name the host it talks to, but never the credentials riding in the same string. */
+function hostOf(connectionString: string): string {
+  try {
+    return new URL(connectionString).host;
+  } catch {
+    return 'unparseable';
+  }
+}
 
 /** Column lists are written out instead of "select *" so a drifted migration is caught here. */
 const RAW_SOURCE_COLUMNS = [
@@ -500,6 +510,8 @@ export class SupabaseRepository implements KnowledgeRepository {
   private readonly pool: Pool;
   private readonly embeddingDim: number;
   private readonly statementTimeoutMs: number;
+  private readonly host: string;
+  private readonly maxConnections: number;
 
   constructor(options: SupabaseRepositoryOptions) {
     if (typeof options.databaseUrl !== 'string' || options.databaseUrl.trim().length === 0) {
@@ -518,6 +530,8 @@ export class SupabaseRepository implements KnowledgeRepository {
     }
     this.embeddingDim = options.embeddingDim;
     this.statementTimeoutMs = Math.trunc(timeout);
+    this.maxConnections = max;
+    this.host = hostOf(options.databaseUrl);
     this.pool = new Pool({
       connectionString: options.databaseUrl,
       max,
@@ -1307,6 +1321,24 @@ export class SupabaseRepository implements KnowledgeRepository {
       [conversationId],
     );
     return rows.map(toConversationMessage);
+  }
+
+  /**
+   * Cheap and credential-free by design: health is the one public endpoint, and this database is shared,
+   * so row totals would say something about other tenants. What matters here is which host the pool is
+   * wired to and how it is sized — no password, no key, no user data.
+   */
+  storageHealth(): StorageHealth {
+    return {
+      driver: 'supabase',
+      ok: true,
+      detail: {
+        host: this.host,
+        embeddingDim: this.embeddingDim,
+        maxConnections: this.maxConnections,
+        statementTimeoutMs: this.statementTimeoutMs,
+      },
+    };
   }
 }
 

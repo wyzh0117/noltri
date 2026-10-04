@@ -30,6 +30,7 @@ import type {
   NodeVectorMatch,
   PathSegment,
   StorageDriverName,
+  StorageHealth,
   VectorSearchOptions,
 } from './types';
 
@@ -578,6 +579,26 @@ export class InMemoryRepository implements KnowledgeRepository {
       .filter((row) => row.itemId === itemId && row.userId === userId)
       .sort((first, second) => second.confidence - first.confidence)[0];
     return link ? link.nodeId : null;
+  }
+
+  /**
+   * Nothing here survives the process, and the store is per-process rather than per-tenant, so the
+   * totals are the caller's own. The point of reporting them is that a health check must not claim a
+   * memory store is a database.
+   */
+  storageHealth(): StorageHealth {
+    return {
+      driver: 'memory',
+      ok: true,
+      detail: {
+        volatile: true,
+        rawSources: this.rawSources.size,
+        knowledgeItems: this.items.size,
+        knowledgeNodes: this.nodes.size,
+        itemVectors: this.itemEmbeddings.size,
+        nodeVectors: this.nodeEmbeddings.size,
+      },
+    };
   }
 }
 

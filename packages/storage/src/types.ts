@@ -21,7 +21,19 @@ import type {
   JsonValue,
 } from '@noltri/schema';
 
-export type StorageDriverName = 'memory' | 'supabase';
+export type StorageDriverName = 'memory' | 'supabase' | 'sqlite';
+
+/**
+ * What a driver can state about itself without a network round trip or a full scan — the payload
+ * `GET /api/health` shows. `ok` means "this driver believes it can serve reads and writes"; a driver
+ * that is missing a capability it needs (SQLite without FTS5, a schema it did not migrate) reports false.
+ */
+export interface StorageHealth {
+  readonly driver: StorageDriverName;
+  readonly ok: boolean;
+  /** Driver-specific facts. Never a credential, a connection string or anything else worth leaking. */
+  readonly detail: Readonly<Record<string, string | number | boolean | null>>;
+}
 
 export interface PathSegment {
   id: string;
@@ -218,4 +230,6 @@ export interface KnowledgeRepository {
   listConversations(userId: string, nodeId?: string): Promise<Conversation[]>;
   addMessage(input: AddMessageInput): Promise<ConversationMessage>;
   listMessages(conversationId: string, userId: string): Promise<ConversationMessage[]>;
+
+  storageHealth(): StorageHealth;
 }

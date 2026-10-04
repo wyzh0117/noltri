@@ -809,5 +809,25 @@ export function describeKnowledgeRepository(
         expect(await repository.searchSimilarItems(userId, vector(1, 0, 0), { limit: 5 })).toHaveLength(1);
       });
     }, timeout);
+
+    it('states its own storage health without leaking a credential', async () => {
+      await scope(async (repository, userId) => {
+        await repository.createRawSource(sourceInput(userId, '健康检查'));
+        const health = repository.storageHealth();
+        expect(health.driver).toBe(repository.driver);
+        expect(health.ok).toBe(true);
+        expect(Object.keys(health.detail).length).toBeGreaterThan(0);
+        for (const [key, value] of Object.entries(health.detail)) {
+          const type = value === null ? 'null' : typeof value;
+          expect(['string', 'number', 'boolean', 'null']).toContain(type);
+          expect(key.trim().length).toBeGreaterThan(0);
+        }
+        // Health answers before any credential exists, so nothing in it may look like one.
+        const rendered = JSON.stringify(health).toLowerCase();
+        for (const forbidden of ['password', 'secret', 'token', 'key=', 'postgres://', 'postgresql://']) {
+          expect(rendered).not.toContain(forbidden);
+        }
+      });
+    }, timeout);
   });
 }
