@@ -115,13 +115,13 @@ P5 迁移时从 `ad1d0c6` 逐项取用，不做整包 merge（该分支同时带
 | 一致性备份／恢复 | 云端快照 | SQLite backup API（含 WAL）、`backupTo()` + `verify()` | 已实现，未接 UI | `sqlite-schema.test.ts` 备份组 |
 | 「写成功即已落盘」的崩溃安全 | 由托管数据库保证 | `journal_mode=wal` + `synchronous=FULL`，进程被杀后由 SQLite 自行重放日志 | 已实现，进程级实测；安装版内未实机运行 | `local-storage-slice.test.ts` SIGKILL 组（子进程提交后自杀，不执行任何 `close()`，重开读回） |
 | Core 对云的假设 | 启动即需 `DATABASE_URL`／Supabase Auth | `STORAGE_DRIVER=sqlite` + `NOLTRI_SQLITE_FILE`，身份走 dev-open／dev-token，零云变量可跑 | 已实现（纵向切片实测） | `services/knowledge-core/test/local-storage-slice.test.ts`（5） |
-| 数据目录决策 | 无（云端库地址） | `resolveSqliteFile()`：`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data/noltri.sqlite` | 已实现；Tauri 传入自身 app-data 目录属 P2 | `local-storage-slice.test.ts` 路径解析组 |
+| 数据目录决策 | 无（云端库地址） | `resolveSqliteFile()`：`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data/noltri.sqlite` | 已实现；**Tauri 传入自身 app-data 目录仍未做**（Rust 侧无 `app_data_dir`／sidecar 相关代码，本轮实测用 `NOLTRI_SQLITE_FILE` 指向临时文件），排到打包阶段 | `local-storage-slice.test.ts` 路径解析组 |
 | 健康状态 | 只报驱动名 | 驱动自报 `storageHealth()`，storage 不自洽时整体降为 `degraded` | 已实现 | 契约新增健康项 + `http.test.ts` |
-| 桌面工作台 UI | `apps/web` Next.js 页面 | `apps/desktop`（Tauri） | 未开始（P2） | — |
+| 桌面工作台 UI | `apps/web` Next.js 页面 | `apps/desktop`（Tauri） | P2 已迁入：知识树／收件箱／来源／搜索／节点对话；Next.js server action、cookie、SSR session、`/api/web/*` 代理在桌面端不存在，改为 `ApiClient` 直连 Core | `apps/desktop/test/inbox-model.test.ts`（27）、`chat-model.test.ts`（10）、`workbench-render.test.tsx`（20，其中含与 Web 组件逐字节对等断言）；实机回归见 §13 |
 | 浏览器接入端 | 扩展直连公网 Core／Cloud Bridge | Native Messaging → 本地 Core | 未开始（P3）；本轮仅保证 Core 只绑 `127.0.0.1` | `services/knowledge-core/src/server.ts` |
 | Agent Setup | 网页登录页 + 手动配置 | 本地检测／预览／备份合并／授权／卸载恢复 | 未开始（P4） | — |
 | Research 领域与页面 | `feature/research-v1` worktree | 同一桌面 Core + 同一 SQLite 库 | 未开始（P5–P6）；归档已可取用 | §4–§6 |
-| Web／Supabase／Bridge 依赖 | 存在且在默认启动路径上 | 目标为删除 | **本轮不删除**（留给 P7）：替代功能已存在，但 `apps/web` 55 项测试仍是唯一可回归的 Web 行为基线，删除条件未同时满足 | `pnpm turbo run test --force` |
+| Web／Supabase／Bridge 依赖 | 存在且在默认启动路径上 | 目标为删除 | **P2 仍不删除**（留给 P7）：桌面端已能独立完成同一批场景，但删除条件要求「替代已存在＋回归通过＋引用已清理」同时成立，P5／P6 尚未迁入，`apps/web` 的 28 项代理测试仍是 Web 侧行为基线 | `pnpm turbo run test --force` |
 
 ## 9 P1 落地结果（实测）
 
@@ -171,3 +171,89 @@ P5 迁移时从 `ad1d0c6` 逐项取用，不做整包 merge（该分支同时带
 
 `git status` 在本轮结束时仍显示三个未跟踪项：`.workspace/project.lock.guard`（0 字节）、`project.json`（583 374 字节）、`project.bak`（583 352 字节）。后两者是一份把仓库文档表示成 document／block 的外部编辑器工程，其时间戳（20:38、21:11）落在本轮工作期间，说明该编辑器在同时写入；`.workspace/` 是它的锁文件。本轮**没有创建、没有提交、也没有删除**它们，处置权交回用户：要么加进 `.gitignore`，要么明确删除，避免与源码仓库混在一起。
 
+> P2 之后该分布已变化：跨驱动契约又加了 2 项（收件箱/来源列表相关），memory 17→19、SQLite 18→20、PG 侧同样 18→20 但仍是跳过，storage 包现为 **69 通过 / 20 跳过**。实测分布见 §13。
+
+## 13 P2 落地结果（2026-10-05 实测）
+
+### 13.1 用例分布（按包逐文件执行实测，非估算）
+
+| 包 | 测试文件 | 通过 | 跳过 |
+| --- | --- | --- | --- |
+| `services/knowledge-core` | 9 | 83 | 0 |
+| `apps/desktop` | 7 | 79 | 0 |
+| `packages/storage` | 5 | 69 | 20 |
+| `apps/extension` | 6 | 69 | 0 |
+| `packages/shared` | 3 | 60 | 0 |
+| `packages/ai-provider` | 2 | 48 | 0 |
+| `services/mcp-server` | 2 | 20 | 0 |
+| `services/ai` | 1 | 15 | 0 |
+| `packages/api-client` | 1 | 10 | 0 |
+| `apps/web`（`node:test`） | 1 | 28 | 0 |
+| `packages/schema` | 0 | 0 | 0 |
+| 合计 | 37 | **481** | **20** |
+
+另有 Rust 侧 `cargo test` 口径的 8 项历法/时间测试（`cargo check` 实测通过，用时 21.93s，仅 2 条既有 `clashing_extern_declarations` 警告）。P0 基线为 267 通过 / 17 跳过；本轮净增 214 通过、3 跳过。
+
+20 项跳过全部位于 `packages/storage/test/supabase.contract.test.ts`，原因是缺少 `NOLTRI_PG_TEST_URL`，按 §19 X02 口径**不计通过**。
+
+desktop 包 79 项的构成（P2 新增 57 项）：`inbox-model` 27、`workbench-render` 20、`chat-model` 10、`connection-status` 7、`mcp-config` 6、`capture-contract` 5、`gating` 4。
+
+### 13.2 并发敏感：本轮唯一的测试改动与其证据
+
+不加 `--concurrency` 时，`npx turbo run test typecheck --force` 在本机（8 核）出现**三类互不相同的超时**，且每次失败的包不同：
+
+- 第一次：`services/knowledge-core` 的 `local-storage-slice.test.ts` 两项在 5000ms 默认超时上失败（该文件单独执行 5/5 通过，最慢一项 1619ms，首项 415ms）。
+- 第二次：`packages/ai-provider` 的另一项在 5000ms 超时失败，同时 `services/ai` 的 hook 在 10000ms 超时。
+- 第三次（同一改动之后）：22/22 通过。
+
+即：这是 CPU/IO 饥饿导致的偶发红，不是断言错误。本轮的处理是**只给真正做磁盘 I/O 的两项加显式超时**（`local-storage-slice.test.ts` 两项 5000ms → 30000ms，沿用同文件 SIGKILL 项既有的 `120_000` 写法），没有放宽任何断言、没有改判定阈值、没有为消除红灯而改测试预期。`packages/ai-provider` 的计时用例（40ms 超时 vs 400ms 假延迟）本轮**未改动**，因为它保护的正是重试与超时映射行为，削弱它等于删掉这项保护；它作为已知不稳定项记录在案。
+
+结论与建议：全量门禁命令建议写成 `npx turbo run test typecheck --force --concurrency=2`（实测 22/22，EXIT=0）。本轮**没有擅自修改根 `package.json` 的脚本**，因为这会改变所有协作者的默认工作流，应单独决策。
+
+### 13.3 实机回归（真实浏览器驱动 dist 产物）
+
+- 被测对象：`pnpm --filter @noltri/desktop build` 的产物 `dist/workbench.html`，由 `vite preview --port 4179 --host 127.0.0.1` 提供服务（4173 被用户自己的 `deno` 进程占用，未动它）。
+- Core：`STORAGE_DRIVER=sqlite`、`AI_PROVIDER=offline`、`NOLTRI_SQLITE_FILE=/tmp/noltri-p2-verify/noltri.sqlite`、绑定 `127.0.0.1:8787`。
+- 路径：捕获 → 树 → 节点详情 → 重命名 → 搜索并跳转 → 节点对话（重载后读回）→ 收件箱筛选/计数/原文预览 → 人工归档（含重复归档的 `conflict` 提示）→ 离线提供方提示。
+- 覆盖验收：L03（断网无模型可用：采集、落盘、手工整理、搜索、状态诚实）、D01（关进程重开数据在，Node 进程级）、D03（中文与混排检索）、M03 的 UI 侧（Agent 写入的数据在工作台可见）。
+- 实测发现并修复的缺陷：首帧探测未完成时顶栏谎报「本机知识服务不可用」；现为「正在检测本机知识服务…」，并补 4 项状态文案测试。
+- 布局：1280×820（Tauri 默认）、940×600（最小）、1440×900 均无横向溢出。
+- 证据截图：`/tmp/noltri-p2-verify/0{1,3,4,5,6,7,8,9}-*.png`（仓库之外，报告后删除）。
+- **未做**：`pnpm tauri dev` 起 GUI（属实机启动原生窗口，需用户点头）；因此 WebView 内的窗口显示/隐藏、`close` 拦截转隐藏、设置持久化仍是未实机路径。
+
+### 13.4 P2 端点性能实测
+
+一次性探针（`node /tmp/noltri-counts/bench.mjs`，仓库外、测后随临时 profile 删除，不属测试套件）。200 条已归纳原文的本地 SQLite 库、offline 提供方、`synchronous=FULL`：
+
+| 端点（工作台每次交互实际调用的那些） | n | p50 | p95 | max |
+| --- | --- | --- | --- | --- |
+| `POST /api/capture`（含 offline 归类与落盘） | 200 | 7.4 ms | 10.8 ms | 25.4 ms |
+| `GET /api/inbox?status=pending,processing,failed` | 30 | 2.3 ms | 3.1 ms | 4.8 ms |
+| `GET /api/inbox`（全部） | 30 | 2.8 ms | 3.9 ms | 4.9 ms |
+| `GET /api/inbox/:id`（原文预览） | 30 | 2.1 ms | 3.0 ms | 3.0 ms |
+| `GET /api/tree` | 30 | 2.4 ms | 5.2 ms | 5.8 ms |
+| `GET /api/nodes/:id`（详情） | 30 | 9.0 ms | 10.4 ms | 10.6 ms |
+| `POST /api/search`（hybrid） | 30 | 24.3 ms | 40.5 ms | 61.0 ms |
+
+Core 进程启动到 `/api/health` 返回 200：490 ms（含 tsx 转译，**不是**安装包冷启动）。对照 §19 性能目标：采集落盘 ack 的 p95 目标 ≤1 s，本量级实测远优于目标；「1 万条知识的常见全文查询 p95 ≤500 ms」**未验证**——本轮样本只有 200 条，P1 另测到 5 000 条时关键词 38.2 ms、向量精确扫描 64.7 ms，向量成本随条数线性增长，1 万条不外推为成绩。
+
+构建产物（`vite build` 实测，251ms）：`workbench.html` 0.57 kB（gzip 0.35）、`workbench-*.js` 40.56 kB（gzip 12.43）、`workbench-*.css` 15.44 kB（gzip 3.62）；与四入口共用的 `src-*.js` 100.75 kB、`jsx-runtime-*.js` 221.03 kB。
+
+### 13.5 明确未删除的东西
+
+`apps/web` 及其 Next.js 依赖、`packages/storage` 的 Supabase 驱动、`supabase/migrations/` 全部**保持原样**。P2 的删除前置条件是开发文档 §08 的「完成桌面对应场景回归后」，§20 进一步要求清理做到运行依赖层（Next.js 专属配置、云 SDK／driver、锁文件与 workspace 引用，并验证干净 clone 可装可测可构建）。本轮完成的只是知识树／收件箱／来源／搜索／节点对话这一组，Research（P5–P6）与 Agent Setup（P4）尚未迁入，两个条件都不成立。Web 侧对等断言（`workbench-render.test.tsx` 的前半）在删除 `apps/web` 时一并删除，该文件注释里写明了这一点。
+
+### 13.6 Rust 侧首次实跑
+
+`PATH="$HOME/.cargo/bin:$PATH" cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` → **8 passed / 0 failed**（MCP 写入目标白名单 3、设置约束 3、时间形状 2）。此前仓库文档只写过「cargo check 通过」，8 项 Rust 测试从 P1 起就一直存在但没被实跑记录过；`tauri build` 仍未执行，安装包形态无任何实测。
+
+### 13.7 复核时发现的既有过期数字（与本轮改动无关）
+
+写报告时逐条把文档里的数字对回代码，改掉两处一直在说谎的计数：
+
+| 位置 | 原写法 | 实测 |
+| --- | --- | --- |
+| `FUNCTION_MAP.md` 桌面小节 | 「20 个 `#[tauri::command]` + 3 事件，TS 侧 commands 桥一一对应」 | **25 个**命令全部注册；`lib/tauri.ts` 调用其中 **23 个**，`get_selection_preview` 与 `runtime_info` 注册但前端无调用点；事件是 **2 个名字**（`selection-changed`／`capture-result`）共 3 处 `emit` |
+| `README.md` 常用命令 | 「全部 12 个工作区」 | **11 个**工作区包（`apps` 3＋`services` 3＋`packages` 5），因此 turbo 的 test＋typecheck 恰为 22 个任务 |
+
+「一一对应」这类断言最容易说谎：它不是任何测试的输出，只是当年写下的描述。已改为直接可复核的三个数字，其中「两个命令注册但无人调用」是本轮才暴露出来的事实，留给 P3／P4 决定是接上还是摘掉。

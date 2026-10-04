@@ -13,17 +13,20 @@
 - 浏览器插件来源元数据提取：URL / 标题 / 域名 / 适量上下文（同上，**未在真实 Chrome 加载实测**）
 - 浏览器插件归类结果提示（popup / 徽标反馈；同上，**未在真实 Chrome 加载实测**）
 - 桌面 Companion macOS Accessibility 选区捕获（Rust AX 轮询观察者；8 项 Rust 测试、cargo check 通过；**GUI 未实机运行，TCC 授权流程未实测**）
-- 桌面 Companion 浮动捕获胶囊（overlay 窗口 + 前端；22 项前端测试、vite 构建通过；**未实机运行**）
+- 桌面 Companion 浮动捕获胶囊（overlay 窗口 + 前端；Setup/捕获侧 22 项前端测试、vite 构建通过；**未实机运行**）
 - 桌面 Companion 全局快捷键 → 粘贴式迷你捕获窗降级（Rust 快捷键注册 + paste 窗口；同上，**未实机运行**）
-- 桌面 Companion 捕获管线前端流 `runCaptureFlow`：契约校验 → ApiClient 捕获 → 结果/失败文案 → `recordCaptureOutcome`（22 项测试覆盖：短文本本地拒绝不发包、原文已保存的 AI 失败提示、成功路径节点路径展示）
+- 桌面 Companion 捕获管线前端流 `runCaptureFlow`：契约校验 → ApiClient 捕获 → 结果/失败文案 → `recordCaptureOutcome`（`apps/desktop/test/capture-contract.test.ts` 5 项覆盖：payload 无身份字段、短文本本地拒绝不发包、原文已保存的 AI 失败提示、成功路径节点路径展示）
 
-### Knowledge Core（71 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片）
+### Knowledge Core（83 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片）
 - RawSource **先保存**再 AI 处理（全文唯一 `createRawSource` 调用点，`pnpm gate` 机器检查）
 - 原子知识点提取（offline 确定性提供方 + OpenAI 兼容 BYOK 提供方）
 - 文本归一化
 - 向量化（单批合并调用）与相似检索
 - 自动归类决策：attach（挂已有节点）/ create（新节点）/ merge（合并）；置信度分层（高/中/低，阈值可配置）——实测中同一内容重复捕获被吸收进已有节点（itemCount 递增）
 - AI 失败记录 `processingStatus='failed'` + `errorReason`，并支持 `retryCapture` 重试
+- 收件箱读取 `GET /api/inbox`：按归纳状态多选筛选（`status` 为逗号分隔串，因路由用 `Object.fromEntries` 折叠重复键）、分页 limit/offset、返回**全库**四态计数；`GET /api/inbox/:id` 取单条原文全文（仅以 owner 过滤，越权即 null）；`POST /api/capture/:id/retry` 无请求体重跑归纳管线（服务端已持有原文，重试不可能重发用户没捕获的内容）
+- 人工归档 `POST /api/inbox/:id/assign`：**绕过全部 AI 阶段**把一条原文变成知识点（可只提交人工摘录而非整段原文），落库标记 `isAiDerived=false` + `embeddingStatus='none'`，重复归档同一节点同一文字返回 `conflict`；这是「未配置模型密钥也能把原文变成知识」的通路
+- 会话读取 `GET /api/conversations[?nodeId=]` 与 `GET /api/conversations/:id/messages`：对话记录由 Core 持久化，客户端不再自备 localStorage
 - 知识树读取 / 节点详情 / 节点重命名 / 节点移动（含环检测与 VersionRecord 版本记录）
 - 语义 + 关键词混合搜索
 - 节点上下文装载（current_node / section / tree / whole_library）
@@ -38,25 +41,38 @@
 - **SQLite 本地文件仓储**（`packages/storage/src/sqlite.ts` + `sqlite-schema.ts` + `sqlite-vectors.ts`）：Node 内置 `node:sqlite`（不需要随包携带原生模块）、WAL + `synchronous=FULL` + `busy_timeout` + `foreign_keys=ON`、`PRAGMA user_version` 分步迁移、FTS5 + CJK bigram 关键词索引（原始文本仍存实体表，可原样回显）、Float32 BLOB 精确余弦向量（登记 model / 维度 / 归一化 / 源文本 sha256 / builder 版本；查询宽度与存储宽度不一致的行绝不参与打分）、`integrity_check` + `foreign_key_check`、SQLite backup API 一致性快照（18 项契约测试 + 19 项 schema／落盘／中文检索／备份专项测试）
 - 本地知识表 8 张 + 2 个本地检索结构（`vectors` / `keyword_index`）：raw_sources / knowledge_items / knowledge_nodes / knowledge_edges / item_node_links / version_records / conversations / conversation_messages；单用户本机工作区不设 `users` 表，但 `user_id` 列保留，使三个驱动共用同一套查询与契约
 - InMemory 驱动（17 项契约测试全绿）—— 仅用于测试与明确标注的临时演示，**不作为生产本地存储**
-- Supabase(Postgres) 仓储实现 + 迁移 SQL（`supabase/migrations/`，含 pgvector 向量列；storage 包当前 65 项通过 / 18 项跳过，跳过项全部是缺少 `NOLTRI_PG_TEST_URL` 时的 PG 集成用例，**不计通过**；迁移 SQL **通过静态审查，未在真实数据库执行**）
+- Supabase(Postgres) 仓储实现 + 迁移 SQL（`supabase/migrations/`，含 pgvector 向量列；storage 包实测 69 项通过 / 20 项跳过，跳过项全部是缺少 `NOLTRI_PG_TEST_URL` 时的 PG 集成用例，**不计通过**；迁移 SQL **通过静态审查，未在真实数据库执行**）
 - AI Provider Adapter 抽象 + `offline`（确定性）与 `openai`（BYOK，OpenAI 兼容 chat + embeddings）两个实现（48 项测试；**未发起真实模型调用**）
 - 结构变化版本记录与可逆基础（move/重命名均落 VersionRecord）
 - 架构门禁 `pnpm gate`：core 无 pg/supabase/openai/express 依赖、四入口共用同一 ApiClient、MCP 不碰数据库
+- **`@noltri/shared` 领域视图模型层**（P2 UI 与业务拆分的落点）：树扁平化／展开折叠／键盘导航／子树计数、节点详情视图模型与移动目标选项、中文标签字典（归纳状态、来源类型、作用域、关系、匹配方式）、阈值与 env 解析；60 项测试。标签字典以「键集合必须等于 schema 枚举」的契约测试锁定，新增枚举值未翻译即测试失败，Web 与桌面共用同一份
 
-### Web App（55 项测试 + next build + 代理实测）
+### Web App（28 项测试 + next build + 代理实测；P2 后仍可运行，尚未删除）
 - 登录（dev-token 策略已实测：401 信封、307→/login、写 cookie 后取得会话；**Supabase Auth 策略已实现但未连真实 Supabase 项目实测**）
-- 首屏知识树三栏布局（键盘导航、展开/折叠、拖拽移动目标选项；27 项树视图测试）
+- 首屏知识树三栏布局（键盘导航、展开/折叠、拖拽移动目标选项；树视图 27 项测试已随视图模型迁入 `@noltri/shared`）
 - 节点详情：摘要 / 知识点数 / 来源数 / 关联节点 / 与 AI 讨论
 - 搜索（走 `/api/web/*` 代理 → core）
 - 节点 AI 对话界面（上下文携带截断至最近消息；offline 提供方回环验证，**未用真实模型**）
 - `/api/web/*` 代理层 28 项测试直连真实 Next 路由处理器 + 独立 fake core
+- P2 迁移后与桌面端的对等性由 `apps/desktop/test/workbench-render.test.tsx` 机器锁定：同一份 props 分别渲染 Web 与桌面的领域栏／知识树／节点详情，断言 `renderToStaticMarkup` 输出逐字节相同。该测试是迁移期脚手架，P7 删除 `apps/web` 时一并删除
 
-### Desktop Companion 与 Setup Manager（22 项前端测试 + 8 项 Rust 测试；GUI 未实机运行）
-- Tauri 2 壳与原生能力层（20 个 `#[tauri::command]` + 3 事件，TS 侧 commands 桥一一对应；cargo check 通过）
+### Desktop Companion、Setup Manager 与知识工作台（79 项前端测试 + 8 项 Rust 测试；Companion/Setup GUI 未实机运行，工作台已用浏览器驱动 dist 产物实机回归）
+- Tauri 2 壳与原生能力层（25 个 `#[tauri::command]` 全部注册；TS 侧 `lib/tauri.ts` 调用其中 23 个，`get_selection_preview` 与 `runtime_info` 已注册但前端尚未调用；2 个事件名 `selection-changed`／`capture-result`，共 3 处 `emit`；`cargo check` 与 `cargo test`（8 项全通过）实测）
 - macOS Accessibility 权限状态检测与引导（状态展示 + 打开系统设置 + 「我已授权」重新检查）
 - Setup Manager Capture 状态区：观察者状态、捕获总开关、最小长度、测试选区捕获、按应用退出（opt-out chips）、不兼容应用列表与重试、最近收纳记录
 - Setup Manager AI 连接区：5 个客户端（claude / claude_code / cursor / chatgpt_codex / other_mcp_client）连接测试（core 健康 + MCP tools/list 两段探针）、MCP 条目复制、按客户端写入配置文件（window.confirm 展示绝对路径与合并摘要，只替换自家条目、保留兄弟配置，**绝不存第三方密码**）、官方设置/文档直达
-- 原生时间工具（UTC ISO-8601，Hinnant 算法，8 项 Rust 测试中的历法部分）
+- 原生时间工具（UTC ISO-8601，Hinnant 算法）；`cargo test` 实测 8 项全通过：MCP 写入目标白名单 3、设置约束 3、时间形状 2
+
+#### 知识工作台（P2 迁入，`apps/desktop/src/workbench/`）
+- 独立 WebView 入口 `workbench.html`：`WebviewWindowBuilder` 在 setup 阶段一次性 hidden 预建（1280×820，最小 940×600，居中），`open_workbench_window` 只做 `show()` + `set_focus()`；关闭事件 `prevent_close()` + `hide()`，因此窗口不会被销毁、随时可再打开（Rust 生命周期；**未实机运行**，前端行为以浏览器驱动 dist 产物实机回归覆盖）
+- 三个页签视图（收件箱 / 知识库 / 连接与设置）：知识库为三栏 §17.1（领域栏 / 树 / 节点详情）+ 节点对话抽屉，搜索常驻顶栏；不预先占位「研究项目」（P5 才有的能力）
+- 收件箱：筛选「需要处理（默认）/待整理/整理中/归纳失败/已归纳/全部」，状态词表由 `processingStatusSchema` 派生；分页以服务端 offset 续拉，四态徽标计数恒为全库口径；`processing` 禁人工归档、仅 `failed` 可重试；同一节点上重复归档同一段文字返回 `conflict` 并如实提示
+- 收件箱人工归档写 `isAiDerived=false` + `embeddingStatus='none'`，与 AI 归纳结果在库中可区分（实测库内两行各占一类）
+- 节点对话消息只由 Core 持久化（桌面端不落 localStorage／sessionStorage，实测重载后读回）；按 (nodeId, scope) 取最近会话，绝不把无节点归属的会话串进节点面板
+- 业务与 UI 拆分：`inbox-model.ts` / `chat-model.ts` 为纯函数视图模型，可在无 DOM 环境下测试；`api.ts` 以 `Pick<ApiClient, …>` 派生工作台所需契约面，上游改名即编译失败
+- 领域状态、表单校验、查询逻辑从 `apps/web` 组件抽出后迁入 `@noltri/shared`（树视图模型 + 中文标签字典）与桌面端；未新增共享包
+- 连接状态诚实化：首次探测未完成时显示「正在检测本机知识服务…」，只在真实失败后显示「不可用」（实机回归中发现并修复的缺陷）
+- 原生依赖收口：Next.js server action / cookie / SSR session / Web-only route handler 在桌面端不存在，全部改为 `ApiClient` 直连 Core（`clientHint: 'desktop'` 落到版本记录）
 
 ### MCP（20 项测试 + 真实 SDK 客户端端到端验证）
 - Streamable HTTP `/mcp` endpoint（无状态：每 POST 新建 Server + transport，JSON 响应模式）
@@ -73,14 +89,17 @@
 - 桌面打包与签名（dmg / notarization）
 - SQLite 本地库在安装版内的实机闭环：Tauri 启动、冷启动、异常退出后重启、磁盘不足／目录只读（当前只有 Node 侧文件库测试，异常退出已由 `SIGKILL` 用例覆盖 WAL 重放，但**未打包、未双击运行**，磁盘不足／只读目录未测）
 - `node:sqlite` 为实验性 API：打包时携带的 Node 版本、`ExperimentalWarning` 的处理与 `better-sqlite3` 替代路径**均未实测**
-- Supabase 真实项目接入：迁移执行、pgvector 相似检索、RLS 用户隔离实测（`NOLTRI_PG_TEST_URL` 就绪后 18 项集成测试自动启用）
+- Supabase 真实项目接入：迁移执行、pgvector 相似检索、RLS 用户隔离实测（`NOLTRI_PG_TEST_URL` 就绪后 20 项集成测试自动启用）
 - Web Supabase Auth 策略对真实 Supabase 项目的登录实测
 - 真实模型调用（BYOK 网关）下的抽取/嵌入/对话质量验证
 - Supabase SQL 在真实库的执行（当前仅静态审查）
+- 知识工作台未进 WebView 截图：本轮以浏览器驱动 **dist 构建产物**（`vite preview`，非 `tauri dev`）完成 P2 实机回归，页面与 Tauri 加载的是同一份 bundle，但**窗口显示/隐藏、`close` 拦截、设置持久化等 Tauri 专有路径仍未实机运行**
+- 工作台「重试归纳」「移动节点（拖拽）」「写摘要」三条写路径本轮**只在契约与单元测试层验证**，实机回归未触发（实机场景已覆盖重复归档的 conflict 提示与重命名）
+- `apps/web` 尚未删除：P2 的验收口径是「桌面场景回归通过后」才删，删除动作排到 P7 云依赖清理，届时同步删除 `apps/desktop/test/workbench-render.test.tsx` 中的 Web 对等断言
+- 桌面端错误文案仍为英文：`packages/api-client` 抛出的网络/服务端错误字符串直接进入工作台错误提示，与 `apps/web/lib/client-api.ts` 的 `describeError` 行为一致，因此**不构成对等性缺口**，但中文界面下会混现英文，属于已知体验缺口
 
 ### V1 收尾项
 - 发布物整理：扩展打包产物上架准备、桌面 dmg、部署文档
-- P2 桌面工作台迁移：UI 与业务拆分，知识树 / Inbox / 来源 / 搜索 / 节点对话迁入桌面
 - P3 本地接入：浏览器 Native Messaging Host、选区浮窗、降级路径、统一 CaptureRequest
 - P4 Agent Setup：检测、配置预览、备份合并、授权、MCP handshake、scope 与卸载恢复
 - P5–P6 Research 整合与偏移检查：旧领域与测试迁入、研究工作台、六类偏移与上下文包
