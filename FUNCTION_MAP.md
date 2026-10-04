@@ -17,7 +17,7 @@
 - 桌面 Companion 全局快捷键 → 粘贴式迷你捕获窗降级（Rust 快捷键注册 + paste 窗口；同上，**未实机运行**）
 - 桌面 Companion 捕获管线前端流 `runCaptureFlow`：契约校验 → ApiClient 捕获 → 结果/失败文案 → `recordCaptureOutcome`（22 项测试覆盖：短文本本地拒绝不发包、原文已保存的 AI 失败提示、成功路径节点路径展示）
 
-### Knowledge Core（70 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片）
+### Knowledge Core（71 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片）
 - RawSource **先保存**再 AI 处理（全文唯一 `createRawSource` 调用点，`pnpm gate` 机器检查）
 - 原子知识点提取（offline 确定性提供方 + OpenAI 兼容 BYOK 提供方）
 - 文本归一化
@@ -30,7 +30,8 @@
 - 节点级 AI 对话（会话 + 消息持久化）
 - REST API 契约校验（zod）、健康检查、错误信封；身份仅取自凭证（JWT / dev-token / dev-open），绝不来自请求体
 - `/api/health` 报告**真实存储状态**：驱动自检 `storageHealth()` 由三个驱动各自实现并纳入契约测试，返回文件名（不返回绝对路径）、journal mode、schema 版本、SQLite 版本、FTS5 可用性与本库数量；storage 自报不可用时整体状态降为 `degraded`
-- 本地零云配置纵向切片实测：仅设 `STORAGE_DRIVER=sqlite` / `NOLTRI_SQLITE_FILE` / `AI_PROVIDER=offline` 四个环境变量，即可 capture → 落盘 → 关闭句柄 → 重开同一文件 → 读回原文/知识/树/关键词搜索/节点详情（`services/knowledge-core/test/local-storage-slice.test.ts`，4 项）；profile 路径由 `resolveSqliteFile()` 统一解析（`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data`），Core 内不再出现驱动名分支
+- 本地零云配置纵向切片实测：仅设 `STORAGE_DRIVER=sqlite` / `NOLTRI_SQLITE_FILE` / `AI_PROVIDER=offline` / `NOLTRI_DEV_USER_ID` 四个环境变量，即可 capture → 落盘 → 关闭句柄 → 重开同一文件 → 读回原文/知识/树/关键词搜索/节点详情（`services/knowledge-core/test/local-storage-slice.test.ts`，5 项）；profile 路径由 `resolveSqliteFile()` 统一解析（`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data`），Core 内不再出现驱动名分支
+- 崩溃安全实测：子进程（`services/knowledge-core/test/crash-writer.ts`）经 `createRepository` 提交一条原文后立刻 `SIGKILL` 自身，不执行 `close()` 也不做 checkpoint；父进程重开同一文件读回该条，干净关闭后 `-wal` 侧文件不存在——即「写入返回成功」等于「进程被杀后仍可读回」在 Node 侧已验证（安装版内未实机复现）
 
 ### 数据与架构
 - StorageRepository 统一抽象 + 三个驱动（InMemory / SQLite / Supabase-Postgres）：同一份契约 `packages/storage/test/repository-contract.ts` 逐驱动执行，作用域隔离、幂等 upsert、错误码（`not_found` / `conflict` / `storage_error`）、时间戳与 rowid tie-break 排序、关键词相关性、向量维度不混用在三者间语义一致
@@ -70,7 +71,7 @@
 - 浏览器插件在真实 Chrome 中加载并实测捕获闭环
 - 桌面 Companion 实机运行：TCC 辅助功能授权流程、胶囊/粘贴窗/快捷键真机交互、MCP 配置写入真实客户端配置文件
 - 桌面打包与签名（dmg / notarization）
-- SQLite 本地库在安装版内的实机闭环：Tauri 启动、冷启动、异常退出后重启、磁盘不足／目录只读（当前只有 Node 侧文件库测试，**未打包、未双击运行**）
+- SQLite 本地库在安装版内的实机闭环：Tauri 启动、冷启动、异常退出后重启、磁盘不足／目录只读（当前只有 Node 侧文件库测试，异常退出已由 `SIGKILL` 用例覆盖 WAL 重放，但**未打包、未双击运行**，磁盘不足／只读目录未测）
 - `node:sqlite` 为实验性 API：打包时携带的 Node 版本、`ExperimentalWarning` 的处理与 `better-sqlite3` 替代路径**均未实测**
 - Supabase 真实项目接入：迁移执行、pgvector 相似检索、RLS 用户隔离实测（`NOLTRI_PG_TEST_URL` 就绪后 18 项集成测试自动启用）
 - Web Supabase Auth 策略对真实 Supabase 项目的登录实测

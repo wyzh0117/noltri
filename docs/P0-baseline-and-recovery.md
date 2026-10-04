@@ -113,7 +113,8 @@ P5 迁移时从 `ad1d0c6` 逐项取用，不做整包 merge（该分支同时带
 | 中文与中英混排关键词检索 | Postgres FTS + `tokenize()` | FTS5 取候选集，`tokenize()` 的 CJK bigram 预分词入索引，再用同一相关性分数排序 | 已实现；与 PG、memory 排序一致 | `sqlite-schema.test.ts` 中文／混排／英文／缺失词 8 组用例 |
 | 向量检索 | pgvector 列 | `vectors` 表 Float32 BLOB + 精确余弦，登记 model／维度／归一化／源文本哈希／builder 版本 | 已实现（V1 无 ANN） | `sqlite-schema.test.ts` 维度隔离用例 + 契约向量组 |
 | 一致性备份／恢复 | 云端快照 | SQLite backup API（含 WAL）、`backupTo()` + `verify()` | 已实现，未接 UI | `sqlite-schema.test.ts` 备份组 |
-| Core 对云的假设 | 启动即需 `DATABASE_URL`／Supabase Auth | `STORAGE_DRIVER=sqlite` + `NOLTRI_SQLITE_FILE`，身份走 dev-open／dev-token，零云变量可跑 | 已实现（纵向切片实测） | `services/knowledge-core/test/local-storage-slice.test.ts`（4） |
+| 「写成功即已落盘」的崩溃安全 | 由托管数据库保证 | `journal_mode=wal` + `synchronous=FULL`，进程被杀后由 SQLite 自行重放日志 | 已实现，进程级实测；安装版内未实机运行 | `local-storage-slice.test.ts` SIGKILL 组（子进程提交后自杀，不执行任何 `close()`，重开读回） |
+| Core 对云的假设 | 启动即需 `DATABASE_URL`／Supabase Auth | `STORAGE_DRIVER=sqlite` + `NOLTRI_SQLITE_FILE`，身份走 dev-open／dev-token，零云变量可跑 | 已实现（纵向切片实测） | `services/knowledge-core/test/local-storage-slice.test.ts`（5） |
 | 数据目录决策 | 无（云端库地址） | `resolveSqliteFile()`：`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data/noltri.sqlite` | 已实现；Tauri 传入自身 app-data 目录属 P2 | `local-storage-slice.test.ts` 路径解析组 |
 | 健康状态 | 只报驱动名 | 驱动自报 `storageHealth()`，storage 不自洽时整体降为 `degraded` | 已实现 | 契约新增健康项 + `http.test.ts` |
 | 桌面工作台 UI | `apps/web` Next.js 页面 | `apps/desktop`（Tauri） | 未开始（P2） | — |
@@ -125,7 +126,8 @@ P5 迁移时从 `ad1d0c6` 逐项取用，不做整包 merge（该分支同时带
 ## 9 P1 落地结果（实测）
 
 - 全仓工作流：`npx turbo run test typecheck --force` → 22/22 任务通过。`--force` 是必需的：缓存曾掩盖一次由 `HealthResponse` 契约变更引起的扩展弹窗测试回归，不加 `--force` 时该包显示为「通过」。
-- 各包测试实测：storage 65 通过 / 18 跳过、knowledge-core 70、shared 4（本轮新建 `packages/shared/test/env.test.ts`）、ai-provider 48、extension 69、mcp-server 20、desktop 22、ai-service 15；web 走 `node:test` 55 通过。合计 **368 通过 / 18 跳过**，基线为 267 通过 / 17 跳过。
+- 各包测试实测：storage 65 通过 / 18 跳过、knowledge-core 71、shared 4（本轮新建 `packages/shared/test/env.test.ts`）、ai-provider 48、extension 69、mcp-server 20、desktop 22、ai-service 15；web 走 `node:test` 55 通过。合计 **369 通过 / 18 跳过**，基线为 267 通过 / 17 跳过。
+- 本地纵向切片现为 5 项（`local-storage-slice.test.ts`）：其中崩溃安全一项用子进程 `SIGKILL`——子进程经 `createRepository` 提交一条原文后立刻自杀，不调用 `close()`、不做 checkpoint，父进程重开同一文件读回该条并确认 `-wal` 在干净关闭后消失。这覆盖的是「写成功即落盘」的进程级证据（验收 L06／D01 的存储部分），不覆盖安装版双击启动后的同一场景。
 - 18 项跳过全部是缺少 `NOLTRI_PG_TEST_URL` 的 Postgres 集成用例，**不计入通过**；比基线多出的 1 项是新增的跨驱动健康契约用例在 PG 驱动上的跳过。
 - 契约变更的连带修改：`HealthResponse` 增加必填 `storage`，因此 `apps/web/test/fake-core.ts`、`services/mcp-server/test/fake-core.ts`、`apps/extension/test/api-client.test.ts` 三处桩数据同步更新。**这意味着这些客户端桩与新版 Core 绑定；旧 Core 的 health 响应不再满足契约**（本地同批发版可接受，跨版本兼容未处理）。
 - 未做：Tauri 打包与实机双击、数据库加密、ANN 向量索引、`better-sqlite3` 备选打包路径。
