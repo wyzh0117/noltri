@@ -217,7 +217,7 @@
     <tr><td><code>apps/web/next-env.d.ts</code></td><td>Next.js 自动生成的类型引用路径（<code>.next/types/*</code> → <code>.next/dev/types/*</code>），非人工改动</td></tr>
   </tbody>
 </table>
-<p class="note warn"><b>留在工作树里未跟踪、也未删除的东西：</b><code>.workspace/</code> 与 <code>project.json</code>。二者都不是本轮产生的（像是编辑器／文档导入留下的产物），本轮只盘点不删除，交由你决定去留与是否入库。</p>
+<p class="note warn"><b>留在工作树里未跟踪、也未删除的东西：</b><code>.workspace/</code>（内含 <code>project.lock.guard</code>）、<code>project.json</code>（583 KB）、<code>project.bak</code>（583 KB）。三者都不是本轮产生的：内容是一份把仓库文档镜像成 document／block 的编辑器工程，且在本轮工作期间被反复重写（时间戳 20:38 与 21:11）。本轮只盘点、不提交、不删除，请你决定去留——若要保留，建议先加进 <code>.gitignore</code> 再决定要不要入库。</p>
 
 <h2 id="s5">5 Git／worktree／分支处理结果</h2>
 <table>

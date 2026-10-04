@@ -152,3 +152,22 @@ P5 迁移时从 `ad1d0c6` 逐项取用，不做整包 merge（该分支同时带
 
 结论：到几千条量级仍是交互可用的毫秒级；向量检索是精确扫描，成本随库大小线性增长，这是 V1 已知的性能边界（ANN 索引与维度压缩留给后续，且必须先有真实数据量证据）。
 
+## 11 本轮结束时的 storage 包用例分布
+
+按文件单独执行 `npx vitest run test/<file>` 得到的实测数（不是估算）：
+
+| 文件 | 通过 | 跳过 |
+| --- | --- | --- |
+| `sqlite.contract.test.ts` | 18 | 0 |
+| `sqlite-schema.test.ts` | 19 | 0 |
+| `in-memory.contract.test.ts` | 17 | 0 |
+| `migrations.test.ts` | 10 | 0 |
+| `supabase.contract.test.ts` | 1 | 18 |
+| 合计 | 65 | 18 |
+
+跨驱动契约新增的健康自检用例使 memory 与 SQLite 两条各比基线多 1 项（16→17、17→18），PG 那条同样存在但被跳过，因此跳过数由 17 增至 18。
+
+## 12 工作树遗留物（本轮未提交、未删除）
+
+`git status` 在本轮结束时仍显示三个未跟踪项：`.workspace/project.lock.guard`（0 字节）、`project.json`（583 374 字节）、`project.bak`（583 352 字节）。后两者是一份把仓库文档表示成 document／block 的外部编辑器工程，其时间戳（20:38、21:11）落在本轮工作期间，说明该编辑器在同时写入；`.workspace/` 是它的锁文件。本轮**没有创建、没有提交、也没有删除**它们，处置权交回用户：要么加进 `.gitignore`，要么明确删除，避免与源码仓库混在一起。
+
