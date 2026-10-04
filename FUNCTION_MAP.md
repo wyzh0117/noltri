@@ -17,7 +17,7 @@
 - 桌面 Companion 全局快捷键 → 粘贴式迷你捕获窗降级（Rust 快捷键注册 + paste 窗口；同上，**未实机运行**）
 - 桌面 Companion 捕获管线前端流 `runCaptureFlow`：契约校验 → ApiClient 捕获 → 结果/失败文案 → `recordCaptureOutcome`（22 项测试覆盖：短文本本地拒绝不发包、原文已保存的 AI 失败提示、成功路径节点路径展示）
 
-### Knowledge Core（66 项测试 + 本地 HTTP 实测闭环）
+### Knowledge Core（70 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片）
 - RawSource **先保存**再 AI 处理（全文唯一 `createRawSource` 调用点，`pnpm gate` 机器检查）
 - 原子知识点提取（offline 确定性提供方 + OpenAI 兼容 BYOK 提供方）
 - 文本归一化
@@ -29,11 +29,15 @@
 - 节点上下文装载（current_node / section / tree / whole_library）
 - 节点级 AI 对话（会话 + 消息持久化）
 - REST API 契约校验（zod）、健康检查、错误信封；身份仅取自凭证（JWT / dev-token / dev-open），绝不来自请求体
+- `/api/health` 报告**真实存储状态**：驱动自检 `storageHealth()` 由三个驱动各自实现并纳入契约测试，返回文件名（不返回绝对路径）、journal mode、schema 版本、SQLite 版本、FTS5 可用性与本库数量；storage 自报不可用时整体状态降为 `degraded`
+- 本地零云配置纵向切片实测：仅设 `STORAGE_DRIVER=sqlite` / `NOLTRI_SQLITE_FILE` / `AI_PROVIDER=offline` 四个环境变量，即可 capture → 落盘 → 关闭句柄 → 重开同一文件 → 读回原文/知识/树/关键词搜索/节点详情（`services/knowledge-core/test/local-storage-slice.test.ts`，4 项）；profile 路径由 `resolveSqliteFile()` 统一解析（`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data`），Core 内不再出现驱动名分支
 
 ### 数据与架构
-- 全部 9 张表模型：users / raw_sources / knowledge_items / knowledge_nodes / knowledge_edges / item_node_links / version_records / conversations / conversation_messages（InMemory 驱动 27 项契约测试全绿）
-- StorageRepository 统一抽象 + InMemory 实现（完全实测）
-- Supabase(Postgres) 仓储实现 + 迁移 SQL（`supabase/migrations/`，含 pgvector 向量列；27 项存储测试通过、17 项 PG 集成测试在无 `NOLTRI_PG_TEST_URL` 时自动跳过；迁移 SQL **通过静态审查，未在真实数据库执行**）
+- StorageRepository 统一抽象 + 三个驱动（InMemory / SQLite / Supabase-Postgres）：同一份契约 `packages/storage/test/repository-contract.ts` 逐驱动执行，作用域隔离、幂等 upsert、错误码（`not_found` / `conflict` / `storage_error`）、时间戳与 rowid tie-break 排序、关键词相关性、向量维度不混用在三者间语义一致
+- **SQLite 本地文件仓储**（`packages/storage/src/sqlite.ts` + `sqlite-schema.ts` + `sqlite-vectors.ts`）：Node 内置 `node:sqlite`（不需要随包携带原生模块）、WAL + `synchronous=FULL` + `busy_timeout` + `foreign_keys=ON`、`PRAGMA user_version` 分步迁移、FTS5 + CJK bigram 关键词索引（原始文本仍存实体表，可原样回显）、Float32 BLOB 精确余弦向量（登记 model / 维度 / 归一化 / 源文本 sha256 / builder 版本；查询宽度与存储宽度不一致的行绝不参与打分）、`integrity_check` + `foreign_key_check`、SQLite backup API 一致性快照（17 项契约测试 + 19 项 schema／落盘／中文检索／备份专项测试）
+- 本地知识表 8 张 + 2 个本地检索结构（`vectors` / `keyword_index`）：raw_sources / knowledge_items / knowledge_nodes / knowledge_edges / item_node_links / version_records / conversations / conversation_messages；单用户本机工作区不设 `users` 表，但 `user_id` 列保留，使三个驱动共用同一套查询与契约
+- InMemory 驱动（16 项契约测试全绿）—— 仅用于测试与明确标注的临时演示，**不作为生产本地存储**
+- Supabase(Postgres) 仓储实现 + 迁移 SQL（`supabase/migrations/`，含 pgvector 向量列；storage 包当前 65 项通过 / 18 项跳过，跳过项全部是缺少 `NOLTRI_PG_TEST_URL` 时的 PG 集成用例，**不计通过**；迁移 SQL **通过静态审查，未在真实数据库执行**）
 - AI Provider Adapter 抽象 + `offline`（确定性）与 `openai`（BYOK，OpenAI 兼容 chat + embeddings）两个实现（48 项测试；**未发起真实模型调用**）
 - 结构变化版本记录与可逆基础（move/重命名均落 VersionRecord）
 - 架构门禁 `pnpm gate`：core 无 pg/supabase/openai/express 依赖、四入口共用同一 ApiClient、MCP 不碰数据库
@@ -66,13 +70,21 @@
 - 浏览器插件在真实 Chrome 中加载并实测捕获闭环
 - 桌面 Companion 实机运行：TCC 辅助功能授权流程、胶囊/粘贴窗/快捷键真机交互、MCP 配置写入真实客户端配置文件
 - 桌面打包与签名（dmg / notarization）
-- Supabase 真实项目接入：迁移执行、pgvector 相似检索、RLS 用户隔离实测（`NOLTRI_PG_TEST_URL` 就绪后 17 项集成测试自动启用）
+- SQLite 本地库在安装版内的实机闭环：Tauri 启动、冷启动、异常退出后重启、磁盘不足／目录只读（当前只有 Node 侧文件库测试，**未打包、未双击运行**）
+- `node:sqlite` 为实验性 API：打包时携带的 Node 版本、`ExperimentalWarning` 的处理与 `better-sqlite3` 替代路径**均未实测**
+- Supabase 真实项目接入：迁移执行、pgvector 相似检索、RLS 用户隔离实测（`NOLTRI_PG_TEST_URL` 就绪后 18 项集成测试自动启用）
 - Web Supabase Auth 策略对真实 Supabase 项目的登录实测
 - 真实模型调用（BYOK 网关）下的抽取/嵌入/对话质量验证
 - Supabase SQL 在真实库的执行（当前仅静态审查）
 
 ### V1 收尾项
 - 发布物整理：扩展打包产物上架准备、桌面 dmg、部署文档
+- P2 桌面工作台迁移：UI 与业务拆分，知识树 / Inbox / 来源 / 搜索 / 节点对话迁入桌面
+- P3 本地接入：浏览器 Native Messaging Host、选区浮窗、降级路径、统一 CaptureRequest
+- P4 Agent Setup：检测、配置预览、备份合并、授权、MCP handshake、scope 与卸载恢复
+- P5–P6 Research 整合与偏移检查：旧领域与测试迁入、研究工作台、六类偏移与上下文包
+- P7 云依赖清理：删除 Web／Supabase／Remote Bridge 的启动入口、env 示例、脚本与 CI 配置；`packages/storage/test/*supabase*` 的行为断言已由 SQLite 契约覆盖，**删除动作仍需按「替代已存在＋回归通过＋引用已清理」三项证据执行**
+- P8 安装包、签名／notarization 与最终实机验收
 
 ### V2（已确认，未开始）
 - 完整溯源视图
