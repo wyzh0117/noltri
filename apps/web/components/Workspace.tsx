@@ -28,7 +28,7 @@ import {
   toggleExpanded,
   withExpanded,
   type ArrowKey,
-} from '@/lib/tree-view';
+} from '@noltri/shared';
 import type { SessionStrategy } from '@/lib/cookie';
 
 const NAVIGATION_KEYS: readonly string[] = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'];

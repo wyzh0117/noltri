@@ -2,7 +2,7 @@
 
 import type { ReactElement } from 'react';
 import type { TreeNode } from '@noltri/schema';
-import { subtreeItemCount } from '@/lib/tree-view';
+import { subtreeItemCount } from '@noltri/shared';
 
 export interface DomainRailProps {
   domains: readonly TreeNode[];

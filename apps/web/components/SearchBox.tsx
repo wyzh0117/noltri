@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { SearchHit, SearchResponse } from '@noltri/schema';
 import { apiPost, describeError } from '@/lib/client-api';
-import { matchedByLabels } from '@/lib/labels';
+import { matchedByLabels } from '@noltri/shared';
 
 const MIN_QUERY_LENGTH = 2;
 const DEBOUNCE_MS = 300;

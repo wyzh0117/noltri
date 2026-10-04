@@ -6,8 +6,8 @@
  * must render both a full node and an empty one.
  */
 
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import { it as test } from 'vitest';
 import type { KnowledgeItem, KnowledgeNode, NodeDetail, NodeSourceSummary, TreeNode } from '@noltri/schema';
 import {
   countDistinctSources,
@@ -28,7 +28,7 @@ import {
   treeStats,
   walkTree,
   withExpanded,
-} from '../lib/tree-view';
+} from '../src/tree-view';
 
 const NOW = '2026-10-01T08:00:00.000Z';
 

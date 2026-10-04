@@ -3,8 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { NodeDetail, TreeNode } from '@noltri/schema';
-import { deriveDetail, moveTargetOptions } from '@/lib/tree-view';
-import { nodeStatusLabels } from '@/lib/labels';
+import { deriveDetail, moveTargetOptions, nodeStatusLabels } from '@noltri/shared';
 
 export interface NodeDetailPanelProps {
   detail: NodeDetail | null;

@@ -1,4 +1,4 @@
-import type { CaptureAction, ContextScope, EdgeRelation, NodeStatus } from '@noltri/schema';
+import type { CaptureAction, ContextScope, EdgeRelation, NodeStatus, ProcessingStatus, SourceType } from '@noltri/schema';
 
 export const relationLabels: Record<EdgeRelation, string> = {
   part_of: '属于',
@@ -45,6 +45,21 @@ export const nodeStatusLabels: Record<NodeStatus, string> = {
   active: '有效',
   archived: '已归档',
   needs_review: '待核实',
+};
+
+/** 收件箱 badges: every capture sits in exactly one of these four states. */
+export const processingStatusLabels: Record<ProcessingStatus, string> = {
+  pending: '待整理',
+  processing: '整理中',
+  done: '已归纳',
+  failed: '归纳失败',
+};
+
+export const sourceTypeLabels: Record<SourceType, string> = {
+  web: '网页',
+  desktop_app: '桌面应用',
+  agent: 'Agent',
+  manual: '手动粘贴',
 };
 
 export const captureActionLabels: Record<CaptureAction, string> = {

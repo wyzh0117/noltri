@@ -5,7 +5,7 @@ import type { ReactElement } from 'react';
 import type { ChatMessage, NodeChatResponse, NodeContext } from '@noltri/schema';
 import { truncate } from '@noltri/shared';
 import { apiPost, describeError } from '@/lib/client-api';
-import { scopeDescriptions, scopeIsAdvanced, scopeLabels } from '@/lib/labels';
+import { scopeDescriptions, scopeIsAdvanced, scopeLabels } from '@noltri/shared';
 import type { ContextScope } from '@noltri/schema';
 
 const MAX_SENT_MESSAGES = 60;

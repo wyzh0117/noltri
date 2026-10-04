@@ -3,8 +3,8 @@
 import { useEffect, useRef } from 'react';
 import type { MouseEvent, ReactElement } from 'react';
 import type { TreeNode } from '@noltri/schema';
-import { nodeStatusLabels } from '@/lib/labels';
-import type { FlatNode } from '@/lib/tree-view';
+import { nodeStatusLabels } from '@noltri/shared';
+import type { FlatNode } from '@noltri/shared';
 
 export interface KnowledgeTreeViewProps {
   nodes: readonly TreeNode[];
