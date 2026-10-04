@@ -35,9 +35,9 @@
 
 ### 数据与架构
 - StorageRepository 统一抽象 + 三个驱动（InMemory / SQLite / Supabase-Postgres）：同一份契约 `packages/storage/test/repository-contract.ts` 逐驱动执行，作用域隔离、幂等 upsert、错误码（`not_found` / `conflict` / `storage_error`）、时间戳与 rowid tie-break 排序、关键词相关性、向量维度不混用在三者间语义一致
-- **SQLite 本地文件仓储**（`packages/storage/src/sqlite.ts` + `sqlite-schema.ts` + `sqlite-vectors.ts`）：Node 内置 `node:sqlite`（不需要随包携带原生模块）、WAL + `synchronous=FULL` + `busy_timeout` + `foreign_keys=ON`、`PRAGMA user_version` 分步迁移、FTS5 + CJK bigram 关键词索引（原始文本仍存实体表，可原样回显）、Float32 BLOB 精确余弦向量（登记 model / 维度 / 归一化 / 源文本 sha256 / builder 版本；查询宽度与存储宽度不一致的行绝不参与打分）、`integrity_check` + `foreign_key_check`、SQLite backup API 一致性快照（17 项契约测试 + 19 项 schema／落盘／中文检索／备份专项测试）
+- **SQLite 本地文件仓储**（`packages/storage/src/sqlite.ts` + `sqlite-schema.ts` + `sqlite-vectors.ts`）：Node 内置 `node:sqlite`（不需要随包携带原生模块）、WAL + `synchronous=FULL` + `busy_timeout` + `foreign_keys=ON`、`PRAGMA user_version` 分步迁移、FTS5 + CJK bigram 关键词索引（原始文本仍存实体表，可原样回显）、Float32 BLOB 精确余弦向量（登记 model / 维度 / 归一化 / 源文本 sha256 / builder 版本；查询宽度与存储宽度不一致的行绝不参与打分）、`integrity_check` + `foreign_key_check`、SQLite backup API 一致性快照（18 项契约测试 + 19 项 schema／落盘／中文检索／备份专项测试）
 - 本地知识表 8 张 + 2 个本地检索结构（`vectors` / `keyword_index`）：raw_sources / knowledge_items / knowledge_nodes / knowledge_edges / item_node_links / version_records / conversations / conversation_messages；单用户本机工作区不设 `users` 表，但 `user_id` 列保留，使三个驱动共用同一套查询与契约
-- InMemory 驱动（16 项契约测试全绿）—— 仅用于测试与明确标注的临时演示，**不作为生产本地存储**
+- InMemory 驱动（17 项契约测试全绿）—— 仅用于测试与明确标注的临时演示，**不作为生产本地存储**
 - Supabase(Postgres) 仓储实现 + 迁移 SQL（`supabase/migrations/`，含 pgvector 向量列；storage 包当前 65 项通过 / 18 项跳过，跳过项全部是缺少 `NOLTRI_PG_TEST_URL` 时的 PG 集成用例，**不计通过**；迁移 SQL **通过静态审查，未在真实数据库执行**）
 - AI Provider Adapter 抽象 + `offline`（确定性）与 `openai`（BYOK，OpenAI 兼容 chat + embeddings）两个实现（48 项测试；**未发起真实模型调用**）
 - 结构变化版本记录与可逆基础（move/重命名均落 VersionRecord）

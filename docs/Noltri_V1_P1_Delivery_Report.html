@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知序 Noltri · 本轮开发最终交付报告（P0 基线 + P1 本地存储纵向切片）</title>
+<style>
+  :root{
+    --bg:#f6f6f4; --panel:#ffffff; --ink:#1c1d1f; --muted:#5f6469; --line:#dcdcd6;
+    --accent:#2f5d50; --accent-soft:#e4efe9; --warn:#8a5a11; --warn-soft:#fbf1dd;
+    --bad:#8f2f2f; --bad-soft:#fbe9e9; --ok:#1f6b45; --ok-soft:#e2f0e8; --code:#f1f1ec;
+  }
+  html[data-theme="dark"]{
+    --bg:#14161a; --panel:#1b1e23; --ink:#e6e8ea; --muted:#9aa1a9; --line:#2c3138;
+    --accent:#8fc0ad; --accent-soft:#1f2a26; --warn:#e0b070; --warn-soft:#2a2418;
+    --bad:#f0a0a0; --bad-soft:#2a1c1c; --ok:#8fd0ac; --ok-soft:#1a2620; --code:#22262c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 96px}
+  header.top{padding:44px 0 20px;border-bottom:1px solid var(--line)}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:31px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+  h2{font-size:22px;margin:44px 0 12px;padding-top:18px;border-top:1px solid var(--line);letter-spacing:-.005em;scroll-margin-top:64px}
+  h3{font-size:16.5px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:14.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:16px;font-size:13.5px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+  .chip{font-size:12.5px;padding:3px 11px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--line)}
+  .grid{display:grid;gap:14px}
+  .grid.c3{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .n{font-size:26px;font-weight:650;letter-spacing:-.02em}
+  .card .l{font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft);color:var(--ink);font-weight:600;font-size:13.5px}
+  tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 92%,var(--bg))}
+  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:6px;white-space:nowrap;border:1px solid var(--line)}
+  .t-ok{background:var(--ok-soft);color:var(--ok)}
+  .t-part{background:var(--warn-soft);color:var(--warn)}
+  .t-no{background:var(--bad-soft);color:var(--bad)}
+  .t-info{background:var(--accent-soft);color:var(--accent)}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:38px 14px 12px;overflow:auto;font-size:12.8px;line-height:1.62;margin:12px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  p code,li code,td code{background:var(--code);padding:1.5px 5px;border-radius:5px;font-size:13px;border:1px solid var(--line)}
+  .copy{position:absolute;top:8px;right:8px;font-size:11.5px;padding:3px 9px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .copy:hover{color:var(--ink);border-color:var(--accent)}
+  ul,ol{padding-left:22px;margin:10px 0}
+  li{margin:5px 0}
+  nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin:0 -20px;padding:9px 20px}
+  nav ol{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;padding-left:0;list-style:none;font-size:13px}
+  nav a{color:var(--muted);text-decoration:none}
+  nav a:hover{color:var(--accent);text-decoration:underline}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .note.warn{border-color:var(--warn);background:var(--warn-soft)}
+  .note.bad{border-color:var(--bad);background:var(--bad-soft)}
+  .themer{font-size:12.5px;padding:4px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .themer:hover{color:var(--ink)}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  details{margin:10px 0}
+  summary{cursor:pointer;font-size:14px;color:var(--accent);font-weight:600}
+  .muted{color:var(--muted)}
+  @media print{nav,.themer,.copy{display:none}body{background:#fff}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="bar">
+    <div>
+      <div class="kicker">知序 Noltri · Local Desktop &amp; Research V1</div>
+      <h1>本轮开发最终交付报告</h1>
+      <div class="sub">范围：P0 基线核查与归档 · P1 本地 SQLite 存储与纵向切片。不含 UI 迁移、适配器、Agent Setup、Research 整合与打包。</div>
+    </div>
+    <button class="themer" id="theme" type="button">切换深色</button>
+  </div>
+  <div class="meta">
+    <div>分支 <b>v1_research&amp;modify</b></div>
+    <div>基线 <b>9b9b4de</b>（<code>main</code>）</div>
+    <div>报告时 HEAD <b>014f1fa</b>（本报告为其后一笔）</div>
+    <div>核查日期 <b>2026-10-04</b></div>
+    <div>机器 <b>darwin arm64 · Node v22.23.2</b></div>
+  </div>
+  <div class="chips">
+    <span class="chip">测试 369 通过 / 18 跳过（跳过不计通过）</span>
+    <span class="chip">22/22 任务 · 强制非缓存</span>
+    <span class="chip">本轮删除的源码文件：0</span>
+    <span class="chip">安装包：未产出</span>
+    <span class="chip">端到端加密：未实现，不宣传</span>
+  </div>
+</header>
+
+<nav>
+  <ol>
+    <li><a href="#s1">1 总结</a></li>
+    <li><a href="#s2">2 范围与决定</a></li>
+    <li><a href="#s3">3 已完成／未完成</a></li>
+    <li><a href="#s4">4 修改与删除清单</a></li>
+    <li><a href="#s5">5 Git／worktree／分支</a></li>
+    <li><a href="#s6">6 测试与实机验证</a></li>
+    <li><a href="#s7">7 失败与跳过</a></li>
+    <li><a href="#s8">8 性能结果</a></li>
+    <li><a href="#s9">9 安装包与运行状态</a></li>
+    <li><a href="#s10">10 迁移与恢复</a></li>
+    <li><a href="#s11">11 验收对照</a></li>
+    <li><a href="#s12">12 已知限制</a></li>
+    <li><a href="#s13">13 文档回写内容</a></li>
+    <li><a href="#s14">14 复现命令</a></li>
+  </ol>
+</nav>
+
+<h2 id="s1">1 最终开发总结</h2>
+<p>本轮把 Noltri 从「只能连着 Supabase 才能跑」推进到「一个零云变量的本地 profile 就能完成采集、落盘、重启读回、中文检索」，并把这条链子做成可回归的测试而不是一次性演示。具体是三件事：</p>
+<ol>
+  <li><b>P0 基线核查</b>：开发前真实仓库状态、未提交改动、基线测试结果（267 通过 / 17 跳过）全部落档；旧 Research 分支以 Git bundle 归档，并在临时目录 <code>clone</code> 还原到目标 SHA 后才处理工作树（§5、§10）。</li>
+  <li><b>P1 本地存储</b>：新增 <code>sqlite</code> 驱动（<code>packages/storage/src/sqlite.ts</code> 等三个模块），实现同一个 <code>KnowledgeRepository</code> 接口，并由<b>同一份跨驱动契约</b>逐驱动执行；中文关键词检索走 FTS5 + <code>tokenize()</code> 预分词 + 与 PG／memory 相同的相关性分数；向量是 Float32 BLOB 精确余弦，宽度不匹配的行绝不参与打分。</li>
+  <li><b>Core 解耦与纵向切片</b>：Core 不再假设必须有云；仅四个环境变量即可跑通 capture → 落盘 → 关闭 → 重开 → 读回，并且 <code>/api/health</code> 改为报告存储<b>真实</b>状态（journal mode、schema 版本、FTS5 可用性、本库数量）。</li>
+</ol>
+<div class="grid c3">
+  <div class="card"><div class="n">+3 607</div><div class="l">相对基线 <code>9b9b4de</code> 的代码与文档插入行数（不含本报告自身，含 777 行开发基准文档）</div></div>
+  <div class="card"><div class="n">1 802</div><div class="l">其中 SQLite 三个模块的新增行数</div></div>
+  <div class="card"><div class="n">7 笔</div><div class="l"><code>v1_research&amp;modify</code> 上的提交（含本报告，未推送）</div></div>
+  <div class="card"><div class="n">0 个</div><div class="l">本轮删除的仓库内文件</div></div>
+</div>
+<p class="note">一句话结论：本地真值这条链在 <b>Node 层</b>已经站住（含 SIGKILL 崩溃后读回），在<b>安装版层</b>还没有跑过——这两件事在本文档里始终分开写。</p>
+
+<h2 id="s2">2 本轮范围与用户决定</h2>
+<table>
+  <thead><tr><th>决定项</th><th>内容</th><th>执行结果</th></tr></thead>
+  <tbody>
+    <tr><td>本轮范围</td><td>P0 + P1 深度做透；UI 迁移／浮窗／Agent Setup／Research 整合推迟</td><td>按此执行，未越界改界面与打包</td></tr>
+    <tr><td>旧 Research 分支处理</td><td>归档校验通过后撤下 worktree、删除本地分支，远端保留</td><td>已执行，命令与结果见 §5；未使用 <code>--force</code>／<code>rm -rf</code></td></tr>
+    <tr><td>最终交付形态</td><td>最终汇报统一为<b>一个自包含 HTML</b>，不拆成多份 MD／TXT</td><td>本文件；同时源码、测试、<code>FUNCTION_MAP.md</code>、迁移记录仍按文档要求在仓库内真实提交（§4）</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s3">3 已完成／未完成事项</h2>
+<h3>已完成（有代码、有测试、本轮实际运行过）</h3>
+<table>
+  <thead><tr><th>事项</th><th>承载</th><th>证据</th><th>状态</th></tr></thead>
+  <tbody>
+    <tr><td>基线核查与恢复点归档</td><td><code>docs/P0-baseline-and-recovery.md</code></td><td>bundle <code>verify</code> + 临时目录 clone 还原 SHA 一致</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td>SQLite 本地仓储驱动</td><td><code>packages/storage/src/sqlite.ts</code>／<code>sqlite-schema.ts</code>／<code>sqlite-vectors.ts</code></td><td>契约 18 项 + schema 专项 19 项，本轮全绿</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td>三驱动语义统一（memory／sqlite／supabase）</td><td><code>packages/storage/test/repository-contract.ts</code></td><td>同一断言集逐驱动执行；新增跨驱动健康自检用例</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td>中文与中英混排关键词检索</td><td>FTS5 + <code>tokenize()</code> CJK bigram 预分词</td><td>8 组语料 + 排序断言；HTTP 侧 <code>元组 字典</code> 实测命中</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td>向量登记与维度隔离</td><td><code>vectors</code> 表（model／dimension／normalization／source_hash／builder_version）</td><td>宽度不匹配不参与打分（专项用例）</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td>Core 零云运行 + profile 路径解析</td><td><code>services/knowledge-core/src/config.ts</code> 的 <code>resolveSqliteFile()</code></td><td>纵向切片 5 项 + <code>pnpm gate</code> 架构闸（Core 内无驱动名分支）</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td><code>storageHealth()</code>：健康检查报告真实存储</td><td>三个驱动各自实现 + <code>schema</code> 契约字段</td><td>契约用例断言不泄漏任何凭证字段</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td>崩溃后已落盘原文仍可读</td><td>WAL + <code>synchronous=FULL</code></td><td><code>test/crash-writer.ts</code> 子进程 SIGKILL 后重开读回</td><td><span class="tag t-ok">已验证</span></td></tr>
+    <tr><td>环境变量严格化</td><td><code>packages/shared/src/env.ts</code> + <code>test/env.test.ts</code></td><td>未知 <code>STORAGE_DRIVER</code> 抛错并列出全部合法值</td><td><span class="tag t-ok">已验证</span></td></tr>
+  </tbody>
+</table>
+
+<h3>未完成（本轮明确没做，不写成已做）</h3>
+<table>
+  <thead><tr><th>事项</th><th>属于</th><th>为什么没做</th></tr></thead>
+  <tbody>
+    <tr><td>桌面工作台 UI 迁移（知识树／Inbox／来源／搜索／节点对话）</td><td>P2</td><td>范围决定推迟；需要 Tauri 承载，属另一条纵向工作</td></tr>
+    <tr><td>浏览器 Native Messaging、选区浮窗、降级路径</td><td>P3</td><td>同上</td></tr>
+    <tr><td>Agent Setup（检测／预览／备份合并／授权／卸载恢复）</td><td>P4</td><td>同上</td></tr>
+    <tr><td>Research 领域与页面整合</td><td>P5–P6</td><td>旧分支 87 files／14 873 insertions 需逐项取用，不能整包 merge（会带回 Web＋Supabase 绑定）</td></tr>
+    <tr><td>删除 Web／Supabase／Remote Bridge 依赖与入口</td><td>P7</td><td>删除条件「替代已存在＋回归通过＋引用已清理」未同时满足；<code>apps/web</code> 55 项测试仍是唯一 Web 行为基线</td></tr>
+    <tr><td>自包含安装包、签名／notarization、实机双击</td><td>P8</td><td>未做，见 §9</td></tr>
+    <tr><td>数据库加密</td><td>—</td><td>未实现未测试，因此<b>不宣传「端到端加密知识库」</b></td></tr>
+    <tr><td>ANN 向量索引</td><td>—</td><td>V1 保持精确扫描；缺真实数据量证据前不引入</td></tr>
+    <tr><td><code>better-sqlite3</code> 备选打包路径</td><td>—</td><td>未实测；与 <code>node:sqlite</code> 的取舍仍开放</td></tr>
+    <tr><td>端口占用自动发现／换端口</td><td>L04</td><td>本轮仍用固定 <code>PORT</code>（默认 8787）；被占用时直接失败，不自动重试</td></tr>
+    <tr><td>崩溃后未完成 Job 的自动恢复队列</td><td>L06</td><td>只做到「状态不伪报完成」（实测 <code>processing</code> 保留），自动续跑未实现</td></tr>
+    <tr><td>PG→本地 SQLite 的数据迁移工具</td><td>§10</td><td>恢复能力（备份／校验）已实现，<b>迁移脚本未实现</b>；用户数据从未搬移</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s4">4 实际修改与删除清单</h2>
+<p>相对基线 <code>9b9b4de</code>（不含本报告自身）共 <b>25 个文件变更，3 607 行新增，17 行删除</b>；加上本报告为 26 个文件。<b>本轮没有删除任何文件</b>（唯一的目录级删除在 §5：旧 worktree 目录与旧本地分支引用）。</p>
+<h3>4.1 本轮新增的文件</h3>
+<table>
+  <thead><tr><th>文件</th><th>行数</th><th>作用</th></tr></thead>
+  <tbody>
+    <tr><td><code>packages/storage/src/sqlite.ts</code></td><td>1 313</td><td>SQLite 仓储实现（全部语句参数绑定，不拼接用户输入）</td></tr>
+    <tr><td><code>packages/storage/src/sqlite-schema.ts</code></td><td>314</td><td>建表／索引／PRAGMA／分步迁移／完整性检查／FTS5 探测</td></tr>
+    <tr><td><code>packages/storage/src/sqlite-vectors.ts</code></td><td>175</td><td>Float32 BLOB 向量存取与精确余弦扫描</td></tr>
+    <tr><td><code>packages/storage/test/sqlite-schema.test.ts</code></td><td>326</td><td>落盘／迁移／中文检索／向量隔离／备份专项（19 项）</td></tr>
+    <tr><td><code>packages/storage/test/sqlite.contract.test.ts</code></td><td>43</td><td>把跨驱动契约跑在 SQLite 上（18 项）</td></tr>
+    <tr><td><code>services/knowledge-core/test/local-storage-slice.test.ts</code></td><td>245</td><td>零云纵向切片 5 项（含 SIGKILL 崩溃读回）</td></tr>
+    <tr><td><code>services/knowledge-core/test/crash-writer.ts</code></td><td>22</td><td>崩溃测试的子进程 fixture（提交后自杀，不执行 <code>close()</code>）</td></tr>
+    <tr><td><code>packages/shared/test/env.test.ts</code></td><td>37</td><td>驱动名严格化与阈值钳制（4 项）</td></tr>
+    <tr><td><code>docs/P0-baseline-and-recovery.md</code></td><td>154</td><td>基线核查、归档与恢复记录、能力映射、实测结果</td></tr>
+    <tr><td><code>Noltri_Local_Desktop_Research_V1_Development.md</code></td><td>777</td><td>本轮开发基准文档（用户提供的原文入库）</td></tr>
+    <tr><td><code>docs/Noltri_V1_P1_Delivery_Report.html</code></td><td>本文件</td><td>最终交付报告（单文件 HTML）</td></tr>
+  </tbody>
+</table>
+
+<h3>4.2 本轮修改的既有文件</h3>
+<table>
+  <thead><tr><th>文件</th><th>改动</th></tr></thead>
+  <tbody>
+    <tr><td><code>packages/shared/src/env.ts</code></td><td><code>StorageDriver</code> 增加 <code>'sqlite'</code>；未知值抛错并列出全部合法值</td></tr>
+    <tr><td><code>packages/storage/src/types.ts</code></td><td>新增 <code>StorageHealth</code> 类型与 <code>storageHealth()</code> 契约方法（同步，不做网络往返／全表扫描）</td></tr>
+    <tr><td><code>packages/storage/src/index.ts</code></td><td><code>createRepository</code> 支持 <code>sqlite</code>（动态 import，浏览器包永不触碰 <code>node:sqlite</code>）；新增 <code>sqliteFile</code>／<code>sqliteSynchronous</code>／<code>sqliteBusyTimeoutMs</code> 选项</td></tr>
+    <tr><td><code>packages/storage/src/in-memory.ts</code>／<code>supabase.ts</code></td><td>各实现 <code>storageHealth()</code>；PG 侧只报 host 与池参数，绝不回报连接串里的凭证</td></tr>
+    <tr><td><code>packages/schema/src/api.ts</code></td><td>新增 <code>storageHealthSchema</code>，<code>healthResponseSchema</code> 增加<b>必填</b> <code>storage</code> 字段</td></tr>
+    <tr><td><code>services/knowledge-core/src/config.ts</code></td><td>新增 <code>resolveSqliteFile()</code>（<code>NOLTRI_SQLITE_FILE</code> &gt; <code>NOLTRI_DATA_DIR</code> &gt; <code>~/.noltri/data/noltri.sqlite</code>）；相对路径一次性 <code>resolve</code>，不把猜测工作目录交给 SQLite</td></tr>
+    <tr><td><code>services/knowledge-core/src/core.ts</code></td><td><code>health</code> 纳入 <code>repository.storageHealth()</code>，storage 不自洽时整体降为 <code>degraded</code></td></tr>
+    <tr><td><code>packages/storage/test/repository-contract.ts</code></td><td>新增跨驱动用例：健康自检必须自报驱动、不得出现 <code>password</code>／<code>secret</code>／<code>token</code>／<code>key=</code>／<code>postgres://</code></td></tr>
+    <tr><td><code>apps/web/test/fake-core.ts</code>、<code>services/mcp-server/test/fake-core.ts</code>、<code>apps/extension/test/api-client.test.ts</code></td><td>三处客户端桩补齐新的必填 <code>storage</code> 字段（<code>HealthResponse</code> 契约变更的连带修改，见 §7）</td></tr>
+    <tr><td><code>FUNCTION_MAP.md</code></td><td>回写：Core 测试数、真实健康状态、纵向切片、崩溃安全、SQLite 架构与验证缺口、P2–P8 收尾项（原文见 §13）</td></tr>
+    <tr><td><code>pnpm-workspace.yaml</code></td><td><code>allowBuilds.esbuild</code> 由占位文本改为 <code>true</code>，否则全新 clone 的 <code>pnpm install</code> 被未决构建脚本阻塞</td></tr>
+    <tr><td><code>apps/web/next-env.d.ts</code></td><td>Next.js 自动生成的类型引用路径（<code>.next/types/*</code> → <code>.next/dev/types/*</code>），非人工改动</td></tr>
+  </tbody>
+</table>
+<p class="note warn"><b>留在工作树里未跟踪、也未删除的东西：</b><code>.workspace/</code> 与 <code>project.json</code>。二者都不是本轮产生的（像是编辑器／文档导入留下的产物），本轮只盘点不删除，交由你决定去留与是否入库。</p>
+
+<h2 id="s5">5 Git／worktree／分支处理结果</h2>
+<table>
+  <thead><tr><th>项</th><th>实测结果</th></tr></thead>
+  <tbody>
+    <tr><td>开发分支</td><td><code>v1_research&amp;modify</code>，由 <code>main</code> 基线 <code>9b9b4deeb1eda64232c5c382011026ec2b824f2f</code> 以 <code>git switch -c</code> 创建（<b>未使用 <code>-C</code></b>，创建前确认同名分支不存在）</td></tr>
+    <tr><td>提交序列</td><td><code>7909cf9</code> chore → <code>776d424</code> feat(storage) → <code>4e79345</code> feat(core) → <code>2ceecdb</code> docs(P0/P1) → <code>a979799</code> test(core) 崩溃读回 → <code>014f1fa</code> docs(P1) → 本报告一笔 docs。均<b>未推送</b>（本轮未获推送授权）</td></tr>
+    <tr><td>撤下旧研究工作树</td><td><code>git worktree remove '/Users/youngi/Documents/MiniWork/知序-Noltri-Research-V1'</code> — 成功，<b>未使用 <code>--force</code>，未使用 <code>rm -rf</code></b>；目录已从磁盘消失</td></tr>
+    <tr><td>删除旧本地分支</td><td><code>git branch -d feature/research-v1</code>（was <code>ad1d0c69c9d7316c0b2d2aba48699351701fd7e0</code>）— 成功，安全删除路径，<b>无需 <code>-D</code></b></td></tr>
+    <tr><td>远端保留</td><td><code>git ls-remote --heads origin feature/research-v1</code> = <code>ad1d0c69…fd7e0</code>，未做任何远端删除</td></tr>
+    <tr><td>归档 tag</td><td>本地 <code>archive/research-v1-ad1d0c6</code>（指向既有提交，不进生产运行路径）</td></tr>
+    <tr><td>当前 worktree 列表</td><td><code>git worktree list --porcelain</code> 只剩主工作树一条（<code>/Users/youngi/Documents/MiniWork/知序-Noltri</code>，branch <code>refs/heads/v1_research&amp;modify</code>）</td></tr>
+    <tr><td>旧提交仍可达</td><td><code>git cat-file -t ad1d0c6</code> = <code>commit</code>；<code>git branch -a --contains ad1d0c6</code> 显示由 <code>remotes/origin/feature/research-v1</code> 保持可达</td></tr>
+    <tr><td>未触碰</td><td>其他分支、tag、远端引用一个都没删；<code>main</code> 与 <code>origin/main</code> 仍为 <code>9b9b4de</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="s6">6 测试与实机验证结果</h2>
+<h3>6.1 自动化测试（本轮实际运行）</h3>
+<p>命令 <code>npx turbo run test typecheck --force</code> → <b>22/22 任务通过，0 命中缓存，耗时 55–59 s</b>。</p>
+<table>
+  <thead><tr><th>包</th><th>本轮</th><th>基线</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>packages/storage</code></td><td>65 通过 / 18 跳过</td><td>27 / 17</td><td>SQLite 契约 18 + schema 专项 19 + memory 契约 17 + 迁移 10 + PG 契约组 1（另 18 项跳过）</td></tr>
+    <tr><td><code>services/knowledge-core</code></td><td>71 通过</td><td>66</td><td>含纵向切片 5 项与 HTTP 闭环</td></tr>
+    <tr><td><code>packages/shared</code></td><td>4 通过</td><td>—</td><td>本轮新建 <code>env.test.ts</code></td></tr>
+    <tr><td><code>packages/ai-provider</code></td><td>48 通过</td><td>48</td><td>未改动</td></tr>
+    <tr><td><code>apps/extension</code></td><td>69 通过</td><td>69</td><td>桩数据同步 <code>HealthResponse</code> 变更</td></tr>
+    <tr><td><code>apps/desktop</code></td><td>22 通过</td><td>22</td><td>未改动</td></tr>
+    <tr><td><code>services/mcp-server</code></td><td>20 通过</td><td>20</td><td>桩数据同步</td></tr>
+    <tr><td><code>services/ai</code></td><td>15 通过</td><td>15</td><td>未改动</td></tr>
+    <tr><td><code>apps/web</code></td><td>55 通过（<code>node:test</code>）</td><td>55</td><td>桩数据同步</td></tr>
+    <tr><td><b>合计</b></td><td><b>369 通过 / 18 跳过</b></td><td>267 / 17</td><td>跳过项<b>不计入通过</b>，见 §7</td></tr>
+  </tbody>
+</table>
+
+<h3>6.2 实机（非测试脚本）验证：本机 HTTP 全链路</h3>
+<p>下面是<b>手工命令</b>跑出来的真实结果，不是测试套件的转述。全程只设四个变量，没有任何 Supabase / token / 模型 key。</p>
+<pre><code>$ mktemp -d /tmp/noltri-http-XXXX          # profile 目录
+$ STORAGE_DRIVER=sqlite NOLTRI_SQLITE_FILE=&lt;profile&gt;/noltri.sqlite \
+  AI_PROVIDER=offline NOLTRI_DEV_USER_ID=http-user PORT=8791 \
+  node_modules/.bin/tsx services/knowledge-core/src/server.ts
+
+GET  /api/health    200  33 ms
+POST /api/capture   200  62 ms   # 1 条原文 → 2 个知识点 / 2 个节点
+POST /api/search    200  71 ms   # {"query":"元组 字典","mode":"keyword"}
+GET  /api/health    200   9 ms   # 计数随之变化
+
+$ lsof -nP -iTCP:8792 -sTCP:LISTEN
+node  55492 youngi  17u  IPv4  TCP 127.0.0.1:8792 (LISTEN)   # 只绑回环，非 0.0.0.0
+
+$ kill -TERM &lt;pid&gt; ; ls &lt;profile&gt;
+noltri.sqlite  server.log                                    # -wal / -shm 已消失（干净关闭）
+
+# 重启进程（换端口）后读同一文件
+GET  /api/health    storage.detail → rawSources 1 · knowledgeItems 2 · knowledgeNodes 2 · vectors 4（1536×4）
+POST /api/search    命中「Python 的元组一旦创建就不能修改…」，matchedBy=keyword
+GET  /api/tree      节点、层级、itemCount 与关闭前一致
+</code></pre>
+<p>健康检查返回的真实内容（截取自实测）：</p>
+<pre><code>{"status":"ok","storageDriver":"sqlite",
+ "storage":{"driver":"sqlite","ok":true,
+   "detail":{"fileName":"noltri.sqlite","journalMode":"wal","synchronous":"full",
+     "busyTimeoutMs":5000,"schemaVersion":1,"expectedSchemaVersion":1,
+     "sqliteVersion":"3.51.3","fts5":true,
+     "rawSources":1,"knowledgeItems":2,"knowledgeNodes":2,"vectors":4,"vectorWidths":"1536×4"}},
+ "aiProvider":"offline","embeddingDim":1536,"requiresAiKey":false}</code></pre>
+<p class="note">只回报<b>文件名</b>而非绝对路径（绝对路径会把系统账户名带进公开端点），数量只统计本库；PG 驱动则只报 host 与池参数、不报行数——那套库是公网端点后面的共享库。</p>
+
+<h3>6.3 崩溃与并发（进程级实测）</h3>
+<ul>
+  <li><b>SIGKILL 读回</b>：父连接写入一条并置 <code>processing</code> 后正常关闭；子进程经 <code>createRepository</code> 提交一条原文后 <code>process.kill(pid,'SIGKILL')</code> 自杀——无 <code>close()</code>、无 checkpoint。重开后两条都可读回，<code>rawSources</code>=2，且干净关闭后 <code>-wal</code> 不存在。</li>
+  <li><b>两个句柄并发</b>：同一 profile 上 writer 与 reader 同时打开，reader 立即读到 writer 写入的原文；两个连接都干净关闭后 <code>-wal</code>／<code>-shm</code> 均不存在。</li>
+  <li><b>状态不伪报</b>：只落盘未加工的原文重开后仍是 <code>pending</code>／<code>processing</code>，<code>listKnowledgeItemsForSource</code> 为空——「没做完」不会被报成「做完了」。</li>
+</ul>
+
+<h2 id="s7">7 失败与跳过项（如实列出）</h2>
+<table>
+  <thead><tr><th>类别</th><th>事实</th><th>处理</th></tr></thead>
+  <tbody>
+    <tr><td>18 项跳过</td><td><code>packages/storage/test/supabase.contract.test.ts</code> 19 项中 18 项因缺 <code>NOLTRI_PG_TEST_URL</code> 整体跳过（真实 Postgres 集成）</td><td><b>不计入通过</b>；本轮跨驱动契约在 memory／sqlite 两个驱动上真实执行，PG 只执行了 1 项（不需连库的健康用例）</td></tr>
+    <tr><td>跳过比基线多 1 项</td><td>新增的跨驱动健康用例也被 PG 组跳过</td><td>已计入 18 而非隐瞒</td></tr>
+    <tr><td>本轮曾出现的真实回归</td><td><code>HealthResponse</code> 增加必填 <code>storage</code> 后，<code>apps/extension/test/api-client.test.ts › reports connected with the Core identity</code> 失败（桩数据缺字段被 zod 拒绝）</td><td>已修复三处桩。<b>关键教训：</b>这条回归被 turbo 缓存<b>掩盖过一次</b>——不加 <code>--force</code> 时该包显示「通过」。此后本轮所有全量声明都基于 <code>--force</code></td></tr>
+    <tr><td>契约破坏性变更</td><td><code>storage</code> 是必填字段，因此客户端桩与新版 Core 绑定；<b>旧 Core 的 health 响应不再满足契约</b></td><td>本地同批发版可接受；跨版本兼容未处理，已在 <code>docs</code> §9 记录</td></tr>
+    <tr><td>未运行</td><td>迁移 SQL <b>未在真实 Postgres 执行</b>（仅静态审查）；真实 Chrome 扩展加载、Tauri 桌面实机、BYOK 真实模型、Supabase Auth 登录、安装版双击冷启动<b>均未运行</b></td><td>见 §12 已知限制与 <code>FUNCTION_MAP.md</code> 验证缺口</td></tr>
+    <tr><td>调查过程中的一次误判</td><td>手工停服务时我一度把「<code>-wal</code> 仍在」当成未干净关闭的证据，实际是 <code>pkill</code> 的模式没匹配到真正的 <code>node</code> 进程、旧服务仍存活；用 <code>lsof</code> 找到真实 PID 终止后，侧文件随即消失</td><td>结论以更正后的观测为准；本报告不含误判版本</td></tr>
+    <tr><td>测试脚本自身的失误</td><td>纵向切片文件在编写过程中被我一次错误的编辑破坏（并发改成孤儿用例体），当场修复并补齐 <code>node:child_process</code>／<code>node:url</code> 导入</td><td>修复后单独跑该文件 5/5 通过，再跑 <code>--force</code> 全量 22/22；提交 <code>a979799</code> 是修复本身</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s8">8 性能结果（本机一次实测，不是承诺值）</h2>
+<p class="sub">环境：macOS 25.6.0（arm64）· Node <code>v22.23.2</code> · <code>node:sqlite</code> SQLite <code>3.51.3</code> · <code>synchronous=FULL</code> · 384 维向量。测量脚本为一次性临时脚本（<code>npx tsx</code>，测后删除，<b>不属测试套件</b>）。</p>
+<table>
+  <thead><tr><th>场景</th><th>实测</th></tr></thead>
+  <tbody>
+    <tr><td>新建库（含建表迁移）</td><td>8 ms</td></tr>
+    <tr><td>重开已有库</td><td>2.2 ms</td></tr>
+    <tr><td>单条读回</td><td>0.81 ms</td></tr>
+    <tr><td>一次完整 capture（原文＋知识点＋节点＋关联，同步 FULL）</td><td>20.9 ms</td></tr>
+    <tr><td>1 000 条写入</td><td>2.18 s（2.18 ms/条）</td></tr>
+    <tr><td>1 000 条时向量精确扫描（limit 8）</td><td>12.6 ms/次</td></tr>
+    <tr><td>1 000 条时关键词检索（FTS5 候选 + 相关性重排）</td><td>28.3 ms/次</td></tr>
+    <tr><td>5 000 条写入</td><td>13.1 s（2.63 ms/条）</td></tr>
+    <tr><td>5 000 条时向量精确扫描</td><td>64.7 ms/次（随条数线性增长）</td></tr>
+    <tr><td>5 000 条时关键词检索</td><td>38.2 ms/次</td></tr>
+    <tr><td>库体积</td><td>1 000 条约 5.6 MB，5 000 条约 28 MB（Float32 向量为主）</td></tr>
+  </tbody>
+</table>
+<p class="note">到几千条量级仍是交互可用的毫秒级。<b>瓶颈在向量精确扫描</b>：成本随库大小线性增长，这是 V1 已知边界（ANN 与维度压缩留后，且要先有真实数据量证据）。文档里没有任何冷启动／打包性能数字，因为安装包还没做。</p>
+
+<h2 id="s9">9 安装包与运行状态</h2>
+<ul>
+  <li><b>安装包：未产出。</b>没有 <code>.dmg</code>／<code>.app</code>／<code>.exe</code>，没有签名，没有 notarization——P8 未开始。因此文档中任何「双击即用」「自包含安装包已就绪」的表述都不成立，本轮不写。</li>
+  <li><b>实际运行形态：Node 进程</b>。命令是 <code>node_modules/.bin/tsx services/knowledge-core/src/server.ts</code>，配合四个环境变量；<code>tsx</code> 是本仓库已有的 devDependency（<code>pnpm core</code> 本来就用它）。</li>
+  <li><b>网络边界：实测只绑 <code>127.0.0.1</code></b>（<code>server.ts</code> 的 <code>listen(port, '127.0.0.1')</code>，<code>lsof</code> 复核）。未绑定 <code>0.0.0.0</code>；CORS 未被当作鉴权手段。</li>
+  <li><b>运行时携带未验证</b>：本轮依赖系统 Node v22.23.2。<code>node:sqlite</code> 是实验性 API，会打印 <code>ExperimentalWarning</code>；打包时要携带哪个 Node 版本、警告如何处理，都还没定也没测。</li>
+  <li><b>当前状态</b>：本轮启动过的服务进程已全部终止，端口 8791–8793 无监听，临时 profile 目录已清理，工作树只剩源码与本报告的改动。</li>
+</ul>
+
+<h2 id="s10">10 数据迁移与恢复信息</h2>
+<h3>10.1 旧 Research 成果（已实际验证可恢复）</h3>
+<pre><code>归档位置（仓库之外）：/Users/youngi/Documents/MiniWork/noltri-archive-20261004/noltri-main+research-v1.bundle
+大小：592 811 字节
+SHA-256：d722b9bff65251b5ba6a162a478416b7d88b0d15745e818bd51d6a171d7a1530
+
+$ git bundle verify …/noltri-main+research-v1.bundle
+is okay
+contains these 2 refs:
+  ad1d0c69c9d7316c0b2d2aba48699351701fd7e0  refs/heads/feature/research-v1
+  9b9b4deeb1eda64232c5c382011026ec2b824f2f  refs/heads/main
+records a complete history        # 本轮重新执行，结果与开发前一致
+
+恢复方式（三选其一，全部实测可达）：
+  git clone /Users/youngi/Documents/MiniWork/noltri-archive-20261004/noltri-main+research-v1.bundle
+  git fetch origin feature/research-v1          # 远端仍在
+  git switch archive/research-v1-ad1d0c6        # 本地归档 tag</code></pre>
+<p>开发前已把 bundle <code>clone</code> 到临时目录、<code>checkout feature/research-v1</code>，<code>rev-parse HEAD</code> = <code>ad1d0c6</code>，研究相关跟踪文件 70 个可定位，验证目录随后删除。旧分支规模为 <b>87 files / 14 873 insertions / 28 deletions</b>；P5 逐项取用，不整包 merge。</p>
+<h3>10.2 用户知识数据</h3>
+<ul>
+  <li><b>本轮没有任何用户数据被移动、改写或删除。</b>本地库是临时目录里的测试 profile，测完即删。</li>
+  <li>备份能力已在 SQLite 侧实现并有专项测试：<code>backupTo()</code>（走 SQLite backup API，WAL 下一致快照）与 <code>verify()</code>（<code>integrity_check</code> + <code>foreign_key_check</code>）。<b>未接 UI，未做真实库演练。</b></li>
+  <li>PG → SQLite 的数据迁移脚本<b>未实现</b>；RLS 用户隔离、真实 Supabase 迁移执行仍属未验证项。</li>
+  <li>未向外上传任何备份，未自动改动真实 Supabase 项目。</li>
+</ul>
+
+<h2 id="s11">11 验收场景对照（41 项中的本轮相关项）</h2>
+<table>
+  <thead><tr><th>编号</th><th>场景</th><th>本轮状态</th><th>实测依据／缺什么</th></tr></thead>
+  <tbody>
+    <tr><td>G01</td><td>恢复旧 Research 归档</td><td><span class="tag t-ok">达成</span></td><td>bundle verify + 临时目录 clone 还原目标 SHA，原基线未破坏</td></tr>
+    <tr><td>G02</td><td>新分支／旧工作树</td><td><span class="tag t-ok">达成</span></td><td>分支名准确；worktree 只剩主目录；旧分支处理有逐条记录（§5）</td></tr>
+    <tr><td>D01</td><td>采集后关 App 再开</td><td><span class="tag t-ok">达成（Node 层）</span></td><td>纵向切片 + 手工 HTTP 重启读回原文/来源/知识/树。<b>App 层未验</b></td></tr>
+    <tr><td>D03</td><td>中文与中英混合搜索</td><td><span class="tag t-ok">达成</span></td><td>8 组语料专项用例 + 排序断言（1 vs 1/3）+ HTTP 实测命中</td></tr>
+    <tr><td>D04</td><td>更换嵌入模型／维度</td><td><span class="tag t-part">部分</span></td><td>维度隔离、不混算、无模型时离线降级已实测；<b>旧索引失效后重建</b>未实现</td></tr>
+    <tr><td>D02</td><td>备份再恢复到新 profile</td><td><span class="tag t-part">部分</span></td><td>快照一致性与完整性校验已测；附件与 Research 图不在本轮模型内</td></tr>
+    <tr><td>L06</td><td>异常退出后重启</td><td><span class="tag t-part">部分</span></td><td>SIGKILL 后已落盘原文仍在（实测）；未完成 Job 保持真实状态、不伪报完成。<b>自动续跑队列未实现</b></td></tr>
+    <tr><td>L03</td><td>断网且无模型</td><td><span class="tag t-part">部分</span></td><td>离线提供方下采集/落盘/关键词搜索/结构检查可用，<code>requiresAiKey</code> 诚实为 false；<b>无 App 界面</b>，未做断网抓包观测</td></tr>
+    <tr><td>S04</td><td>日志／Git／导出密钥扫描</td><td><span class="tag t-part">部分</span></td><td>健康响应不泄漏凭证已成为契约用例；本轮提交无密钥。<b>未跑全仓密钥扫描工具</b></td></tr>
+    <tr><td>X02</td><td>全量测试</td><td><span class="tag t-part">部分（自动化那半达成）</span></td><td>22/22 强制非缓存、369 通过/18 跳过，跳过有原因且不计通过；<b>桌面与扩展 E2E 未运行</b></td></tr>
+    <tr><td>L01／L02</td><td>安装包双击／系统无 Node</td><td><span class="tag t-no">未开始</span></td><td>无安装包（P8）</td></tr>
+    <tr><td>L04／L05／L07</td><td>端口占用／并发实例／磁盘异常</td><td><span class="tag t-no">未开始</span></td><td>未实现自动换端口与单实例守护；磁盘不足／只读／迁移异常路径未测</td></tr>
+    <tr><td>D05</td><td>多入口重复提交</td><td><span class="tag t-no">未实现</span></td><td>全仓无 <code>requestId</code> 字段与落盘去重路径（本轮检索确认）</td></tr>
+    <tr><td>C01–C07</td><td>浏览器／浮窗采集</td><td><span class="tag t-no">未开始</span></td><td>P3</td></tr>
+    <tr><td>M01–M06</td><td>Agent Setup 与授权</td><td><span class="tag t-no">未开始</span></td><td>P4</td></tr>
+    <tr><td>R01–R08</td><td>Research 全流程与偏移检查</td><td><span class="tag t-no">未开始</span></td><td>P5–P6；归档可取用</td></tr>
+    <tr><td>S01／S02／S03</td><td>本地服务安全边界与内容指令</td><td><span class="tag t-no">本轮未验</span></td><td>只实测了「仅绑 <code>127.0.0.1</code>」；Origin／Host 拒绝用例与网络观测未做</td></tr>
+    <tr><td>X01</td><td>旧云架构清理</td><td><span class="tag t-no">本轮不删除</span></td><td>P7。删除动作需「替代已存在＋回归通过＋引用已清理」三项证据同时成立</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s12">12 已知限制</h2>
+<ol>
+  <li><b><code>node:sqlite</code> 是实验性 API</b>：随打包 Node 版本变化，且会打印 <code>ExperimentalWarning</code>；<code>better-sqlite3</code> 备选路径未实测。</li>
+  <li><b>所有本地存储结论只在 Node 层成立</b>：安装版内的冷启动、异常退出重启、目录只读、磁盘不足均未跑过。</li>
+  <li><b>没有加密</b>：库文件明文落盘。<code>~/.noltri/data/noltri.sqlite</code> 依赖操作系统的文件权限与磁盘加密，不依赖应用层加密，因此<b>不得宣传端到端加密</b>。</li>
+  <li><b>无 ANN</b>：向量检索是全量精确扫描，几千条量级线性变慢。</li>
+  <li><b>关键词相关性不是 BM25</b>：是 FTS5 取候选（上限 500）后用共享 <code>overlapScore = shared / queryTokens.size</code> 重排，与 memory／PG 三者一致；跨驱动一致性优先于绝对排序质量。</li>
+  <li><b>FTS5 布尔操作符须大写</b>（<code> OR </code>）：预分词 token 已按引号包裹，但任何直接拼接查询串的改动都会踩这个坑。</li>
+  <li><b>单用户模型</b>：本地表没有 <code>users</code> 表，<code>user_id</code> 列保留只为让三个驱动共用同一套查询与契约；多用户隔离仍只在 PG 侧由 RLS 承担（且未实测）。</li>
+  <li><b>身份链路未本地化</b>：桌面场景应走 dev-open／dev-token；<code>NOLTRI_DEV_REQUIRE_TOKEN</code> 之外的本地鉴权（如系统凭据存储里的长期密钥）尚未实现。</li>
+  <li><b><code>HealthResponse</code> 是破坏性契约变更</b>（见 §7）。</li>
+  <li><b>迁移 SQL 未在真实库执行</b>，仅静态审查。</li>
+  <li><b>PG 集成 18 项被跳过</b>：本轮没有任何证据说明 SQLite 与 PG 在真实数据上完全等价——只有同一份契约在两个能跑的驱动上跑绿。</li>
+  <li><b>本轮改动未推送远端</b>。</li>
+</ol>
+
+<h2 id="s13">13 文档回写内容（已提交进仓库，此处给全文以便复制）</h2>
+<p class="sub">这些内容<b>不是只塞进 HTML</b>：它们已经在 <code>FUNCTION_MAP.md</code> 与 <code>docs/P0-baseline-and-recovery.md</code> 中真实提交（<code>2ceecdb</code>、<code>014f1fa</code>）。以下区块与仓库内容逐字一致。</p>
+
+<h3>13.1 <code>FUNCTION_MAP.md</code> 新增／改写条目</h3>
+<pre><code>### Knowledge Core（71 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片）
+- `/api/health` 报告**真实存储状态**：驱动自检 `storageHealth()` 由三个驱动各自实现并纳入契约测试，返回文件名（不返回绝对路径）、journal mode、schema 版本、SQLite 版本、FTS5 可用性与本库数量；storage 自报不可用时整体状态降为 `degraded`
+- 本地零云配置纵向切片实测：仅设 `STORAGE_DRIVER=sqlite` / `NOLTRI_SQLITE_FILE` / `AI_PROVIDER=offline` / `NOLTRI_DEV_USER_ID` 四个环境变量，即可 capture → 落盘 → 关闭句柄 → 重开同一文件 → 读回原文/知识/树/关键词搜索/节点详情（`services/knowledge-core/test/local-storage-slice.test.ts`，5 项）；profile 路径由 `resolveSqliteFile()` 统一解析（`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data`），Core 内不再出现驱动名分支
+- 崩溃安全实测：子进程（`services/knowledge-core/test/crash-writer.ts`）经 `createRepository` 提交一条原文后立刻 `SIGKILL` 自身，不执行 `close()` 也不做 checkpoint；父进程重开同一文件读回该条，干净关闭后 `-wal` 侧文件不存在——即「写入返回成功」等于「进程被杀后仍可读回」在 Node 侧已验证（安装版内未实机复现）
+
+### 数据与架构
+- StorageRepository 统一抽象 + 三个驱动（InMemory / SQLite / Supabase-Postgres）：同一份契约 `packages/storage/test/repository-contract.ts` 逐驱动执行，作用域隔离、幂等 upsert、错误码（`not_found` / `conflict` / `storage_error`）、时间戳与 rowid tie-break 排序、关键词相关性、向量维度不混用在三者间语义一致
+- **SQLite 本地文件仓储**（`packages/storage/src/sqlite.ts` + `sqlite-schema.ts` + `sqlite-vectors.ts`）：Node 内置 `node:sqlite`（不需要随包携带原生模块）、WAL + `synchronous=FULL` + `busy_timeout` + `foreign_keys=ON`、`PRAGMA user_version` 分步迁移、FTS5 + CJK bigram 关键词索引（原始文本仍存实体表，可原样回显）、Float32 BLOB 精确余弦向量（登记 model / 维度 / 归一化 / 源文本 sha256 / builder 版本；查询宽度与存储宽度不一致的行绝不参与打分）、`integrity_check` + `foreign_key_check`、SQLite backup API 一致性快照（18 项契约测试 + 19 项 schema／落盘／中文检索／备份专项测试）
+- 本地知识表 8 张 + 2 个本地检索结构（`vectors` / `keyword_index`）：raw_sources / knowledge_items / knowledge_nodes / knowledge_edges / item_node_links / version_records / conversations / conversation_messages；单用户本机工作区不设 `users` 表，但 `user_id` 列保留，使三个驱动共用同一套查询与契约
+- InMemory 驱动（17 项契约测试全绿）—— 仅用于测试与明确标注的临时演示，**不作为生产本地存储**
+- Supabase(Postgres) 仓储实现 + 迁移 SQL（`supabase/migrations/`，含 pgvector 向量列；storage 包当前 65 项通过 / 18 项跳过，跳过项全部是缺少 `NOLTRI_PG_TEST_URL` 时的 PG 集成用例，**不计通过**；迁移 SQL **通过静态审查，未在真实数据库执行**）
+
+### 验证缺口（代码已就绪，需真实环境补验）
+- SQLite 本地库在安装版内的实机闭环：Tauri 启动、冷启动、异常退出后重启、磁盘不足／目录只读（当前只有 Node 侧文件库测试，异常退出已由 `SIGKILL` 用例覆盖 WAL 重放，但**未打包、未双击运行**，磁盘不足／只读目录未测）
+- `node:sqlite` 为实验性 API：打包时携带的 Node 版本、`ExperimentalWarning` 的处理与 `better-sqlite3` 替代路径**均未实测**
+- Supabase 真实项目接入：迁移执行、pgvector 相似检索、RLS 用户隔离实测（`NOLTRI_PG_TEST_URL` 就绪后 18 项集成测试自动启用）
+
+### V1 收尾项
+- P2 桌面工作台迁移：UI 与业务拆分，知识树 / Inbox / 来源 / 搜索 / 节点对话迁入桌面
+- P3 本地接入：浏览器 Native Messaging Host、选区浮窗、降级路径、统一 CaptureRequest
+- P4 Agent Setup：检测、配置预览、备份合并、授权、MCP handshake、scope 与卸载恢复
+- P5–P6 Research 整合与偏移检查：旧领域与测试迁入、研究工作台、六类偏移与上下文包
+- P7 云依赖清理：删除 Web／Supabase／Remote Bridge 的启动入口、env 示例、脚本与 CI 配置；`packages/storage/test/*supabase*` 的行为断言已由 SQLite 契约覆盖，**删除动作仍需按「替代已存在＋回归通过＋引用已清理」三项证据执行**
+- P8 安装包、签名／notarization 与最终实机验收</code></pre>
+
+<h3>13.2 <code>docs/P0-baseline-and-recovery.md</code> §9 落地结果</h3>
+<pre><code>## 9 P1 落地结果（实测）
+
+- 全仓工作流：`npx turbo run test typecheck --force` → 22/22 任务通过。`--force` 是必需的：缓存曾掩盖一次由 `HealthResponse` 契约变更引起的扩展弹窗测试回归，不加 `--force` 时该包显示为「通过」。
+- 各包测试实测：storage 65 通过 / 18 跳过、knowledge-core 71、shared 4（本轮新建 `packages/shared/test/env.test.ts`）、ai-provider 48、extension 69、mcp-server 20、desktop 22、ai-service 15；web 走 `node:test` 55 通过。合计 **369 通过 / 18 跳过**，基线为 267 通过 / 17 跳过。
+- 本地纵向切片现为 5 项（`local-storage-slice.test.ts`）：其中崩溃安全一项用子进程 `SIGKILL`——子进程经 `createRepository` 提交一条原文后立刻自杀，不调用 `close()`、不做 checkpoint，父进程重开同一文件读回该条并确认 `-wal` 在干净关闭后消失。这覆盖的是「写成功即落盘」的进程级证据（验收 L06／D01 的存储部分），不覆盖安装版双击启动后的同一场景。
+- 18 项跳过全部是缺少 `NOLTRI_PG_TEST_URL` 的 Postgres 集成用例，**不计入通过**；比基线多出的 1 项是新增的跨驱动健康契约用例在 PG 驱动上的跳过。
+- 契约变更的连带修改：`HealthResponse` 增加必填 `storage`，因此 `apps/web/test/fake-core.ts`、`services/mcp-server/test/fake-core.ts`、`apps/extension/test/api-client.test.ts` 三处桩数据同步更新。**这意味着这些客户端桩与新版 Core 绑定；旧 Core 的 health 响应不再满足契约**（本地同批发版可接受，跨版本兼容未处理）。
+- 未做：Tauri 打包与实机双击、数据库加密、ANN 向量索引、`better-sqlite3` 备选打包路径。</code></pre>
+
+<h3>13.3 旧新能力映射（<code>docs</code> §8，本轮状态只分三档）</h3>
+<pre><code>| 能力 | 旧承载 | 新承载 | 本轮状态 | 证据 |
+| 知识领域持久化 | packages/storage/src/supabase.ts + Postgres/pgvector | packages/storage/src/sqlite.ts（node:sqlite，本地文件） | 已实现，Node 侧实测；安装版内未实机运行 | sqlite.contract.test.ts（18）、sqlite-schema.test.ts（19） |
+| 驱动语义一致性 | 各驱动各自表述 | 同一份契约逐驱动执行（memory / sqlite / supabase） | 已实现 | repository-contract.ts |
+| 中文与中英混排关键词检索 | Postgres FTS + tokenize() | FTS5 取候选集 + CJK bigram 预分词 + 同一相关性分数排序 | 已实现；与 PG、memory 排序一致 | sqlite-schema.test.ts 8 组用例 |
+| 向量检索 | pgvector 列 | vectors 表 Float32 BLOB + 精确余弦（登记 model／维度／归一化／源文本哈希／builder 版本） | 已实现（V1 无 ANN） | 维度隔离用例 + 契约向量组 |
+| 一致性备份／恢复 | 云端快照 | SQLite backup API（含 WAL）、backupTo() + verify() | 已实现，未接 UI | sqlite-schema.test.ts 备份组 |
+| 「写成功即已落盘」的崩溃安全 | 由托管数据库保证 | journal_mode=wal + synchronous=FULL，进程被杀后由 SQLite 自行重放日志 | 已实现，进程级实测；安装版内未实机运行 | local-storage-slice.test.ts SIGKILL 组 |
+| Core 对云的假设 | 启动即需 DATABASE_URL／Supabase Auth | STORAGE_DRIVER=sqlite + NOLTRI_SQLITE_FILE，身份走 dev-open／dev-token | 已实现（纵向切片实测） | local-storage-slice.test.ts（5） |
+| 数据目录决策 | 无（云端库地址） | resolveSqliteFile()：NOLTRI_SQLITE_FILE &gt; NOLTRI_DATA_DIR &gt; ~/.noltri/data/noltri.sqlite | 已实现；Tauri 传入自身 app-data 目录属 P2 | 路径解析组 |
+| 健康状态 | 只报驱动名 | 驱动自报 storageHealth()，不自洽时整体 degraded | 已实现 | 契约新增健康项 + http.test.ts |
+| 桌面工作台 UI | apps/web Next.js 页面 | apps/desktop（Tauri） | 未开始（P2） | — |
+| 浏览器接入端 | 扩展直连公网 Core／Cloud Bridge | Native Messaging → 本地 Core | 未开始（P3）；本轮仅保证 Core 只绑 127.0.0.1 | server.ts |
+| Agent Setup | 网页登录页 + 手动配置 | 本地检测／预览／备份合并／授权／卸载恢复 | 未开始（P4） | — |
+| Research 领域与页面 | feature/research-v1 worktree | 同一桌面 Core + 同一 SQLite 库 | 未开始（P5–P6）；归档已可取用 | docs §4–§6 |
+| Web／Supabase／Bridge 依赖 | 存在且在默认启动路径上 | 目标为删除 | 本轮不删除（留给 P7）：替代功能已存在，但 apps/web 55 项测试仍是唯一可回归的 Web 行为基线，删除条件未同时满足 | turbo run test --force |</code></pre>
+
+<h3>13.4 建议的下一步（不属于已完成项，仅交接）</h3>
+<ol>
+  <li><b>P2</b>：把 <code>apps/web</code> 的界面逻辑迁入 <code>apps/desktop</code>，Tauri 侧把自身 app-data 目录交给 <code>NOLTRI_DATA_DIR</code>——路径解析已就绪，Core 不需要再改。</li>
+  <li><b>打包前先定 <code>node:sqlite</code> 还是 <code>better-sqlite3</code></b>：这是一次真实取舍实验（携带体积、原生模块、ExperimentalWarning 处理），结论出来前不要写性能承诺。</li>
+  <li><b>补 <code>NOLTRI_PG_TEST_URL</code></b>：让 18 项 PG 集成用例真跑一次，才能宣称三驱动等价。</li>
+  <li><b>P7 删除清单先提 PR 再动手</b>：逐条给「替代在哪、回归哪条测试覆盖、引用清在哪」。</li>
+</ol>
+
+<h2 id="s14">14 复现命令</h2>
+<pre><code># 1) 全量测试与类型检查（务必带 --force：缓存掩盖过真实回归）
+npx turbo run test typecheck --force
+
+# 2) 架构闸（Core 内禁止云依赖 import、禁止驱动名分支、createRawSource 只允许一个调用点）
+pnpm gate
+
+# 3) 零云本地库全链路（不需要 Supabase / token / 模型 key）
+PROF=$(mktemp -d /tmp/noltri-local-XXXX)
+STORAGE_DRIVER=sqlite NOLTRI_SQLITE_FILE="$PROF/noltri.sqlite" \
+AI_PROVIDER=offline NOLTRI_DEV_USER_ID=local-user PORT=8787 \
+node_modules/.bin/tsx services/knowledge-core/src/server.ts
+
+curl -s localhost:8787/api/health
+curl -s -X POST localhost:8787/api/capture -H 'content-type: application/json' \
+  -d '{"text":"Python 的元组一旦创建就不能修改，因此可以作为字典的键使用。",
+       "source":{"type":"desktop_app"},
+       "capture":{"capturedAt":"2026-10-04T12:00:00.000Z","client":"desktop"}}'
+curl -s -X POST localhost:8787/api/search -H 'content-type: application/json' \
+  -d '{"query":"元组 字典","mode":"keyword","limit":5}'
+
+# 4) 只跑本地纵向切片（含 SIGKILL 崩溃读回）
+cd services/knowledge-core &amp;&amp; npx vitest run test/local-storage-slice.test.ts
+
+# 5) 旧 Research 分支恢复（三选一）
+git clone /Users/youngi/Documents/MiniWork/noltri-archive-20261004/noltri-main+research-v1.bundle
+git fetch origin feature/research-v1
+git switch archive/research-v1-ad1d0c6</code></pre>
+
+<div class="foot">
+  <p><b>诚实边界。</b>本文所有「已验证／已实测」都对应本轮真实执行过的命令与结果；「已实现未运行」指代码与测试在仓库里但本轮没跑那条环境路径；「未开始」就是未开始。跳过项一律不计入通过。性能数字是一次实测，不是承诺值。安装版层面的结论本轮一个都没有。</p>
+  <p class="muted">知序 Noltri · 本地桌面版与 Research 整合 V1 · P0+P1 交付报告 · 生成于 2026-10-04 · 单文件自包含，无外部资源加载。</p>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement, btn=document.getElementById('theme');
+  function apply(t){root.setAttribute('data-theme',t);btn.textContent=t==='dark'?'切换浅色':'切换深色';}
+  var saved='light';try{saved=localStorage.getItem('noltri-report-theme')||'light';}catch(e){}
+  if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches&&saved==='light')saved='dark';
+  apply(saved);
+  btn.addEventListener('click',function(){
+    var next=root.getAttribute('data-theme')==='dark'?'light':'dark';apply(next);
+    try{localStorage.setItem('noltri-report-theme',next);}catch(e){}
+  });
+
+  document.querySelectorAll('pre').forEach(function(pre){
+    var b=document.createElement('button');
+    b.className='copy';b.type='button';b.textContent='复制';
+    b.addEventListener('click',function(){
+      var text=pre.innerText;
+      function done(){b.textContent='已复制';setTimeout(function(){b.textContent='复制';},1600);}
+      function fallback(){
+        var ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();
+        try{document.execCommand('copy');done();}catch(e){b.textContent='请手动复制';}
+        document.body.removeChild(ta);
+      }
+      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(done,fallback);}
+      else fallback();
+    });
+    pre.appendChild(b);
+  });
+})();
+</script>
+</div>
+</body>
+</html>

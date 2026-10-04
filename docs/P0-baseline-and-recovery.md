@@ -108,7 +108,7 @@ P5 迁移时从 `ad1d0c6` 逐项取用，不做整包 merge（该分支同时带
 
 | 能力 | 旧承载 | 新承载 | 本轮状态 | 证据 |
 | --- | --- | --- | --- | --- |
-| 知识领域持久化 | `packages/storage/src/supabase.ts` + Postgres/pgvector | `packages/storage/src/sqlite.ts`（Node 内置 `node:sqlite`，本地文件） | 已实现，Node 侧实测；安装版内未实机运行 | `packages/storage/test/sqlite.contract.test.ts`（17）、`sqlite-schema.test.ts`（19） |
+| 知识领域持久化 | `packages/storage/src/supabase.ts` + Postgres/pgvector | `packages/storage/src/sqlite.ts`（Node 内置 `node:sqlite`，本地文件） | 已实现，Node 侧实测；安装版内未实机运行 | `packages/storage/test/sqlite.contract.test.ts`（18）、`sqlite-schema.test.ts`（19） |
 | 驱动语义一致性 | 各驱动各自表述 | 同一份契约逐驱动执行（memory / sqlite / supabase） | 已实现 | `packages/storage/test/repository-contract.ts` |
 | 中文与中英混排关键词检索 | Postgres FTS + `tokenize()` | FTS5 取候选集，`tokenize()` 的 CJK bigram 预分词入索引，再用同一相关性分数排序 | 已实现；与 PG、memory 排序一致 | `sqlite-schema.test.ts` 中文／混排／英文／缺失词 8 组用例 |
 | 向量检索 | pgvector 列 | `vectors` 表 Float32 BLOB + 精确余弦，登记 model／维度／归一化／源文本哈希／builder 版本 | 已实现（V1 无 ANN） | `sqlite-schema.test.ts` 维度隔离用例 + 契约向量组 |
