@@ -3,9 +3,11 @@
  * handle closed. Nothing here mocks the storage layer — it goes through `createRepository`, the same
  * factory a desktop shell will call, with no Supabase URL, no hosting runtime and no network.
  */
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createOfflineProvider } from '@noltri/ai-provider';
 import type { TreeNode } from '@noltri/schema';
@@ -17,6 +19,9 @@ import { captureOf, CHINESE_TEXT } from './fakes';
 
 const directories: string[] = [];
 const actor = { userId: 'slice-user', actor: 'slice-test' };
+
+/** A committed fixture rather than a script generated at runtime, so it is type-checked too. */
+const crashWriter = fileURLToPath(new URL('./crash-writer.ts', import.meta.url));
 
 interface LocalCore {
   readonly repository: KnowledgeRepository;
@@ -172,6 +177,49 @@ describe('capture to a local SQLite profile and back', () => {
     );
     await expect(createRepository({ driver: 'sqlite' })).rejects.toThrow(/sqliteFile/);
   });
+
+  /**
+   * The promise a local library lives or dies by: a write that returned success has to still be there
+   * after the process is killed without cleanup. SIGKILL is deliberate — no `close()` runs and no WAL
+   * checkpoint happens, so recovery depends on SQLite replaying its own log.
+   */
+  it('keeps a committed write readable when the writer is killed before any clean shutdown', async () => {
+    const { file, env } = localProfile();
+    const opened = await openCore(env);
+    const source = await opened.repository.createRawSource({
+      userId: actor.userId,
+      rawText: '父连接写入并正常关闭的那条原文。',
+      sourceType: 'manual',
+      capturedAt: isoNow(),
+      metadata: {},
+    });
+    await opened.repository.updateRawSourceProcessing(source.id, actor.userId, 'processing');
+    await opened.close();
+
+    const receipt = path.join(path.dirname(file), 'child-id.txt');
+    const killed = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', crashWriter, file, actor.userId, receipt],
+      { encoding: 'utf8', timeout: 120_000, cwd: path.dirname(crashWriter) },
+    );
+    expect(killed.signal, killed.stderr).toBe('SIGKILL');
+    const childId = readFileSync(receipt, 'utf8');
+
+    const survivor = await openCore(env);
+    try {
+      const before = await survivor.repository.findRawSource(source.id, actor.userId);
+      expect(before?.rawText).toBe('父连接写入并正常关闭的那条原文。');
+      expect(before?.processingStatus).toBe('processing');
+
+      const crash = await survivor.repository.findRawSource(childId, actor.userId);
+      expect(crash?.rawText).toBe('子进程写入后立刻被 SIGKILL，不做任何 close()。');
+      expect(survivor.core.health().storage.detail['rawSources']).toBe(2);
+    } finally {
+      await survivor.close();
+    }
+    // The orphaned log was replayed into the profile, so a clean close leaves no sidecar behind.
+    expect(existsSync(`${file}-wal`)).toBe(false);
+  }, 120_000);
 
   it('lets a second handle read what a still-open handle wrote', async () => {
     const { file, env } = localProfile();
