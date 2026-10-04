@@ -149,6 +149,14 @@ export interface NodeListItemOptions {
   includeArchived?: boolean;
 }
 
+export interface ListInboxInput {
+  userId: string;
+  /** Omitted means "every status"; the Inbox passes the ones still needing attention. */
+  statuses?: ProcessingStatus[];
+  limit?: number;
+  offset?: number;
+}
+
 export interface NodeStats {
   itemCount: number;
   sourceCount: number;
@@ -172,6 +180,10 @@ export interface KnowledgeRepository {
   ): Promise<RawSource>;
   findRawSource(id: string, userId: string): Promise<RawSource | null>;
   listRawSourcesByIds(ids: string[], userId: string): Promise<RawSource[]>;
+  /** Newest-first capture feed behind 收件箱; `statuses` narrows it to the unfinished rows. */
+  listInbox(input: ListInboxInput): Promise<RawSource[]>;
+  /** Whole-library totals per status, so a paginated list can still show honest badges. */
+  countInboxByStatus(userId: string): Promise<Record<ProcessingStatus, number>>;
 
   createKnowledgeItem(input: CreateKnowledgeItemRecordInput): Promise<KnowledgeItem>;
   findKnowledgeItem(id: string, userId: string): Promise<KnowledgeItem | null>;

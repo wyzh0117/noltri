@@ -127,7 +127,8 @@ describe('capture to a local SQLite profile and back', () => {
     } finally {
       await second.close();
     }
-  });
+    // Real file creation, WAL checkpoint and a second open: 415ms alone, but it starves under a parallel run.
+  }, 30_000);
 
   /** The rule the whole design rests on: the raw text is safe before the model is ever asked. */
   it('keeps a raw source that never reached the model readable after a reopen', async () => {
@@ -159,7 +160,7 @@ describe('capture to a local SQLite profile and back', () => {
     } finally {
       await reopened.close();
     }
-  });
+  }, 30_000);
 
   it('resolves the profile path from the environment, not from wherever the process happens to start', async () => {
     expect(loadCoreConfig({ STORAGE_DRIVER: 'sqlite' }).sqliteFile).toBe(

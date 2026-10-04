@@ -148,6 +148,76 @@ export function describeKnowledgeRepository(
       });
     }, timeout);
 
+    it('lists inbox sources newest-first, filtered by status and scoped to the owner', async () => {
+      await scope(async (repository, userId) => {
+        const oldest = await repository.createRawSource(sourceInput(userId, 'oldest'));
+        await pause();
+        const middle = await repository.createRawSource(sourceInput(userId, 'middle'));
+        await pause();
+        const newest = await repository.createRawSource(sourceInput(userId, 'newest'));
+        await pause();
+        const foreign = await repository.createRawSource(sourceInput(foreignUser(), 'foreign'));
+
+        await repository.updateRawSourceProcessing(middle.id, userId, 'failed', '模型超时');
+        await repository.updateRawSourceProcessing(foreign.id, foreign.userId, 'failed', '不应出现');
+
+        expect((await repository.listInbox({ userId })).map((row) => row.id)).toEqual([
+          newest.id,
+          middle.id,
+          oldest.id,
+        ]);
+        expect((await repository.listInbox({ userId, statuses: ['failed'] })).map((row) => row.id)).toEqual([
+          middle.id,
+        ]);
+        expect(
+          (await repository.listInbox({ userId, statuses: ['pending', 'processing'] })).map((row) => row.id),
+        ).toEqual([newest.id, oldest.id]);
+        expect((await repository.listInbox({ userId, limit: 2 })).map((row) => row.id)).toEqual([
+          newest.id,
+          middle.id,
+        ]);
+        expect((await repository.listInbox({ userId, limit: 2, offset: 2 })).map((row) => row.id)).toEqual([
+          oldest.id,
+        ]);
+        expect(await repository.listInbox({ userId, offset: 99 })).toEqual([]);
+        expect(await repository.listInbox({ userId: foreignUser() })).toEqual([]);
+      });
+    }, timeout);
+
+    it('counts inbox rows per processing status for one owner only', async () => {
+      await scope(async (repository, userId) => {
+        await repository.createRawSource(sourceInput(userId, 'pending a'));
+        const b = await repository.createRawSource(sourceInput(userId, 'pending b'));
+        const c = await repository.createRawSource(sourceInput(userId, 'done c'));
+        const d = await repository.createRawSource(sourceInput(userId, 'failed d'));
+        await repository.updateRawSourceProcessing(c.id, userId, 'done');
+        await repository.updateRawSourceProcessing(d.id, userId, 'failed', '模型超时');
+        const foreign = await repository.createRawSource(sourceInput(foreignUser(), 'foreign pending'));
+
+        expect(await repository.countInboxByStatus(userId)).toEqual({
+          pending: 2,
+          processing: 0,
+          done: 1,
+          failed: 1,
+        });
+        // The counter follows updates, it is not a snapshot of creation.
+        await repository.updateRawSourceProcessing(b.id, userId, 'processing');
+        expect(await repository.countInboxByStatus(userId)).toMatchObject({ pending: 1, processing: 1 });
+        expect(await repository.countInboxByStatus(foreign.userId)).toEqual({
+          pending: 1,
+          processing: 0,
+          done: 0,
+          failed: 0,
+        });
+        expect(await repository.countInboxByStatus(`${USER_PREFIX}-nobody`)).toEqual({
+          pending: 0,
+          processing: 0,
+          done: 0,
+          failed: 0,
+        });
+      });
+    }, timeout);
+
     it('creates, reads and patches knowledge items', async () => {
       await scope(async (repository, userId) => {
         const source = await repository.createRawSource(sourceInput(userId, '一段关于 HNSW 的原文'));

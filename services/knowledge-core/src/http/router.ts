@@ -7,14 +7,18 @@
  */
 import type { z } from 'zod';
 import {
+  assignSourceRequestSchema,
   captureRequestSchema,
+  inboxQuerySchema,
   moveNodeRequestSchema,
   nodeChatRequestSchema,
   nodeContextRequestSchema,
   patchNodeRequestSchema,
   searchRequestSchema,
   treeQuerySchema,
+  type AssignSourceRequest,
   type CaptureRequest,
+  type InboxQuery,
   type MoveNodeRequest,
   type NodeChatRequest,
   type NodeContextRequest,
@@ -50,6 +54,9 @@ const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'health'] },
   { method: 'POST', segments: ['api', 'capture'] },
   { method: 'GET', segments: ['api', 'tree'] },
+  { method: 'GET', segments: ['api', 'inbox'] },
+  { method: 'GET', segments: ['api', 'inbox', ':id'] },
+  { method: 'POST', segments: ['api', 'inbox', ':id', 'assign'] },
   { method: 'GET', segments: ['api', 'nodes', ':id'] },
   { method: 'PATCH', segments: ['api', 'nodes', ':id'] },
   { method: 'POST', segments: ['api', 'nodes', ':id', 'move'] },
@@ -200,6 +207,21 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
     case 'api/tree': {
       const query = parseWith(treeQuerySchema, Object.fromEntries(url.searchParams), 'tree query');
       return json(200, await core.getTree(query satisfies TreeQuery, actor), cors);
+    }
+    case 'api/inbox': {
+      const query = parseWith(inboxQuerySchema, Object.fromEntries(url.searchParams), 'inbox query');
+      return json(200, await core.listInbox(query satisfies InboxQuery, actor), cors);
+    }
+    case 'api/inbox/:id': {
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      const source = await core.readRawSource(id, actor);
+      if (source === null) throw knowledgeError('not_found', `原文 ${id} 不存在 / raw source not found`);
+      return json(200, source, cors);
+    }
+    case 'api/inbox/:id/assign': {
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      const body = parseWith(assignSourceRequestSchema, await readJsonBody(request), 'assign source');
+      return json(200, await core.assignSource(id, body satisfies AssignSourceRequest, actor), cors);
     }
     case 'api/nodes/:id': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));

@@ -47,6 +47,7 @@ import type {
   KeywordMatch,
   KnowledgeRepository,
   LinkItemInput,
+  ListInboxInput,
   MoveNodeRecordInput,
   MoveNodeRecordResult,
   NodeListItemOptions,
@@ -86,6 +87,8 @@ const DEFAULT_KEYWORD_LIMIT = 12;
 const MAX_KEYWORD_CANDIDATES = 500;
 /** Depth ceiling for the recursive ancestor walk: a knowledge tree is never this deep. */
 const MAX_TREE_DEPTH = 128;
+/** Page ceiling for the capture feed; the Inbox never asks the disk for the whole library. */
+const MAX_INBOX_PAGE = 200;
 
 type DbRow = Record<string, unknown>;
 
@@ -433,13 +436,35 @@ export class SqliteRepository implements KnowledgeRepository {
     return ids.map((id) => byId.get(id)).filter((row): row is DbRow => row !== undefined).map(toRawSource);
   }
 
-  async listInbox(userId: string, limit = 50): Promise<RawSource[]> {
+  async listInbox(input: ListInboxInput): Promise<RawSource[]> {
+    const statuses = input.statuses ?? [];
+    const statusFilter = statuses.length > 0 ? `and processing_status in (${placeholders(statuses.length)})` : '';
     const rows = this.many(
       `select ${RAW_SOURCE_FIELDS} from raw_sources
-        where user_id = ? order by created_at desc, rowid desc limit ?`,
-      [userId, limit],
+        where user_id = ? ${statusFilter}
+        order by created_at desc, rowid desc
+        limit ? offset ?`,
+      [
+        input.userId,
+        ...statuses,
+        Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), MAX_INBOX_PAGE),
+        Math.max(Math.trunc(input.offset ?? 0), 0),
+      ],
     );
     return rows.map(toRawSource);
+  }
+
+  async countInboxByStatus(userId: string): Promise<Record<ProcessingStatus, number>> {
+    const rows = this.many(
+      `select processing_status, count(*) as total from raw_sources where user_id = ? group by processing_status`,
+      [userId],
+    );
+    const counts: Record<ProcessingStatus, number> = { pending: 0, processing: 0, done: 0, failed: 0 };
+    for (const row of rows) {
+      const status = text(row.processing_status) as ProcessingStatus;
+      if (status in counts) counts[status] = num(row.total);
+    }
+    return counts;
   }
 
   // --- knowledge items -----------------------------------------------------------------

@@ -42,6 +42,7 @@ import type {
   KeywordMatch,
   KnowledgeRepository,
   LinkItemInput,
+  ListInboxInput,
   MoveNodeRecordInput,
   MoveNodeRecordResult,
   NodeListItemOptions,
@@ -69,6 +70,8 @@ const DEFAULT_KEYWORD_LIMIT = 12;
 const MAX_KEYWORD_CANDIDATES = 500;
 /** Depth ceiling for the recursive ancestor walk: a knowledge tree is never this deep. */
 const MAX_TREE_DEPTH = 128;
+/** Page ceiling for the capture feed; the Inbox never asks the database for the whole library. */
+const MAX_INBOX_PAGE = 200;
 
 type DbRow = Record<string, unknown>;
 type Parser<T> = { parse(data: unknown): T };
@@ -677,6 +680,33 @@ export class SupabaseRepository implements KnowledgeRepository {
 
   async listRawSourcesByIds(ids: string[], userId: string): Promise<RawSource[]> {
     return this.listScoped('raw_sources', ids, userId, RAW_SOURCE_FIELDS, toRawSource);
+  }
+
+  async listInbox(input: ListInboxInput): Promise<RawSource[]> {
+    const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), MAX_INBOX_PAGE);
+    const offset = Math.max(Math.trunc(input.offset ?? 0), 0);
+    // Ties break on id here and on rowid in SQLite; the contract only pins the newest-first ordering.
+    const rows = await this.rows(
+      `select ${RAW_SOURCE_FIELDS} from public.raw_sources
+        where user_id = $1 and ($2::text[] is null or processing_status = any($2::text[]))
+        order by created_at desc, id desc
+        limit $3 offset $4`,
+      [input.userId, input.statuses === undefined || input.statuses.length === 0 ? null : input.statuses, limit, offset],
+    );
+    return rows.map(toRawSource);
+  }
+
+  async countInboxByStatus(userId: string): Promise<Record<ProcessingStatus, number>> {
+    const rows = await this.rows(
+      `select processing_status, count(*)::int as total from public.raw_sources where user_id = $1 group by processing_status`,
+      [userId],
+    );
+    const counts: Record<ProcessingStatus, number> = { pending: 0, processing: 0, done: 0, failed: 0 };
+    for (const row of rows) {
+      const status = String(row.processing_status) as ProcessingStatus;
+      if (status in counts) counts[status] = Number(row.total);
+    }
+    return counts;
   }
 
   async createKnowledgeItem(input: CreateKnowledgeItemRecordInput): Promise<KnowledgeItem> {

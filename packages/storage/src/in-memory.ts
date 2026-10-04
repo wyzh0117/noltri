@@ -7,6 +7,7 @@ import type {
   KnowledgeEdge,
   KnowledgeItem,
   KnowledgeNode,
+  ProcessingStatus,
   RawSource,
   UpdateNodeInput,
   VersionRecord,
@@ -22,6 +23,7 @@ import type {
   ItemVectorMatch,
   KeywordMatch,
   KnowledgeRepository,
+  ListInboxInput,
   LinkItemInput,
   MoveNodeRecordInput,
   MoveNodeRecordResult,
@@ -40,6 +42,9 @@ function clone<T>(value: T): T {
 }
 
 const titleKey = (title: string) => title.trim().toLowerCase();
+
+/** Page ceiling shared with the file-backed drivers so a caller cannot ask for the whole map. */
+const MAX_INBOX_PAGE = 200;
 
 export class InMemoryRepository implements KnowledgeRepository {
   readonly driver: StorageDriverName = 'memory';
@@ -99,6 +104,29 @@ export class InMemoryRepository implements KnowledgeRepository {
       .map((id) => this.rawSources.get(id))
       .filter((row): row is RawSource => Boolean(row && row.userId === userId))
       .map(clone);
+  }
+
+  async listInbox(input: ListInboxInput): Promise<RawSource[]> {
+    const statuses = new Set<ProcessingStatus>(input.statuses ?? []);
+    const mine: RawSource[] = [];
+    for (const row of this.rawSources.values()) {
+      if (row.userId !== input.userId) continue;
+      if (statuses.size > 0 && !statuses.has(row.processingStatus)) continue;
+      mine.push(row);
+    }
+    // Insertion order is oldest-first; the capture feed is newest-first, like the SQL drivers.
+    mine.reverse();
+    const offset = Math.max(Math.trunc(input.offset ?? 0), 0);
+    const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), MAX_INBOX_PAGE);
+    return mine.slice(offset, offset + limit).map(clone);
+  }
+
+  async countInboxByStatus(userId: string): Promise<Record<ProcessingStatus, number>> {
+    const counts: Record<ProcessingStatus, number> = { pending: 0, processing: 0, done: 0, failed: 0 };
+    for (const row of this.rawSources.values()) {
+      if (row.userId === userId) counts[row.processingStatus] += 1;
+    }
+    return counts;
   }
 
   async createKnowledgeItem(input: CreateKnowledgeItemRecordInput): Promise<KnowledgeItem> {
