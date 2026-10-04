@@ -6,6 +6,8 @@
  * validate), and pipeline / service modules receive values through `CoreConfig` only.
  * The defaults exported here are documentation of what the environment falls back to.
  */
+import os from 'node:os';
+import path from 'node:path';
 import type { ScopeTokenBudget, Thresholds } from '@noltri/schema';
 import {
   currentEnv,
@@ -40,7 +42,30 @@ export const CORE_DEFAULTS = {
   searchDefaultLimit: 10,
   /** Supabase JWT verification cache window, so one token is not re-checked per request. */
   authCacheMs: 60_000,
+  /** Relative file names are always resolved against this, never against the current directory. */
+  dataDirname: '.noltri',
+  sqliteFilename: 'noltri.sqlite',
 } as const;
+
+/**
+ * The profile database location, in order of precedence: an explicit file, an explicit data directory,
+ * then `~/.noltri/data`. A desktop shell will hand its own app-data path in through `NOLTRI_DATA_DIR`;
+ * until it does, this is the one place that decides where local knowledge lives, and it never writes
+ * into the repository the code was checked out from.
+ */
+export function resolveSqliteFile(env: EnvSource = currentEnv()): string {
+  const absolute = (value: string): string => (path.isAbsolute(value) ? value : path.resolve(value));
+  const direct = envString(env, 'NOLTRI_SQLITE_FILE');
+  if (direct.length > 0) return absolute(direct);
+  const dataDir = envString(env, 'NOLTRI_DATA_DIR');
+  if (dataDir.length > 0) return path.join(absolute(dataDir), CORE_DEFAULTS.sqliteFilename);
+  return path.join(
+    os.homedir(),
+    CORE_DEFAULTS.dataDirname,
+    'data',
+    CORE_DEFAULTS.sqliteFilename,
+  );
+}
 
 export interface CoreConfig {
   /** Storage selection handed to `createRepository`. */
@@ -66,6 +91,8 @@ export interface CoreConfig {
   readonly authCacheMs: number;
   readonly supabaseUrl: string;
   readonly supabaseAnonKey: string;
+  /** Absolute path of the local profile database, whichever driver is configured. */
+  readonly sqliteFile: string;
 }
 
 const positive = (value: number, fallback: number): number =>
@@ -79,6 +106,9 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
   const storage: RepositoryOptions = {
     driver,
     embeddingDim: ai.embeddingDim,
+    // Resolved for every driver: `createRepository` is the only thing that decides what to do with it,
+    // so a host that asks for sqlite gets a clear error and a host that does not pays nothing.
+    sqliteFile: resolveSqliteFile(env),
     ...(databaseUrl.length > 0 ? { databaseUrl } : {}),
     ...(env['STATEMENT_TIMEOUT_MS'] ? { statementTimeoutMs: envInt(env, 'STATEMENT_TIMEOUT_MS', 30_000) } : {}),
     ...(env['STORAGE_POOL_MAX'] ? { maxConnections: envInt(env, 'STORAGE_POOL_MAX', 5) } : {}),
@@ -106,5 +136,6 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
     authCacheMs: positive(envInt(env, 'AUTH_CACHE_MS', CORE_DEFAULTS.authCacheMs), 1_000),
     supabaseUrl: envString(env, 'SUPABASE_URL'),
     supabaseAnonKey: envString(env, 'SUPABASE_ANON_KEY'),
+    sqliteFile: storage.sqliteFile ?? '',
   };
 }

@@ -201,6 +201,7 @@ export const fixtureHealth: HealthResponse = {
   status: 'ok',
   version: '0.1.0-fake',
   storageDriver: 'memory',
+  storage: { driver: 'memory', ok: true, detail: { volatile: true, knowledgeItems: 0 } },
   aiProvider: 'offline',
   embeddingDim: 8,
   requiresAiKey: false,

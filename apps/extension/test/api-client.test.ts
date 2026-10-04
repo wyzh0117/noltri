@@ -130,7 +130,15 @@ describe('capture through the shared ApiClient', () => {
 
 describe('connection state for the popup', () => {
   it('reports connected with the Core identity', async () => {
-    const health = { status: 'ok', version: '0.1.0', storageDriver: 'supabase', aiProvider: 'openai', embeddingDim: 1536, requiresAiKey: true };
+    const health = {
+      status: 'ok',
+      version: '0.1.0',
+      storageDriver: 'supabase',
+      storage: { driver: 'supabase', ok: true, detail: { host: 'db.example.supabase.co', embeddingDim: 1536 } },
+      aiProvider: 'openai',
+      embeddingDim: 1536,
+      requiresAiKey: true,
+    };
     const state = await probeConnection(SETTINGS, { fetchImpl: stubFetch(() => json(health), []) });
     expect(state.connected).toBe(true);
     expect(state.detail).toContain('已连接');

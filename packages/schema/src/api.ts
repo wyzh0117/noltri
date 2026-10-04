@@ -39,10 +39,24 @@ export type ApiError = z.infer<typeof apiErrorSchema>;
 
 export const nodeIdParamsSchema = z.object({ id: z.string().min(1) });
 
+/**
+ * What the storage driver says about itself. Cheap and synchronous by contract: health is reachable
+ * without a credential, so this must never run a network query, a full scan or an integrity check, and
+ * it must never name a connection string. Primitives only, so a client can render it without knowing
+ * which driver produced it.
+ */
+export const storageHealthSchema = z.object({
+  driver: z.string(),
+  ok: z.boolean(),
+  detail: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+});
+export type StorageHealthPayload = z.infer<typeof storageHealthSchema>;
+
 export const healthResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
   version: z.string(),
   storageDriver: z.string(),
+  storage: storageHealthSchema,
   aiProvider: z.string(),
   embeddingDim: z.number().int(),
   requiresAiKey: z.boolean(),

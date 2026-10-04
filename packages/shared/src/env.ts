@@ -61,13 +61,19 @@ export function loadScopeBudgets(env: EnvSource = currentEnv()): ScopeTokenBudge
   };
 }
 
-export type StorageDriver = 'memory' | 'supabase';
+export type StorageDriver = 'memory' | 'supabase' | 'sqlite';
+
+const STORAGE_DRIVERS: readonly StorageDriver[] = ['memory', 'supabase', 'sqlite'];
 
 export function loadStorageDriver(env: EnvSource = currentEnv()): StorageDriver {
   const raw = envString(env, 'STORAGE_DRIVER', 'memory').toLowerCase();
-  if (raw === 'supabase') return 'supabase';
-  if (raw === 'memory') return 'memory';
-  throw new Error(`Unknown STORAGE_DRIVER "${raw}" — expected "supabase" or "memory"`);
+  const found = STORAGE_DRIVERS.find((driver) => driver === raw);
+  if (found === undefined) {
+    throw new Error(
+      `Unknown STORAGE_DRIVER "${raw}" — expected one of ${STORAGE_DRIVERS.map((driver) => `"${driver}"`).join(', ')}`,
+    );
+  }
+  return found;
 }
 
 export type AiDriver = 'openai' | 'offline';

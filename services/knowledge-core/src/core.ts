@@ -90,16 +90,19 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
 }
 
 /**
- * Reports wiring without touching the network: a provider that cannot embed, or an OpenAI-compatible
- * driver with no key, is honest about being degraded.
+ * Reports wiring without touching the network or scanning the library: a provider that cannot embed, an
+ * OpenAI-compatible driver with no key, and a storage driver that does not consider itself usable all
+ * show up as `degraded` rather than as a green light.
  */
 function healthOf(deps: CoreDeps): HealthResponse {
   const { config, provider, repository } = deps;
   const missingKey = config.ai.driver === 'openai' && config.ai.apiKey.trim().length === 0;
+  const storage = repository.storageHealth();
   return {
-    status: provider.capabilities.embeddings && !missingKey ? 'ok' : 'degraded',
+    status: provider.capabilities.embeddings && !missingKey && storage.ok ? 'ok' : 'degraded',
     version: config.version,
     storageDriver: repository.driver,
+    storage,
     aiProvider: provider.id,
     embeddingDim: config.embeddingDim,
     requiresAiKey: config.ai.driver === 'openai',
