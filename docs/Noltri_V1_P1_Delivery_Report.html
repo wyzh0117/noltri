@@ -86,7 +86,7 @@
   <div class="meta">
     <div>分支 <b>v1_research&amp;modify</b></div>
     <div>基线 <b>9b9b4de</b>（<code>main</code>）</div>
-    <div>报告时 HEAD <b>014f1fa</b>（本报告为其后一笔）</div>
+    <div>报告时 HEAD <b>028a715</b>（本报告的这次修订在其后一笔）</div>
     <div>核查日期 <b>2026-10-04</b></div>
     <div>机器 <b>darwin arm64 · Node v22.23.2</b></div>
   </div>
@@ -126,9 +126,9 @@
   <li><b>Core 解耦与纵向切片</b>：Core 不再假设必须有云；仅四个环境变量即可跑通 capture → 落盘 → 关闭 → 重开 → 读回，并且 <code>/api/health</code> 改为报告存储<b>真实</b>状态（journal mode、schema 版本、FTS5 可用性、本库数量）。</li>
 </ol>
 <div class="grid c3">
-  <div class="card"><div class="n">+3 607</div><div class="l">相对基线 <code>9b9b4de</code> 的代码与文档插入行数（不含本报告自身，含 777 行开发基准文档）</div></div>
+  <div class="card"><div class="n">+3 626</div><div class="l">相对基线 <code>9b9b4de</code> 的代码与文档插入行数（不含本报告自身，含 777 行开发基准文档）</div></div>
   <div class="card"><div class="n">1 802</div><div class="l">其中 SQLite 三个模块的新增行数</div></div>
-  <div class="card"><div class="n">7 笔</div><div class="l"><code>v1_research&amp;modify</code> 上的提交（含本报告，未推送）</div></div>
+  <div class="card"><div class="n">8 笔</div><div class="l"><code>v1_research&amp;modify</code> 上的提交（含本报告，未推送）</div></div>
   <div class="card"><div class="n">0 个</div><div class="l">本轮删除的仓库内文件</div></div>
 </div>
 <p class="note">一句话结论：本地真值这条链在 <b>Node 层</b>已经站住（含 SIGKILL 崩溃后读回），在<b>安装版层</b>还没有跑过——这两件事在本文档里始终分开写。</p>
@@ -180,7 +180,7 @@
 </table>
 
 <h2 id="s4">4 实际修改与删除清单</h2>
-<p>相对基线 <code>9b9b4de</code>（不含本报告自身）共 <b>25 个文件变更，3 607 行新增，17 行删除</b>；加上本报告为 26 个文件。<b>本轮没有删除任何文件</b>（唯一的目录级删除在 §5：旧 worktree 目录与旧本地分支引用）。</p>
+<p>相对基线 <code>9b9b4de</code>（不含本报告自身）共 <b>25 个文件变更，3 626 行新增，17 行删除</b>；加上本报告为 26 个文件、4 163 行新增。<b>本轮没有删除任何文件</b>（唯一的目录级删除在 §5：旧 worktree 目录与旧本地分支引用）。</p>
 <h3>4.1 本轮新增的文件</h3>
 <table>
   <thead><tr><th>文件</th><th>行数</th><th>作用</th></tr></thead>
@@ -193,7 +193,7 @@
     <tr><td><code>services/knowledge-core/test/local-storage-slice.test.ts</code></td><td>245</td><td>零云纵向切片 5 项（含 SIGKILL 崩溃读回）</td></tr>
     <tr><td><code>services/knowledge-core/test/crash-writer.ts</code></td><td>22</td><td>崩溃测试的子进程 fixture（提交后自杀，不执行 <code>close()</code>）</td></tr>
     <tr><td><code>packages/shared/test/env.test.ts</code></td><td>37</td><td>驱动名严格化与阈值钳制（4 项）</td></tr>
-    <tr><td><code>docs/P0-baseline-and-recovery.md</code></td><td>154</td><td>基线核查、归档与恢复记录、能力映射、实测结果</td></tr>
+    <tr><td><code>docs/P0-baseline-and-recovery.md</code></td><td>173</td><td>基线核查、归档与恢复记录、能力映射、实测结果、用例分布与遗留物盘点</td></tr>
     <tr><td><code>Noltri_Local_Desktop_Research_V1_Development.md</code></td><td>777</td><td>本轮开发基准文档（用户提供的原文入库）</td></tr>
     <tr><td><code>docs/Noltri_V1_P1_Delivery_Report.html</code></td><td>本文件</td><td>最终交付报告（单文件 HTML）</td></tr>
   </tbody>
@@ -224,7 +224,7 @@
   <thead><tr><th>项</th><th>实测结果</th></tr></thead>
   <tbody>
     <tr><td>开发分支</td><td><code>v1_research&amp;modify</code>，由 <code>main</code> 基线 <code>9b9b4deeb1eda64232c5c382011026ec2b824f2f</code> 以 <code>git switch -c</code> 创建（<b>未使用 <code>-C</code></b>，创建前确认同名分支不存在）</td></tr>
-    <tr><td>提交序列</td><td><code>7909cf9</code> chore → <code>776d424</code> feat(storage) → <code>4e79345</code> feat(core) → <code>2ceecdb</code> docs(P0/P1) → <code>a979799</code> test(core) 崩溃读回 → <code>014f1fa</code> docs(P1) → 本报告一笔 docs。均<b>未推送</b>（本轮未获推送授权）</td></tr>
+    <tr><td>提交序列（8 笔）</td><td><code>7909cf9</code> chore → <code>776d424</code> feat(storage) → <code>4e79345</code> feat(core) → <code>2ceecdb</code> docs(P0/P1) → <code>a979799</code> test(core) 崩溃读回 → <code>014f1fa</code> docs(P1) → <code>60f93a3</code> docs 交付报告与用例数更正 → <code>028a715</code> docs 用例分布与遗留物盘点。全部<b>未推送</b>（本轮未获推送授权）</td></tr>
     <tr><td>撤下旧研究工作树</td><td><code>git worktree remove '/Users/youngi/Documents/MiniWork/知序-Noltri-Research-V1'</code> — 成功，<b>未使用 <code>--force</code>，未使用 <code>rm -rf</code></b>；目录已从磁盘消失</td></tr>
     <tr><td>删除旧本地分支</td><td><code>git branch -d feature/research-v1</code>（was <code>ad1d0c69c9d7316c0b2d2aba48699351701fd7e0</code>）— 成功，安全删除路径，<b>无需 <code>-D</code></b></td></tr>
     <tr><td>远端保留</td><td><code>git ls-remote --heads origin feature/research-v1</code> = <code>ad1d0c69…fd7e0</code>，未做任何远端删除</td></tr>
@@ -405,7 +405,7 @@ records a complete history        # 本轮重新执行，结果与开发前一�
 </ol>
 
 <h2 id="s13">13 文档回写内容（已提交进仓库，此处给全文以便复制）</h2>
-<p class="sub">这些内容<b>不是只塞进 HTML</b>：它们已经在 <code>FUNCTION_MAP.md</code> 与 <code>docs/P0-baseline-and-recovery.md</code> 中真实提交（<code>2ceecdb</code>、<code>014f1fa</code>）。以下区块与仓库内容逐字一致。</p>
+<p class="sub">这些内容<b>不是只塞进 HTML</b>：它们已经在 <code>FUNCTION_MAP.md</code> 与 <code>docs/P0-baseline-and-recovery.md</code> 中真实提交（<code>2ceecdb</code>、<code>014f1fa</code>、<code>60f93a3</code>、<code>028a715</code>）。以下区块的文字与仓库内容一致，仅为便于阅读去掉了 Markdown 的反引号与表格竖线外的空格。</p>
 
 <h3>13.1 <code>FUNCTION_MAP.md</code> 新增／改写条目</h3>
 <pre><code>### Knowledge Core（71 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片）
