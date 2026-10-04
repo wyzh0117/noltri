@@ -71,6 +71,12 @@ function App(): ReactElement {
         <p className="muted">
           设备 {state.deviceId}｜全局快捷键 {state.globalShortcut}｜Core {state.apiBaseUrl}
         </p>
+        <p>
+          <button type="button" onClick={() => void commands.openWorkbench().catch(() => undefined)}>
+            打开知识工作台
+          </button>
+          <span className="muted"> 知识树、收件箱、搜索与节点对话在工作台窗口，这里只管捕获与连接。</span>
+        </p>
       </header>
 
       <section aria-labelledby="capture-heading">

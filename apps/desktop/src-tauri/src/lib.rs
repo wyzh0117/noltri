@@ -5,8 +5,8 @@
 //! 2. Start the polling observer and the global shortcut. Each of those may legitimately fail
 //!    (no Accessibility permission, the shortcut is taken by another app) without taking the Setup
 //!    Manager down with it — a broken capture rung must never hide the diagnostics that explain it.
-//! 3. Keep the two floating windows alive for the whole session (created once, shown/hidden) and
-//!    track their focus, so the observer never reads the pill's own text field.
+//! 3. Keep the floating windows and the 知识工作台 alive for the whole session (created once,
+//!    shown/hidden) and track overlay focus, so the observer never reads the pill's own text field.
 
 mod commands;
 mod mcp;
@@ -14,6 +14,7 @@ mod overlay;
 mod settings;
 mod state;
 mod time;
+mod windows;
 
 pub mod accessibility;
 
@@ -25,6 +26,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use crate::accessibility::observer::{self, Observer};
 use crate::overlay::{PASTE_LABEL, OVERLAY_LABEL};
 use crate::state::RuntimeState;
+use crate::windows::WORKBENCH_LABEL;
 
 /// The observer thread and every command share one lock. Poisoning is recovered rather than
 /// propagated: a panic inside the AX layer must not stop the Setup Manager from answering.
@@ -149,9 +151,21 @@ pub fn run() {
             if let Err(error) = overlay::create_paste_window(&handle) {
                 eprintln!("[noltri] 粘贴窗口创建失败: {error}");
             }
+            if let Err(error) = windows::create_workbench(&handle) {
+                eprintln!("[noltri] 知识工作台窗口创建失败: {error}");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == WORKBENCH_LABEL {
+                // Closing the workbench puts it away rather than destroying it: `open_workbench` can only
+                // show a window that still exists, so a closed workbench must stay reopenable.
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                return;
+            }
             if !is_companion_window(window.label()) {
                 return;
             }
@@ -180,6 +194,8 @@ pub fn run() {
             commands::open_accessibility_settings,
             commands::hide_window,
             commands::open_paste_window,
+            commands::open_workbench_window,
+            commands::open_setup_manager,
             commands::paste_selection,
             commands::set_capture_enabled,
             commands::get_settings,

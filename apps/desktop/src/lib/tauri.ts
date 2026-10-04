@@ -15,6 +15,8 @@ export const commands = {
   recheckPermission: (prompt: boolean) => invoke<boolean>('recheck_permission', { prompt }),
   openAccessibilitySettings: () => invoke<void>('open_accessibility_settings'),
   openPasteWindow: () => invoke<void>('open_paste_window'),
+  openWorkbench: () => invoke<void>('open_workbench_window'),
+  openSetupManager: () => invoke<void>('open_setup_manager'),
   pasteSelection: (payload: { text: string; appName?: string; windowTitle?: string }) =>
     invoke<unknown>('paste_selection', { payload }),
   setCaptureEnabled: (enabled: boolean) => invoke<import('./types').CaptureStateOut>('set_capture_enabled', { enabled }),

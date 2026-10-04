@@ -1,4 +1,4 @@
-//! Tauri commands: the whole IPC surface the Setup Manager, the pill and the paste window use.
+//! Tauri commands: the whole IPC surface the Setup Manager, the workbench, the pill and the paste window use.
 //!
 //! Window mutations live here rather than in the frontend so the capability surface stays
 //! `core:default` + global-shortcut: the webviews only `listen()` and call these commands.
@@ -12,6 +12,7 @@ use crate::mcp::{self, Target, TargetFacts};
 use crate::overlay;
 use crate::settings::{self, IncompatibleApp, OverlayPositionMode, Settings, SettingsPatch};
 use crate::state::{CaptureOutcome, ObserverStatus, Sample};
+use crate::windows;
 use crate::SharedState;
 
 const CONFIG_READ_LIMIT: usize = 2_000_000;
@@ -204,6 +205,18 @@ pub fn hide_window(app: AppHandle, label: String) -> Result<(), String> {
 pub fn open_paste_window(app: AppHandle) -> Result<(), String> {
     overlay::open_paste(&app);
     Ok(())
+}
+
+/// 知识工作台 (P2): the migrated 知识树 / 收件箱 / 搜索 / 节点对话, in its own window reading the same settings.
+#[tauri::command]
+pub fn open_workbench_window(app: AppHandle) -> Result<(), String> {
+    windows::open_workbench(&app)
+}
+
+/// Raise the Setup Manager from the workbench — that window owns the values this one only reads.
+#[tauri::command]
+pub fn open_setup_manager(app: AppHandle) -> Result<(), String> {
+    windows::open_setup_manager(&app)
 }
 
 /// Second-level fallback with the text the user already has in hand (V1 §11.4 level two).
