@@ -1,19 +1,30 @@
 import { z } from 'zod';
 import {
   apiErrorSchema,
+  assignSourceRequestSchema,
+  assignSourceResponseSchema,
   captureRequestSchema,
   captureResultSchema,
+  conversationListResponseSchema,
+  conversationMessagesResponseSchema,
   healthResponseSchema,
+  inboxResponseSchema,
   knowledgeNodeSchema,
   moveNodeResponseSchema,
   nodeChatResponseSchema,
   nodeContextSchema,
   nodeDetailSchema,
+  rawSourceSchema,
   searchResponseSchema,
   treeResponseSchema,
+  type AssignSourceRequest,
+  type AssignSourceResponse,
   type CaptureRequest,
   type CaptureResult,
+  type Conversation,
+  type ConversationMessage,
   type HealthResponse,
+  type InboxResponse,
   type KnowledgeNode,
   type MoveNodeRequest,
   type MoveNodeResponse,
@@ -23,6 +34,7 @@ import {
   type NodeContextRequest,
   type NodeDetail,
   type PatchNodeRequest,
+  type RawSource,
   type SearchRequest,
   type SearchResponse,
   type TreeQuery,
@@ -34,11 +46,17 @@ export const apiRoutes = {
   health: '/api/health',
   capture: '/api/capture',
   tree: '/api/tree',
+  inbox: '/api/inbox',
+  inboxSource: (id: string) => `/api/inbox/${encodeURIComponent(id)}`,
+  inboxAssign: (id: string) => `/api/inbox/${encodeURIComponent(id)}/assign`,
+  captureRetry: (id: string) => `/api/capture/${encodeURIComponent(id)}/retry`,
   node: (id: string) => `/api/nodes/${encodeURIComponent(id)}`,
   move: (id: string) => `/api/nodes/${encodeURIComponent(id)}/move`,
   search: '/api/search',
   nodeContext: '/api/node-context',
   chat: '/api/chat',
+  conversations: '/api/conversations',
+  conversationMessages: (id: string) => `/api/conversations/${encodeURIComponent(id)}/messages`,
 } as const;
 
 export class ApiClientError extends Error {
@@ -59,6 +77,11 @@ export interface ApiClientOptions {
   baseUrl: string;
   /** Bearer token: Supabase JWT in the web app, device token for extension/desktop. */
   token?: string;
+  /**
+   * Which entry point is calling. The core writes it onto version records for provenance; it is a
+   * display hint only and never selects a user.
+   */
+  clientHint?: 'extension' | 'desktop' | 'mcp' | 'web_app';
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -89,12 +112,14 @@ export function buildCaptureRequest(input: BuildCaptureRequestInput): CaptureReq
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly token?: string;
+  private readonly clientHint?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.token = options.token;
+    this.clientHint = options.clientHint;
     this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
     this.timeoutMs = options.timeoutMs ?? 60_000;
   }
@@ -124,6 +149,36 @@ export class ApiClient {
     return this.request('GET', apiRoutes.node(id), nodeDetailSchema);
   }
 
+  /** 收件箱 feed. `status` is comma-separated, matching the server's query contract. */
+  inbox(query: { status?: string; limit?: number; offset?: number } = {}): Promise<InboxResponse> {
+    const params = new URLSearchParams();
+    if (query.status) params.set('status', query.status);
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.offset !== undefined) params.set('offset', String(query.offset));
+    const suffix = params.toString();
+    return this.request('GET', `${apiRoutes.inbox}${suffix ? `?${suffix}` : ''}`, inboxResponseSchema);
+  }
+
+  rawSource(id: string): Promise<RawSource> {
+    return this.request('GET', apiRoutes.inboxSource(id), rawSourceSchema);
+  }
+
+  assignSource(rawSourceId: string, request: AssignSourceRequest): Promise<AssignSourceResponse> {
+    const validated = assignSourceRequestSchema.safeParse(request);
+    if (!validated.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Assign payload is not sendable', validated.error.issues);
+    }
+    return this.request('POST', apiRoutes.inboxAssign(rawSourceId), assignSourceResponseSchema, { body: validated.data });
+  }
+
+  /**
+   * Re-run the compile pipeline for a saved capture. Body-less POST: the server already owns the text,
+   * so a retry can never resend content the user did not capture.
+   */
+  retryCapture(rawSourceId: string): Promise<CaptureResult> {
+    return this.request('POST', apiRoutes.captureRetry(rawSourceId), captureResultSchema);
+  }
+
   patchNode(id: string, patch: PatchNodeRequest): Promise<KnowledgeNode> {
     return this.request('PATCH', apiRoutes.node(id), knowledgeNodeSchema, { body: patch });
   }
@@ -147,6 +202,23 @@ export class ApiClient {
     });
   }
 
+  /** Threads Core kept for this caller, optionally narrowed to one node. */
+  async conversations(nodeId?: string): Promise<Conversation[]> {
+    const suffix = nodeId === undefined ? '' : `?nodeId=${encodeURIComponent(nodeId)}`;
+    const result = await this.request('GET', `${apiRoutes.conversations}${suffix}`, conversationListResponseSchema);
+    return result.conversations;
+  }
+
+  /** The stored transcript, in the order Knowledge Core wrote it. */
+  async conversationMessages(conversationId: string): Promise<ConversationMessage[]> {
+    const result = await this.request(
+      'GET',
+      apiRoutes.conversationMessages(conversationId),
+      conversationMessagesResponseSchema,
+    );
+    return result.messages;
+  }
+
   private async request<Output>(
     method: string,
     path: string,
@@ -156,6 +228,7 @@ export class ApiClient {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (init.body !== undefined) headers['content-type'] = 'application/json';
     if (this.token) headers.authorization = `Bearer ${this.token}`;
+    if (this.clientHint) headers['x-noltri-client'] = this.clientHint;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? this.timeoutMs);

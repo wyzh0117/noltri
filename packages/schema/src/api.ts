@@ -11,6 +11,7 @@ import {
   contextScopeSchema,
   edgeRelationSchema,
   nodeStatusSchema,
+  processingStatusSchema,
   searchModeSchema,
   type NodeStatus,
 } from './enums';
@@ -268,3 +269,57 @@ export const conversationMessagesResponseSchema = z.object({
 export const versionListResponseSchema = z.object({
   records: z.array(versionRecordSchema),
 });
+
+// --- GET /api/inbox --------------------------------------------------------
+/**
+ * The capture feed behind 收件箱. `status` is a comma-separated list of processing statuses because
+ * the router builds query objects with `Object.fromEntries`, which collapses repeated keys.
+ */
+export const inboxQuerySchema = z.object({
+  status: z.string().trim().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+export type InboxQuery = z.infer<typeof inboxQuerySchema>;
+
+export const inboxEntrySchema = z.object({
+  id: z.string(),
+  sourceType: rawSourceSchema.shape.sourceType,
+  sourcePlatform: z.string().nullable(),
+  sourceApp: z.string().nullable(),
+  sourceTitle: z.string().nullable(),
+  sourceUrl: z.string().nullable(),
+  capturedAt: z.string(),
+  processingStatus: processingStatusSchema,
+  errorReason: z.string().nullable(),
+  /** Preview only — the full text is one owner-scoped `GET /api/inbox/:id` away. */
+  textPreview: z.string(),
+  rawTextLength: z.number().int().min(0),
+});
+export type InboxEntry = z.infer<typeof inboxEntrySchema>;
+
+export const inboxCountsSchema = z.record(processingStatusSchema, z.number().int().min(0));
+export type InboxCounts = z.infer<typeof inboxCountsSchema>;
+
+export const inboxResponseSchema = z.object({
+  entries: z.array(inboxEntrySchema),
+  /** Whole-library totals per status, so paging never makes a badge lie. */
+  counts: inboxCountsSchema,
+  limit: z.number().int().min(1),
+  offset: z.number().int().min(0),
+});
+export type InboxResponse = z.infer<typeof inboxResponseSchema>;
+
+// --- POST /api/inbox/:id/assign -------------------------------------------
+export const assignSourceRequestSchema = z.object({
+  nodeId: z.string().min(1),
+  /** Defaults to the stored raw text; a person may file the sentence they actually want kept. */
+  text: z.string().trim().min(1).max(4000).optional(),
+});
+export type AssignSourceRequest = z.infer<typeof assignSourceRequestSchema>;
+
+export const assignSourceResponseSchema = z.object({
+  item: knowledgeItemSchema,
+  path: z.array(nodePathSegmentSchema),
+});
+export type AssignSourceResponse = z.infer<typeof assignSourceResponseSchema>;
