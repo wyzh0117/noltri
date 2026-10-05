@@ -175,6 +175,15 @@ input:not([type]) {
   border-color: #d8b4b4;
 }
 
+/* 授权行：写进第三方配置的凭据、它的范围和撤销入口。 */
+.grant-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
 .setup-footer {
   text-align: center;
 }

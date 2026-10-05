@@ -4,12 +4,14 @@
  * 捕获: honest Accessibility status (the grant belongs to macOS System Settings and is never
  * bypassed), a live one-shot capture test, gating knobs and the per-app opt-out lists.
  * AI 连接: detect → test → prepare → (optionally) write, per MCP client; Cursor / Codex / 其他 are
- * guided with a copyable entry instead of a written file.
+ * guided with a copyable entry instead of a written file. A written config receives a freshly minted
+ * per-client grant (采集 + 读取) rather than the device credential, and both 撤销 and 卸载 retire it.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import type { ReactElement } from 'react';
+import type { IssueGrantResponse, PublicGrant } from '@noltri/api-client';
 import { commands } from './lib/tauri';
 import type { CaptureStateOut, ConfigBackup, ConnectionProbeOut, SettingsShape, TargetFacts } from './lib/types';
 import {
@@ -21,6 +23,15 @@ import {
   serializeDocument,
   summarizeMerge,
 } from './lib/mcp-config';
+import {
+  AGENT_SCOPES,
+  credentialFromMint,
+  currentGrant,
+  describeGrant,
+  grantClientFor,
+  grantLabelFor,
+  supersededGrants,
+} from './lib/grants';
 import { agentRows, canWriteConfig, hasOfficialEntry, supportLabel } from './lib/agent-matrix';
 import { runConnectionProbe, type ConnectionPhase, type ProbeResult } from './lib/connection-status';
 
@@ -277,11 +288,22 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
   const [detail, setDetail] = useState('');
   const [copied, setCopied] = useState(false);
   const [backups, setBackups] = useState<ConfigBackup[] | null>(null);
+  const [grant, setGrant] = useState<PublicGrant | null>(null);
 
   async function loadFacts(): Promise<TargetFacts> {
     const resolved = await commands.mcpConfigFor(targetKey);
     setFacts(resolved);
+    void refreshGrant(resolved);
     return resolved;
+  }
+
+  /** Best effort: a Core that will not answer leaves the 授权 row empty, which is the honest state. */
+  async function refreshGrant(resolved: TargetFacts): Promise<void> {
+    try {
+      setGrant(currentGrant(await grantClientFor(resolved, token).grants(), grantLabelFor(resolved)));
+    } catch {
+      setGrant(null);
+    }
   }
 
   useEffect(() => {
@@ -307,9 +329,10 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
   const writable = facts !== null && canWriteConfig(facts);
 
   async function writeToConfig(): Promise<void> {
-    if (facts === null || entry === null || facts.configPath === null) return;
-    // The pure merge runs here with the file's real current content; Rust re-validates before the
-    // atomic write and refuses anything that would drop another server.
+    if (facts === null || facts.configPath === null) return;
+    const label = grantLabelFor(facts);
+
+    // Read and parse first: a file we cannot even parse should not cost a credential.
     let raw: string | null;
     let document: Record<string, unknown>;
     try {
@@ -319,24 +342,115 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
       setDetail(`未写入：${reasonOf(error)}`);
       return;
     }
-    const merged = mergeServerEntry(document, facts.serverName, entry);
+
+    // §431: the credential in that file lives in an application this project does not control, so the
+    // write mints a per-client grant with the smallest scopes instead of shipping the device key. Only
+    // a deployment that never turned on 客户端授权 keeps using the old credential, and it says so.
+    let minted: IssueGrantResponse | null = null;
+    let mintError: unknown = null;
+    try {
+      minted = await grantClientFor(facts, token).issueGrant({
+        label,
+        client: facts.target,
+        scopes: [...AGENT_SCOPES],
+      });
+    } catch (error) {
+      mintError = error;
+    }
+    const credential = credentialFromMint({ minted, error: mintError, deviceToken: token, label });
+    if (!credential.ok) {
+      setDetail(credential.detail);
+      return;
+    }
+
+    // The pure merge runs here with the file's real current content; Rust re-validates before the
+    // atomic write and refuses anything that would drop another server.
+    const merged = mergeServerEntry(document, facts.serverName, buildServerEntry(facts.endpoint, credential.token));
     if (!merged.ok) {
-      setDetail(`未写入：${merged.reason}`);
+      setDetail(`未写入：${merged.reason}${minted === null ? '' : '；刚签发的授权请点「撤销授权」。'}`);
       return;
     }
     const confirmed = window.confirm(
-      `即将写入：${facts.configPath}\n\n${summarizeMerge(raw, facts.serverName)}\n\n原文件会先备份为带时间戳的副本，确认写入？`,
+      `即将写入：${facts.configPath}\n\n${summarizeMerge(raw, facts.serverName)}\n\n${credential.note}\n\n` +
+        '原文件会先备份为带时间戳的副本，确认写入？',
     );
-    if (!confirmed) return;
+    if (!confirmed) {
+      if (minted === null) return;
+      setDetail(`已取消写入。${await revokeGrantOrExplain(facts, minted.grant.id, '刚签发的授权已同步撤销。')}`);
+      return;
+    }
     try {
       await commands.writeMcpConfig(facts.target, facts.configPath, serializeDocument(merged.document));
-      setDetail('已写入配置文件。请重启对应客户端以加载知序服务器。');
     } catch (error) {
-      setDetail(`写入被拒绝：${reasonOf(error)}`);
+      if (minted === null) {
+        setDetail(`写入被拒绝：${reasonOf(error)}`);
+        return;
+      }
+      // A rejected write must not leave a live key that no config file points at.
+      setDetail(
+        `写入被拒绝：${reasonOf(error)}。${await revokeGrantOrExplain(facts, minted.grant.id, '刚签发的授权已撤销，没有留下可用凭据。')}`,
+      );
       return;
+    }
+    setDetail(
+      `已写入配置文件${minted === null ? '' : `，并为「${label}」签发专属授权`}。请重启对应客户端以加载知序服务器。`,
+    );
+    if (minted !== null) {
+      setGrant(minted.grant);
+      try {
+        const client = grantClientFor(facts, token);
+        const list = await client.grants();
+        // M02 idempotency: re-writing the same client replaces its credential rather than
+        // accumulating a pile of live grants.
+        for (const stale of supersededGrants(list, label, minted.grant.id)) {
+          try {
+            await client.revokeGrant(stale.id);
+          } catch {
+            // The next refresh shows what is still live; 撤销 stays clickable here.
+          }
+        }
+      } catch {
+        // The fresh grant is already in the config file, so the connection works regardless.
+      }
     }
     await loadFacts();
     await refreshBackups();
+  }
+
+  /** A revocation that must never mask the result it follows: report, but do not fail the caller. */
+  async function revokeGrantOrExplain(resolved: TargetFacts, id: string, okText: string): Promise<string> {
+    try {
+      await grantClientFor(resolved, token).revokeGrant(id);
+      return okText;
+    } catch {
+      return '授权未能自动撤销，请点击「撤销授权」。';
+    }
+  }
+
+  async function revokeCurrentGrant(): Promise<void> {
+    if (facts === null || grant === null) return;
+    const confirmed = window.confirm(
+      `撤销「${grant.label}」？\n\n该客户端的下一次请求会被拒绝，需要重新写入配置才能恢复。其他客户端不受影响。`,
+    );
+    if (!confirmed) return;
+    try {
+      setGrant(await grantClientFor(facts, token).revokeGrant(grant.id));
+      setDetail('已撤销该客户端的授权；持旧凭据的连接会在下一次请求时失效。');
+    } catch (error) {
+      setDetail(`撤销失败：${reasonOf(error)}`);
+    }
+  }
+
+  /** 卸载 = 删条目 + 让那条目的凭据失效；否则配置文件干净了，密钥却还活着。 */
+  async function revokeLiveGrant(resolved: TargetFacts): Promise<string> {
+    const label = grantLabelFor(resolved);
+    try {
+      const live = currentGrant(await grantClientFor(resolved, token).grants(), label);
+      if (live === null) return '';
+      return await revokeGrantOrExplain(resolved, live.id, `已同时撤销「${label}」的授权。`);
+    } catch {
+      return `无法确认「${label}」的授权状态，请在检测连接后复查。`;
+    }
   }
 
   /** 卸载 = 只删自己那一条。其余服务器与未知字段由 removeServerEntry 原样保留。 */
@@ -366,11 +480,11 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
     if (!confirmed) return;
     try {
       await commands.removeMcpConfig(facts.target, facts.configPath, serializeDocument(outcome.document));
-      setDetail('已移除知序条目，其它服务器保持不变。原文件已备份，可恢复。');
     } catch (error) {
       setDetail(`移除被拒绝：${reasonOf(error)}`);
       return;
     }
+    setDetail(`已移除知序条目，其它服务器保持不变。原文件已备份，可恢复。${await revokeLiveGrant(facts)}`);
     await loadFacts();
     await refreshBackups();
   }
@@ -431,6 +545,18 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
             </div>
           ))}
         </dl>
+      )}
+      {facts !== null && (
+        <p className="grant-row">
+          授权：
+          {grant === null ? '这个客户端当前没有生效中的专属授权；写入配置时会按客户端签发一份。' : describeGrant(grant)}
+          {grant !== null && grant.revokedAt === null && (
+            <button type="button" className="button-danger" onClick={() => void revokeCurrentGrant()}>
+              撤销授权
+            </button>
+          )}
+          <span className="muted">「复制 MCP 条目」仍沿用设备凭据，需要可撤销的授权请走「写入配置」。</span>
+        </p>
       )}
       <div className="row">
         <button type="button" onClick={() => void test()}>
