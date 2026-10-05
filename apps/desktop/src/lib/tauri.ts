@@ -31,6 +31,12 @@ export const commands = {
   readConfigFile: (path: string) => invoke<string | null>('read_config_file', { path }),
   writeMcpConfig: (target: string, path: string, contents: string) =>
     invoke<string>('write_mcp_config', { target, path, contents }),
+  removeMcpConfig: (target: string, path: string, contents: string) =>
+    invoke<string>('remove_mcp_config', { target, path, contents }),
+  listConfigBackups: (target: string, path: string) =>
+    invoke<import('./types').ConfigBackup[]>('list_config_backups', { target, path }),
+  restoreMcpConfig: (target: string, path: string, backupFile: string) =>
+    invoke<string>('restore_mcp_config', { target, path, backupFile }),
   openConnectionUrl: (target: string) => invoke<string>('open_connection_url', { target }),
   openDocumentation: (target: string) => invoke<string>('open_documentation', { target }),
   recordCaptureOutcome: (outcome: {

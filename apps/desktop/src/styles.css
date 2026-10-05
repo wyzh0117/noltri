@@ -148,6 +148,33 @@ input:not([type]) {
   overflow-wrap: anywhere;
 }
 
+/* 撤销区：备份是写前自动产生的，这里只负责让人挑一个回去。 */
+.undo {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e4e6ea;
+  font-size: 12px;
+}
+
+.backup-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.backup-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.button-danger {
+  color: #8a1c1c;
+  border-color: #d8b4b4;
+}
+
 .setup-footer {
   text-align: center;
 }

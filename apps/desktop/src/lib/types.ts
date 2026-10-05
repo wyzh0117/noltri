@@ -127,3 +127,13 @@ export interface TargetFacts {
   readonly coreBaseUrl: string;
   readonly tokenConfigured: boolean;
 }
+
+/** One 修改前备份 Setup Manager made for a config file, newest first (`list_config_backups`). */
+export interface ConfigBackup {
+  readonly file: string;
+  /** Epoch milliseconds from the file name — the only stamp that survives a rename. */
+  readonly madeAt: number;
+  readonly bytes: number;
+  /** The same instant rendered for a human, UTC. */
+  readonly madeAtLabel: string;
+}

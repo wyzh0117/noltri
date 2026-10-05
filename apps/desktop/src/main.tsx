@@ -11,8 +11,16 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import type { ReactElement } from 'react';
 import { commands } from './lib/tauri';
-import type { CaptureStateOut, ConnectionProbeOut, SettingsShape, TargetFacts } from './lib/types';
-import { buildServerEntry, mergeServerEntry, parseExistingConfig, serializeDocument, summarizeMerge } from './lib/mcp-config';
+import type { CaptureStateOut, ConfigBackup, ConnectionProbeOut, SettingsShape, TargetFacts } from './lib/types';
+import {
+  buildServerEntry,
+  describeRemoval,
+  mergeServerEntry,
+  parseExistingConfig,
+  removeServerEntry,
+  serializeDocument,
+  summarizeMerge,
+} from './lib/mcp-config';
 import { agentRows, canWriteConfig, hasOfficialEntry, supportLabel } from './lib/agent-matrix';
 import { runConnectionProbe, type ConnectionPhase, type ProbeResult } from './lib/connection-status';
 
@@ -258,12 +266,17 @@ const PHASE_LABEL: Record<ConnectionPhase, string> = {
   unreachable: '不可达',
 };
 
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: string; token: string }): ReactElement {
   const [facts, setFacts] = useState<TargetFacts | null>(null);
   const [local, setLocal] = useState<ConnectionProbeOut | null>(null);
   const [phase, setPhase] = useState<ConnectionPhase>('idle');
   const [detail, setDetail] = useState('');
   const [copied, setCopied] = useState(false);
+  const [backups, setBackups] = useState<ConfigBackup[] | null>(null);
 
   async function loadFacts(): Promise<TargetFacts> {
     const resolved = await commands.mcpConfigFor(targetKey);
@@ -297,19 +310,97 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
     if (facts === null || entry === null || facts.configPath === null) return;
     // The pure merge runs here with the file's real current content; Rust re-validates before the
     // atomic write and refuses anything that would drop another server.
-    const raw = await commands.readConfigFile(facts.configPath);
-    const merged = mergeServerEntry(parseExistingConfig(raw), facts.serverName, entry);
+    let raw: string | null;
+    let document: Record<string, unknown>;
+    try {
+      raw = await commands.readConfigFile(facts.configPath);
+      document = parseExistingConfig(raw);
+    } catch (error) {
+      setDetail(`未写入：${reasonOf(error)}`);
+      return;
+    }
+    const merged = mergeServerEntry(document, facts.serverName, entry);
     if (!merged.ok) {
       setDetail(`未写入：${merged.reason}`);
       return;
     }
     const confirmed = window.confirm(
-      `即将写入：${facts.configPath}\n\n${summarizeMerge(raw, facts.serverName)}\n\n确认写入？`,
+      `即将写入：${facts.configPath}\n\n${summarizeMerge(raw, facts.serverName)}\n\n原文件会先备份为带时间戳的副本，确认写入？`,
     );
     if (!confirmed) return;
-    await commands.writeMcpConfig(facts.target, facts.configPath, serializeDocument(merged.document));
-    setDetail('已写入配置文件。请重启对应客户端以加载知序服务器。');
+    try {
+      await commands.writeMcpConfig(facts.target, facts.configPath, serializeDocument(merged.document));
+      setDetail('已写入配置文件。请重启对应客户端以加载知序服务器。');
+    } catch (error) {
+      setDetail(`写入被拒绝：${reasonOf(error)}`);
+      return;
+    }
     await loadFacts();
+    await refreshBackups();
+  }
+
+  /** 卸载 = 只删自己那一条。其余服务器与未知字段由 removeServerEntry 原样保留。 */
+  async function removeFromConfig(): Promise<void> {
+    if (facts === null || facts.configPath === null) return;
+    let raw: string | null;
+    let document: Record<string, unknown>;
+    try {
+      raw = await commands.readConfigFile(facts.configPath);
+      document = parseExistingConfig(raw);
+    } catch (error) {
+      setDetail(`未移除：${reasonOf(error)}`);
+      return;
+    }
+    const outcome = removeServerEntry(document, facts.serverName);
+    if (!outcome.ok) {
+      setDetail(`未移除：${outcome.reason}`);
+      return;
+    }
+    if (!outcome.removed) {
+      setDetail(`配置文件中没有「${facts.serverName}」条目，文件未做任何修改`);
+      return;
+    }
+    const confirmed = window.confirm(
+      `即将修改：${facts.configPath}\n\n${describeRemoval(raw, facts.serverName)}\n\n确认移除知序条目？`,
+    );
+    if (!confirmed) return;
+    try {
+      await commands.removeMcpConfig(facts.target, facts.configPath, serializeDocument(outcome.document));
+      setDetail('已移除知序条目，其它服务器保持不变。原文件已备份，可恢复。');
+    } catch (error) {
+      setDetail(`移除被拒绝：${reasonOf(error)}`);
+      return;
+    }
+    await loadFacts();
+    await refreshBackups();
+  }
+
+  async function refreshBackups(): Promise<void> {
+    if (facts === null || facts.configPath === null) return;
+    try {
+      setBackups(await commands.listConfigBackups(facts.target, facts.configPath));
+    } catch (error) {
+      setBackups(null);
+      setDetail(`读取备份失败：${reasonOf(error)}`);
+    }
+  }
+
+  async function restoreFrom(backup: ConfigBackup): Promise<void> {
+    if (facts === null || facts.configPath === null) return;
+    const confirmed = window.confirm(
+      `将用 ${backup.madeAtLabel}（${String(backup.bytes)} 字节）覆盖：\n${facts.configPath}\n\n` +
+        '当前内容会先写入新的备份，所以这次恢复本身也能撤销。\n\n确认恢复？',
+    );
+    if (!confirmed) return;
+    try {
+      await commands.restoreMcpConfig(facts.target, facts.configPath, backup.file);
+      setDetail(`已恢复到 ${backup.madeAtLabel} 的内容。请重启对应客户端。`);
+    } catch (error) {
+      setDetail(`恢复失败：${reasonOf(error)}`);
+      return;
+    }
+    await loadFacts();
+    await refreshBackups();
   }
 
   return (
@@ -356,9 +447,14 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
           </button>
         )}
         {writable && facts?.configPath != null && (
-          <button type="button" onClick={() => void writeToConfig()}>
-            写入 {facts.configPath}
-          </button>
+          <>
+            <button type="button" onClick={() => void writeToConfig()}>
+              写入 {facts.configPath}
+            </button>
+            <button type="button" className="button-danger" onClick={() => void removeFromConfig()}>
+              移除知序条目
+            </button>
+          </>
         )}
         {facts !== null && hasOfficialEntry(facts) && (
           <>
@@ -375,6 +471,31 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
           </>
         )}
       </div>
+      {writable && facts?.configPath != null && (
+        <div className="undo">
+          <div className="row">
+            <button type="button" onClick={() => void refreshBackups()}>
+              列出修改前备份
+            </button>
+          </div>
+          {backups === null ? (
+            <p className="muted">备份在每次写入或移除前自动创建；点击上方按钮查看可恢复的版本。</p>
+          ) : backups.length === 0 ? (
+            <p className="muted">这个文件还没有由知序创建的备份。</p>
+          ) : (
+            <ul className="backup-list">
+              {backups.map((backup) => (
+                <li key={backup.file}>
+                  {backup.madeAtLabel}｜{String(backup.bytes)} 字节｜{backup.file}
+                  <button type="button" onClick={() => void restoreFrom(backup)}>
+                    恢复到此版本
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </article>
   );
 }
