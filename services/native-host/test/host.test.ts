@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ApiClientError } from '@noltri/api-client';
+import { ApiClientError, verifyCoreIdentity } from '@noltri/api-client';
 import { CORE_PRODUCT_ID, CORE_PROTOCOL_VERSION, type CaptureRequest, type CaptureResult, type HealthResponse } from '@noltri/schema';
-import { createGateway, createHostSession, readableCoreMessage, verifyIdentity, type CoreGateway } from '../src/host';
+import { createGateway, createHostSession, readableCoreMessage, type CoreGateway } from '../src/host';
 import { captureRequest, coreHealth, captureResult, SECRET_TEXT } from './fixtures';
 import type { HostRequest, HostResponse } from '../src/protocol';
 
@@ -59,7 +59,7 @@ async function handle(gateway: CoreGateway, request: HostRequest): Promise<HostR
 
 describe('the port must prove it is Noltri before text leaves the host (§7.6)', () => {
   it('accepts a Core that names the product, the protocol and its instance', () => {
-    const verdict = verifyIdentity(coreHealth());
+    const verdict = verifyCoreIdentity(coreHealth());
     expect(verdict.ok).toBe(true);
     if (!verdict.ok) throw new Error('unreachable');
     expect(verdict.identity).toEqual({
@@ -72,7 +72,7 @@ describe('the port must prove it is Noltri before text leaves the host (§7.6)',
   });
 
   it('refuses a different service answering on the same port', () => {
-    const verdict = verifyIdentity(coreHealth({ productId: 'some-other-local-server' }));
+    const verdict = verifyCoreIdentity(coreHealth({ productId: 'some-other-local-server' }));
     expect(verdict.ok).toBe(false);
     if (verdict.ok) throw new Error('unreachable');
     expect(verdict.code).toBe('core_identity_mismatch');
@@ -80,7 +80,7 @@ describe('the port must prove it is Noltri before text leaves the host (§7.6)',
   });
 
   it('refuses a Core speaking a protocol this host does not understand', () => {
-    const verdict = verifyIdentity(coreHealth({ protocolVersion: '2' }));
+    const verdict = verifyCoreIdentity(coreHealth({ protocolVersion: '2' }));
     expect(verdict.ok).toBe(false);
     if (verdict.ok) throw new Error('unreachable');
     expect(verdict.code).toBe('protocol_mismatch');
@@ -88,7 +88,7 @@ describe('the port must prove it is Noltri before text leaves the host (§7.6)',
   });
 
   it('notices the App restarted underneath an open connection', () => {
-    const verdict = verifyIdentity(coreHealth({ instanceId: 'instance-native-0002' }), 'instance-native-0001');
+    const verdict = verifyCoreIdentity(coreHealth({ instanceId: 'instance-native-0002' }), 'instance-native-0001');
     expect(verdict.ok).toBe(true);
     if (!verdict.ok) throw new Error('unreachable');
     expect(verdict.restarted).toBe(true);

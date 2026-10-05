@@ -1,5 +1,5 @@
-import { ApiClient, ApiClientError } from '@noltri/api-client';
-import { CORE_PRODUCT_ID, CORE_PROTOCOL_VERSION, type CaptureRequest, type CaptureResult, type HealthResponse } from '@noltri/schema';
+import { ApiClient, ApiClientError, verifyCoreIdentity } from '@noltri/api-client';
+import { type CaptureRequest, type CaptureResult, type HealthResponse } from '@noltri/schema';
 import type { CoreEndpoint } from './discovery';
 import { HOST_PROTOCOL_VERSION, failure, type CaptureEntryResult, type HostCoreIdentity, type HostFailure, type HostRequest, type HostResponse } from './protocol';
 
@@ -22,37 +22,6 @@ export function createGateway(endpoint: CoreEndpoint, fetchImpl?: typeof fetch):
   return {
     health: () => client.health(),
     capture: (request) => client.capture(request),
-  };
-}
-
-export type IdentityVerdict =
-  | { readonly ok: true; readonly identity: HostCoreIdentity; readonly restarted: boolean }
-  | { readonly ok: false; readonly code: 'core_identity_mismatch' | 'protocol_mismatch'; readonly message: string };
-
-/**
- * A port answering JSON is not evidence that this product is listening (§7.6). The health reply has to
- * name the product, and the protocol has to be one this host understands, before a user's text goes out.
- */
-export function verifyIdentity(health: HealthResponse, knownInstanceId?: string): IdentityVerdict {
-  if (health.productId !== CORE_PRODUCT_ID) {
-    return { ok: false, code: 'core_identity_mismatch', message: '这个端口上运行的不是知序 Noltri Core，内容没有发送' };
-  }
-  if (health.protocolVersion !== CORE_PROTOCOL_VERSION) {
-    return {
-      ok: false,
-      code: 'protocol_mismatch',
-      message: `Core 协议版本 ${String(health.protocolVersion)} 与本 host 的 ${CORE_PROTOCOL_VERSION} 不一致`,
-    };
-  }
-  return {
-    ok: true,
-    identity: {
-      productId: health.productId,
-      instanceId: health.instanceId,
-      protocolVersion: health.protocolVersion,
-      version: health.version,
-    },
-    restarted: knownInstanceId !== undefined && knownInstanceId !== health.instanceId,
   };
 }
 
@@ -82,7 +51,7 @@ export function createHostSession(options: HostSession): { handle(request: HostR
     } catch (error) {
       return { kind: 'failure', response: describeCoreFailure(error) };
     }
-    const verdict = verifyIdentity(health, verified?.instanceId);
+    const verdict = verifyCoreIdentity(health, verified?.instanceId);
     if (!verdict.ok) {
       verified = undefined;
       log('core identity refused', { code: verdict.code });
