@@ -3,13 +3,15 @@
  *
  * These assertions are structural: they do not test features, they test that the load-bearing
  * invariants of PROJECT_MASTER survived the implementation — one capture pipeline, RawSource first,
- * no provider/storage leak, MCP behind Knowledge Core, desktop independent of any single Agent, and
+ * no provider/storage leak, MCP behind Knowledge Core, desktop independent of any single Agent,
+ * Research kept plain and off the Agent grant surface until 限制返回片段 covers its text, and
  * a data model V2 can extend without being overturned.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CaptureClient } from '@noltri/schema';
+import { scopeForAction } from '../src/authorization';
 import { attachItemRecord, captureOf, createNodeRecord, makeHarness, CHINESE_TEXT } from './fakes';
 
 function repoRoot(): string {
@@ -191,5 +193,48 @@ describe('architecture gate — storage seam', () => {
   it('the repository factory is the only place a driver is chosen', () => {
     const coreSources = tsFilesUnder(CORE_SRC).map((file) => readFileSync(file, 'utf8')).join('\n');
     expect(coreSources).not.toMatch(/driver\s*===?\s*['"](memory|supabase)['"]/);
+  });
+});
+
+/**
+ * Research's two structural promises (research contract §0 rule 4, §4): the domain stays plain logic — no
+ * HTTP layer, no knowledge services, no provider — and no research route is reachable with a
+ * 本地客户端授权 grant until its text goes through 限制返回片段. Both are cheaper to pin now than to
+ * re-derive after someone adds a "quick" read path for an Agent.
+ */
+describe('architecture gate — research domain', () => {
+  const researchSrc = join(CORE_SRC, 'research');
+  const relative = (file: string): string => file.slice(researchSrc.length + 1);
+
+  it('imports nothing from the http layer, the knowledge services or a provider', () => {
+    const offenders: string[] = [];
+    for (const file of tsFilesUnder(researchSrc)) {
+      for (const match of readFileSync(file, 'utf8').matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+        const spec = match[1] ?? '';
+        if (
+          spec.includes('/http') ||
+          spec.includes('/services') ||
+          spec.includes('/pipeline') ||
+          spec.includes('/provider') ||
+          spec === '@noltri/ai-provider'
+        ) {
+          offenders.push(`${relative(file)} -> ${spec}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('is closed to client grants: no research route has a scope entry', () => {
+    const router = readFileSync(join(CORE_SRC, 'http', 'router.ts'), 'utf8');
+    const routes: [string, string][] = [];
+    for (const match of router.matchAll(/method:\s*'(\w+)',\s*segments:\s*\[([^\]]*)\]/g)) {
+      const segments = [...String(match[2]).matchAll(/'([^']+)'/g)].map((piece) => piece[1]);
+      if (segments[0] === 'api' && segments[1] === 'research') routes.push([String(match[1]), segments.join('/')]);
+    }
+
+    // The 27 is contract §1; a route added here without a scope entry keeps its current refusal.
+    expect(routes).toHaveLength(27);
+    expect(routes.filter(([method, path]) => scopeForAction(method, path) !== undefined)).toEqual([]);
   });
 });

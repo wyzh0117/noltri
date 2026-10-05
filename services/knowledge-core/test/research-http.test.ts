@@ -1,0 +1,234 @@
+/**
+ * Research HTTP contract (research contract §1) through the shared router — the same `handle` that
+ * node:http mounts and the WebView talks to. Responses are parsed with the frozen schemas so the wire
+ * shape holds in both directions.
+ *
+ * Two things here are about this branch rather than the archived cloud build: research reaches the router
+ * only through `core.research` (there is no separate `deps.research`), and a 本地客户端授权 grant is
+ * refused before it gets here — see the granted-client case.
+ */
+import { describe, expect, it } from 'vitest';
+import { createOfflineProvider } from '@noltri/ai-provider';
+import {
+  apiErrorSchema,
+  charterResponseSchema,
+  researchProjectListResponseSchema,
+  researchProjectSchema,
+  researchQuestionListResponseSchema,
+  researchQuestionSchema,
+} from '@noltri/schema';
+import { silentLogger } from '@noltri/shared';
+import { createInMemoryRepository } from '@noltri/storage';
+import { resolveIdentity } from '../src/auth';
+import { InMemoryGrantStore, createGrantResolver, issueGrant, type GrantStore } from '../src/authorization';
+import { createKnowledgeCore } from '../src/core';
+import { createResearchDomain, type ResearchDomain } from '../src/research';
+import { createRequestHandler, type RequestHandler } from '../src/http/router';
+import { FakeResearchRepository } from './research-fakes';
+import { testConfig } from './fakes';
+
+function coreOf(research: ResearchDomain | undefined) {
+  const config = testConfig();
+  const core = createKnowledgeCore({
+    repository: createInMemoryRepository(),
+    provider: createOfflineProvider({ embeddingDim: 1536 }),
+    config,
+    logger: silentLogger,
+    ...(research === undefined ? {} : { research }),
+  });
+  return { config, core };
+}
+
+function handlerOf(options: { research?: ResearchDomain; grants?: GrantStore } = {}): RequestHandler {
+  const { config, core } = coreOf(options.research ?? createResearchDomain(new FakeResearchRepository()));
+  const store = options.grants;
+  return createRequestHandler({
+    core,
+    config,
+    ...(store === undefined ? {} : { grants: store }),
+    ...(store === undefined
+      ? {}
+      : { identityResolver: createGrantResolver(store, (request, cfg) => resolveIdentity(request, cfg)) }),
+  });
+}
+
+async function jsonOf(response: Response): Promise<unknown> {
+  return (await response.json()) as unknown;
+}
+
+async function call(
+  handle: RequestHandler,
+  method: string,
+  path: string,
+  body?: unknown,
+  secret?: string,
+): Promise<Response> {
+  return handle(
+    new Request(`http://core.local${path}`, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        'x-noltri-client': 'desktop',
+        ...(secret === undefined ? {} : { authorization: `Bearer ${secret}` }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
+}
+
+async function newProject(handle: RequestHandler, name = 'P'): Promise<string> {
+  const created = await call(handle, 'POST', '/api/research/projects', { name });
+  return researchProjectSchema.parse(await jsonOf(created)).id;
+}
+
+describe('research http routes', () => {
+  it('creates and lists projects over the wire with the frozen schemas', async () => {
+    const handle = handlerOf();
+    const created = await call(handle, 'POST', '/api/research/projects', { name: '碳定价研究' });
+    expect(created.status).toBe(200);
+    expect(researchProjectSchema.parse(await jsonOf(created)).name).toBe('碳定价研究');
+
+    const list = await call(handle, 'GET', '/api/research/projects');
+    expect(researchProjectListResponseSchema.parse(await jsonOf(list)).projects).toHaveLength(1);
+  });
+
+  it('serves the charter pair, including the null charter for a fresh project', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle);
+
+    const empty = charterResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/charter`)),
+    );
+    expect(empty.charter).toBeNull();
+
+    const saved = await call(handle, 'PUT', `/api/research/projects/${projectId}/charter`, {
+      workingTitle: '碳定价与工业排放',
+      coreContribution: '大样本因果估计',
+    });
+    expect(saved.status).toBe(200);
+    const charter = charterResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/charter`)),
+    );
+    expect(charter.charter?.workingTitle).toBe('碳定价与工业排放');
+  });
+
+  it('runs the questions row: create, list, patch', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle);
+    const question = researchQuestionSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/questions`, {
+          questionCode: 'RQ1',
+          questionText: '碳定价是否降低排放？',
+        }),
+      ),
+    );
+    const patched = researchQuestionSchema.parse(
+      await jsonOf(await call(handle, 'PATCH', `/api/research/questions/${question.id}`, { status: 'answered' })),
+    );
+    expect(patched.status).toBe('answered');
+    const list = researchQuestionListResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/questions`)),
+    );
+    expect(list.questions).toHaveLength(1);
+  });
+
+  it('deletes relations and reports {deleted,id}', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle);
+    const question = researchQuestionSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/questions`, {
+          questionCode: 'RQ1',
+          questionText: 'q',
+        }),
+      ),
+    );
+    await call(handle, 'POST', `/api/research/projects/${projectId}/claims`, {
+      claimCode: 'C1',
+      claimText: 'x',
+      claimType: 'empirical',
+    });
+    const claims = (await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/claims`))) as {
+      claims: { id: string }[];
+    };
+    const created = (await jsonOf(
+      await call(handle, 'POST', `/api/research/projects/${projectId}/relations`, {
+        sourceType: 'claim',
+        sourceId: claims.claims[0]!.id,
+        relationType: 'answers',
+        targetType: 'research_question',
+        targetId: question.id,
+      }),
+    )) as { id: string };
+
+    const deleted = await call(handle, 'DELETE', `/api/research/relations/${created.id}`);
+    expect(deleted.status).toBe(200);
+    expect(await jsonOf(deleted)).toEqual({ deleted: true, id: created.id });
+  });
+
+  it('wraps failures in the shared error envelope', async () => {
+    const handle = handlerOf();
+    const invalid = await call(handle, 'POST', '/api/research/projects', { name: '' });
+    expect(invalid.status).toBe(400);
+    expect(apiErrorSchema.parse(await jsonOf(invalid)).error.code).toBe('invalid_request');
+
+    const missing = await call(handle, 'GET', '/api/research/projects/nope/questions');
+    expect(missing.status).toBe(404);
+    expect(apiErrorSchema.parse(await jsonOf(missing)).error.code).toBe('not_found');
+  });
+
+  /**
+   * The route table is what says which verb a research path takes, so a wrong verb must be a 405 from the
+   * router rather than a silently-accepted fall-through in `handleResearch`'s write branches.
+   */
+  it('answers a verb the route table does not list with 405', async () => {
+    const handle = handlerOf();
+    const response = await call(handle, 'DELETE', '/api/research/projects');
+    expect(response.status).toBe(405);
+    expect(apiErrorSchema.parse(await jsonOf(response)).error.code).toBe('invalid_request');
+  });
+
+  /**
+   * Research is closed to Agent clients until its text goes through 限制返回片段 (contract §4). The refusal
+   * has to come from the scope table, not from a check inside the research handler — so the same handler
+   * still serves the desktop credential on the very next request.
+   */
+  it('refuses a granted client on the research paths and still serves the device credential', async () => {
+    const store = new InMemoryGrantStore();
+    const { secret } = await issueGrant(store, { label: '想读研究的 Agent', scopes: ['read', 'mutate'] });
+    const handle = handlerOf({ grants: store });
+
+    for (const [method, path] of [
+      ['GET', '/api/research/projects'],
+      ['POST', '/api/research/projects'],
+      ['GET', '/api/research/projects/whatever/questions'],
+      ['DELETE', '/api/research/relations/whatever'],
+    ] as const) {
+      const response = await call(
+        handle,
+        method,
+        path,
+        method === 'POST' ? { name: '不该被创建' } : undefined,
+        secret,
+      );
+      const body = apiErrorSchema.parse(await jsonOf(response)).error;
+      expect(response.status).toBe(401);
+      expect(body.code).toBe('unauthorized');
+      expect((body.details as { reason?: string }).reason).toBe('route_not_granted');
+    }
+
+    // The same handler still serves 工作台: it is the credential kind that decides, not the route.
+    expect((await call(handle, 'POST', '/api/research/projects', { name: '工作台项目' })).status).toBe(200);
+  });
+
+  it('reports research_not_wired instead of pretending an empty library', async () => {
+    const { config, core } = coreOf(undefined);
+    const handle = createRequestHandler({ core, config });
+    const response = await call(handle, 'GET', '/api/research/projects');
+    expect(response.status).toBe(500);
+    const body = apiErrorSchema.parse(await jsonOf(response)).error;
+    expect(body.code).toBe('internal_error');
+    expect((body.details as { reason?: string }).reason).toBe('research_not_wired');
+  });
+});
