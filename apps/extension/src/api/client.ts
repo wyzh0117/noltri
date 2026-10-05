@@ -10,11 +10,29 @@ export interface ExtensionApiOptions {
   readonly timeoutMs?: number;
 }
 
-export type CaptureOutcome = { readonly ok: true; readonly result: CaptureResult } | { readonly ok: false; readonly message: string };
-
 export type ConnectionState = { readonly connected: true; readonly detail: string } | { readonly connected: false; readonly detail: string };
 
 export const OFFLINE_MESSAGE = '未连接 Knowledge Core，内容未保存';
+/** The service worker accepted the capture but never answered: the page cannot claim anything was stored. */
+export const WORKER_SILENT_MESSAGE = '等待 Noltri 响应，本次收纳未确认';
+
+export interface CaptureFailure {
+  readonly ok: false;
+  readonly message: string;
+  /** Resending this exact request could succeed. Anything false is a refusal, and a queue must not repeat it. */
+  readonly retryable: boolean;
+  /** Core itself was not reached — no reply, no envelope, the App is closed or the port is dead. */
+  readonly coreUnreachable: boolean;
+  /** Set by the service worker when it kept the capture in its own queue instead of losing it. */
+  readonly queued?: boolean;
+}
+
+export type CaptureOutcome = { readonly ok: true; readonly result: CaptureResult } | CaptureFailure;
+
+/** A failure for a code path that never got an `ApiClientError`, such as the page-side watchdog. */
+export function offlineFailure(message: string = OFFLINE_MESSAGE): CaptureFailure {
+  return { ok: false, message, retryable: true, coreUnreachable: true };
+}
 
 const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   invalid_request: '这段内容不符合采集要求（至少 8 个字），没有发送',
@@ -69,8 +87,21 @@ export async function captureIntent(
     const result = await client.capture(request);
     return { ok: true, result };
   } catch (error) {
-    return { ok: false, message: describeError(error) };
+    return { ok: false, message: describeError(error), ...failureShape(error) };
   }
+}
+
+/**
+ * Whether a queue may resend. The server's own `retryable` wins when it answered; a transport failure
+ * that never produced an envelope is retryable by definition, and a 4xx refusal is never one.
+ */
+function failureShape(error: unknown): Pick<CaptureFailure, 'retryable' | 'coreUnreachable'> {
+  if (error instanceof ApiClientError) {
+    const unreachable = error.status === 0;
+    return { retryable: unreachable || error.retryable, coreUnreachable: unreachable };
+  }
+  if (error instanceof Error && error.name === 'AbortError') return { retryable: true, coreUnreachable: true };
+  return { retryable: true, coreUnreachable: true };
 }
 
 export async function probeConnection(settings: ExtensionSettings, options: CaptureCallOptions = {}): Promise<ConnectionState> {
@@ -87,14 +118,23 @@ export async function probeConnection(settings: ExtensionSettings, options: Capt
 /** The service worker broadcasts results; a page must never trust an unparsed object. */
 export function parseCaptureResult(payload: unknown): CaptureOutcome | undefined {
   if (typeof payload !== 'object' || payload === null) return undefined;
-  const record = payload as { ok?: unknown; result?: unknown; message?: unknown };
+  const record = payload as { ok?: unknown; result?: unknown; message?: unknown; retryable?: unknown; coreUnreachable?: unknown; queued?: unknown };
   if (record.ok === true) {
     const parsed = captureResultSchema.safeParse(record.result);
     if (parsed.success) return { ok: true, result: parsed.data };
-    return { ok: false, message: 'Knowledge Core 的返回不符合契约，未能确认收纳结果' };
+    return { ok: false, message: 'Knowledge Core 的返回不符合契约，未能确认收纳结果', retryable: false, coreUnreachable: false };
   }
   if (record.ok === false) {
-    return { ok: false, message: typeof record.message === 'string' ? record.message : OFFLINE_MESSAGE };
+    const message = typeof record.message === 'string' && record.message.length > 0 ? record.message : OFFLINE_MESSAGE;
+    // Default the two booleans towards "keep trying": a message written by an older worker that omits
+    // them describes a capture the page has not lost, and dropping it because a field was missing would.
+    return {
+      ok: false,
+      message,
+      retryable: record.retryable !== false,
+      coreUnreachable: record.coreUnreachable !== false,
+      ...(record.queued === true ? { queued: true } : {}),
+    };
   }
   return undefined;
 }
