@@ -11,6 +11,7 @@ import {
   driftSeveritySchema,
   driftTypeSchema,
   entityRelationSchema,
+  evidenceLocationOriginSchema,
   evidenceSchema,
   evidenceTypeSchema,
   manuscriptSectionSchema,
@@ -24,6 +25,7 @@ import {
   researchRelationTypeSchema,
   researchEntityTypeSchema,
   researchReviewMarkSchema,
+  reviewMarkRaisedBySchema,
   reviewMarkStatusSchema,
   timelineEventSchema,
 } from './research';
@@ -92,6 +94,8 @@ export const reviewMarkListQuerySchema = z.object({
   status: reviewMarkStatusSchema.optional(),
   entityType: researchEntityTypeSchema.optional(),
   entityId: z.string().min(1).optional(),
+  /** 两种原因都要能单独筛：新基线带来的复核与来源被归档带来的复核，用户处理的是不同的事。 */
+  raisedBy: reviewMarkRaisedBySchema.optional(),
 });
 export type ReviewMarkListQuery = z.infer<typeof reviewMarkListQuerySchema>;
 
@@ -132,6 +136,9 @@ export const createEvidenceRequestSchema = z.object({
   description: z.string().max(8000).nullable().optional(),
   sourceReference: z.string().max(1000).nullable().optional(),
   sourceLocation: z.string().max(1000).nullable().optional(),
+  rawSourceId: z.string().max(200).nullable().optional(),
+  nodeId: z.string().max(200).nullable().optional(),
+  locationOrigin: evidenceLocationOriginSchema.nullable().optional(),
   reliabilityNote: z.string().max(4000).nullable().optional(),
 });
 export type CreateEvidenceRequest = z.infer<typeof createEvidenceRequestSchema>;
@@ -142,6 +149,9 @@ export const patchEvidenceRequestSchema = z.object({
   description: z.string().max(8000).nullable().optional(),
   sourceReference: z.string().max(1000).nullable().optional(),
   sourceLocation: z.string().max(1000).nullable().optional(),
+  rawSourceId: z.string().max(200).nullable().optional(),
+  nodeId: z.string().max(200).nullable().optional(),
+  locationOrigin: evidenceLocationOriginSchema.nullable().optional(),
   reliabilityNote: z.string().max(4000).nullable().optional(),
 });
 export type PatchEvidenceRequest = z.infer<typeof patchEvidenceRequestSchema>;
@@ -155,6 +165,63 @@ export const evidenceListResponseSchema = z.object({
   evidence: z.array(evidenceSchema),
 });
 export type EvidenceListResponse = z.infer<typeof evidenceListResponseSchema>;
+
+// --- source provenance (R03) ------------------------------------------------
+
+/**
+ * 「这条来源被哪些研究对象引用？」 — the read a caller does *before* archiving or purging a node or a
+ * capture. It is deliberately cross-project: 删掉一个节点 affects every 研究项目 that cites it, and a
+ * per-project check would make the caller guess which projects to ask.
+ *
+ * At least one of the two ids must be present; the schema cannot express "one of these two" as a plain
+ * object, hence the refine.
+ */
+export const researchReferenceQuerySchema = z
+  .object({
+    nodeId: z.string().min(1).max(200).optional(),
+    rawSourceId: z.string().min(1).max(200).optional(),
+  })
+  .refine((query) => query.nodeId !== undefined || query.rawSourceId !== undefined, {
+    message: 'nodeId 与 rawSourceId 至少要给一个 / nodeId or rawSourceId is required',
+  });
+export type ResearchReferenceQuery = z.infer<typeof researchReferenceQuerySchema>;
+
+/** One Evidence row that points at the source, plus the 论点 it is wired to by any evidence→claim relation. */
+export const researchReferenceMatchSchema = z.object({
+  projectId: z.string(),
+  projectName: z.string(),
+  evidenceId: z.string(),
+  evidenceTitle: z.string(),
+  evidenceType: evidenceTypeSchema,
+  /** Every kind of evidence→claim relation counts: a 反证 is as affected by a vanished source as a 支撑. */
+  claimIds: z.array(z.string()),
+});
+export type ResearchReferenceMatch = z.infer<typeof researchReferenceMatchSchema>;
+
+export const researchReferenceResponseSchema = z.object({
+  references: z.array(researchReferenceMatchSchema),
+});
+export type ResearchReferenceResponse = z.infer<typeof researchReferenceResponseSchema>;
+
+/**
+ * What the knowledge side hands the research domain when one of its objects stops being available.
+ * `sourceTitle` goes into the 复核理由 because a mark that only carries an id tells the user nothing
+ * about which 出处 they just archived.
+ */
+export const archiveSourceRequestSchema = z.object({
+  nodeId: z.string().min(1).max(200).nullable().optional(),
+  rawSourceId: z.string().min(1).max(200).nullable().optional(),
+  sourceTitle: z.string().max(200).nullable().optional(),
+});
+export type ArchiveSourceRequest = z.infer<typeof archiveSourceRequestSchema>;
+
+/** Which objects the archive actually marked. Zero everywhere is the normal case: most nodes are not cited. */
+export const archivedSourceMarksSchema = z.object({
+  markedEvidenceIds: z.array(z.string()),
+  markedClaimIds: z.array(z.string()),
+  projectIds: z.array(z.string()),
+});
+export type ArchivedSourceMarks = z.infer<typeof archivedSourceMarksSchema>;
 
 // --- claims ----------------------------------------------------------------
 

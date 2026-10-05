@@ -33,6 +33,15 @@ export const evidenceTypeSchema = z.enum([
 ]);
 export type EvidenceType = z.infer<typeof evidenceTypeSchema>;
 
+/**
+ * Where a piece of evidence's 定位 came from. `manual` is text the user typed into 出处/定位, and
+ * `captured` is a location the 采集 path carried in (page URL, selection, file). The distinction is what
+ * makes R03 honest: when the source object behind a `captured` location is archived, a hand-typed
+ * 定位 is still exactly what the user wrote, and the UI can say so instead of rewriting it.
+ */
+export const evidenceLocationOriginSchema = z.enum(['manual', 'captured']);
+export type EvidenceLocationOrigin = z.infer<typeof evidenceLocationOriginSchema>;
+
 export const claimTypeSchema = z.enum([
   'descriptive',
   'empirical',
@@ -232,6 +241,18 @@ export const evidenceSchema = z.object({
   description: z.string().nullable(),
   sourceReference: z.string().nullable(),
   sourceLocation: z.string().nullable(),
+  /**
+   * Typed provenance (R03): the machine-readable pointers to 来源对象 that this evidence was taken from.
+   * `sourceReference` / `sourceLocation` stay as the human-readable 定位 — these two ids are what the
+   * archive check reads, because free text cannot be resolved back to a node or a capture.
+   *
+   * They are never re-bound by the system. When the object behind `nodeId` is archived, the evidence keeps
+   * pointing at it and gets a 复核标记 instead: silently re-pointing a 论点 at replacement text is how a
+   * library ends up claiming support for something the user never approved.
+   */
+  rawSourceId: z.string().nullable(),
+  nodeId: z.string().nullable(),
+  locationOrigin: evidenceLocationOriginSchema.nullable(),
   reliabilityNote: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -491,6 +512,9 @@ export const createEvidenceInputSchema = z.object({
   description: z.string().max(8000).nullable().optional(),
   sourceReference: z.string().max(1000).nullable().optional(),
   sourceLocation: z.string().max(1000).nullable().optional(),
+  rawSourceId: z.string().max(200).nullable().optional(),
+  nodeId: z.string().max(200).nullable().optional(),
+  locationOrigin: evidenceLocationOriginSchema.nullable().optional(),
   reliabilityNote: z.string().max(4000).nullable().optional(),
 });
 export type CreateEvidenceInput = z.infer<typeof createEvidenceInputSchema>;
