@@ -29,14 +29,43 @@ export const apiErrorCodes = [
 export const apiErrorCodeSchema = z.enum(apiErrorCodes);
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;
 
+/**
+ * Whether resending the same request can possibly help. Codes the caller caused (a malformed body, a
+ * missing credential, a key that is already used) are never retryable; an upstream or storage fault is.
+ * Both Knowledge Core's envelope and `ApiClientError` read this table, so a client and the server cannot
+ * disagree about what a queue is allowed to resend.
+ */
+export const RETRYABLE_ERROR_CODES: ReadonlySet<ApiErrorCode> = new Set([
+  'provider_error',
+  'storage_error',
+  'rate_limited',
+  'internal_error',
+]);
+
 export const apiErrorSchema = z.object({
   error: z.object({
     code: apiErrorCodeSchema,
     message: z.string(),
+    retryable: z.boolean(),
+    /** Correlates the reply with the line the server logged; absent when no trace was started. */
+    traceId: z.string().optional(),
     details: z.unknown().optional(),
   }),
 });
 export type ApiError = z.infer<typeof apiErrorSchema>;
+
+/**
+ * What a caller has to be able to prove it is talking to. A port that answers JSON, or answers `ok`, is
+ * not evidence that *this* product is listening — the desktop host and the browser Native Messaging relay
+ * both check these three fields before they forward a user's text (本地桌面版开发文档 §16).
+ */
+export const CORE_PRODUCT_ID = 'noltri-knowledge-core';
+
+/**
+ * Bumped when the wire contract changes in a way a client must know about. P3 added the capture request
+ * key, the stage reply and the retryable/traceId envelope, so this is the first published protocol.
+ */
+export const CORE_PROTOCOL_VERSION = '1';
 
 export const nodeIdParamsSchema = z.object({ id: z.string().min(1) });
 
@@ -55,6 +84,10 @@ export type StorageHealthPayload = z.infer<typeof storageHealthSchema>;
 
 export const healthResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
+  productId: z.string(),
+  /** Stable for the life of one process, different for every process: tells two Cores apart on one port history. */
+  instanceId: z.string(),
+  protocolVersion: z.string(),
   version: z.string(),
   storageDriver: z.string(),
   storage: storageHealthSchema,

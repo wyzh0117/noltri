@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   captureActionSchema,
   captureClientSchema,
+  captureStageSchema,
   confidenceTierSchema,
   processingStatusSchema,
   sourceTypeSchema,
@@ -18,6 +19,10 @@ export type CaptureSource = z.infer<typeof captureSourceSchema>;
 
 export const captureMetaSchema = z.object({
   capturedAt: z.string().min(4).max(64),
+  /**
+   * The install this text came from. It scopes the idempotency key when a device states one, and the entry
+   * point does the same job when it does not, so a key is always scoped by something the caller controls.
+   */
   deviceId: z.string().max(200).optional(),
   client: captureClientSchema,
 });
@@ -26,12 +31,20 @@ export type CaptureMeta = z.infer<typeof captureMetaSchema>;
 export const MIN_CAPTURE_TEXT_LENGTH = 8;
 export const MAX_CAPTURE_TEXT_LENGTH = 40_000;
 export const MAX_SURROUNDING_CONTEXT_LENGTH = 20_000;
+/** The shortest request id a real client can produce; a UUID is 36, a device-scoped id is longer. */
+export const MIN_REQUEST_ID_LENGTH = 8;
+export const MAX_REQUEST_ID_LENGTH = 64;
 
 /**
  * Every capture entry point (extension, desktop, MCP, web app) reduces to this shape.
  * The user is never part of the payload — identity comes from the authenticated request.
+ *
+ * `requestId` is generated once by the client and kept when a queue resends, so the server can answer the
+ * same submission twice without writing the text twice (本地桌面版开发文档 §7.4「服务端按 (clientId, requestId) 幂等」,
+ * §10.3「断线重试使用相同 requestId」).
  */
 export const captureRequestSchema = z.object({
+  requestId: z.string().trim().min(MIN_REQUEST_ID_LENGTH).max(MAX_REQUEST_ID_LENGTH),
   text: z.string().trim().min(MIN_CAPTURE_TEXT_LENGTH).max(MAX_CAPTURE_TEXT_LENGTH),
   surroundingContext: z.string().max(MAX_SURROUNDING_CONTEXT_LENGTH).optional(),
   source: captureSourceSchema,
@@ -50,8 +63,19 @@ export const captureResultItemSchema = z.object({
 });
 export type CaptureResultItem = z.infer<typeof captureResultItemSchema>;
 
+/**
+ * The reply states the stage the capture reached, and whether this submission was already known.
+ *
+ * A replay never echoes `items`: rebuilding them from stored rows would put numbers on a decision the
+ * model never made, so it names the stage, points at the original `rawSourceId` and lets the inbox show
+ * what was filed.
+ */
 export const captureResultSchema = z.object({
   rawSourceId: z.string(),
+  requestId: z.string(),
+  stage: captureStageSchema,
+  /** True when the server already held a source for this (clientId, requestId) and wrote nothing new. */
+  duplicate: z.boolean(),
   items: z.array(captureResultItemSchema),
   processingStatus: processingStatusSchema,
   errorReason: z.string().max(2000).optional(),

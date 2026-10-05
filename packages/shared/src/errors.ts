@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ApiErrorCode } from '@noltri/schema';
+import { RETRYABLE_ERROR_CODES, type ApiErrorCode } from '@noltri/schema';
 
 const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   invalid_request: 400,
@@ -15,6 +15,8 @@ const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
 export class KnowledgeError extends Error {
   readonly code: ApiErrorCode;
   readonly details?: unknown;
+  /** Attached by the HTTP layer so the reply and the server log name the same attempt. */
+  traceId?: string;
 
   constructor(code: ApiErrorCode, message: string, details?: unknown) {
     super(message);
@@ -27,11 +29,18 @@ export class KnowledgeError extends Error {
     return STATUS_BY_CODE[this.code];
   }
 
+  /** Whether resending this request can help at all — a queue must not retry a caller's own mistake. */
+  get retryable(): boolean {
+    return RETRYABLE_ERROR_CODES.has(this.code);
+  }
+
   toJSON() {
     return {
       error: {
         code: this.code,
         message: this.message,
+        retryable: this.retryable,
+        ...(this.traceId === undefined ? {} : { traceId: this.traceId }),
         ...(this.details === undefined ? {} : { details: this.details }),
       },
     };
@@ -57,6 +66,8 @@ export function asKnowledgeError(error: unknown): KnowledgeError {
   return new KnowledgeError('internal_error', 'Unexpected error');
 }
 
-export function errorResponseBody(error: unknown) {
-  return asKnowledgeError(error).toJSON();
+export function errorResponseBody(error: unknown, traceId?: string) {
+  const mapped = asKnowledgeError(error);
+  if (traceId !== undefined) mapped.traceId = traceId;
+  return mapped.toJSON();
 }
