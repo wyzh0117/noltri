@@ -107,6 +107,70 @@ export function parseExistingConfig(raw: string | null): Record<string, unknown>
   return isPlainObject(parsed) ? parsed : {};
 }
 
+export interface RemovalOk {
+  readonly ok: true;
+  readonly document: Record<string, unknown>;
+  /** False when the file never carried our entry — the caller must then write nothing at all. */
+  readonly removed: boolean;
+  /** The entry that was taken out, so the confirmation dialog can show what is about to disappear. */
+  readonly previous: unknown;
+}
+
+export type RemovalOutcome = RemovalOk | MergeRejected;
+
+/**
+ * Uninstall (M02: 卸载只删除自己管理的项). Drops `mcpServers[serverName]` and nothing else: every
+ * sibling server, every unknown top-level key, and the `mcpServers` key itself stay in place even when
+ * it ends up empty — a client that expects the object must not find it gone.
+ */
+export function removeServerEntry(rawDocument: unknown, serverName: string): RemovalOutcome {
+  if (!isPlainObject(rawDocument)) return { ok: false, reason: '配置文件不是 JSON 对象' };
+  const servers = rawDocument['mcpServers'];
+  if (servers !== undefined && !isPlainObject(servers)) {
+    return { ok: false, reason: 'mcpServers 不是对象，无法安全合并' };
+  }
+  if (servers === undefined || !(serverName in servers)) {
+    return { ok: true, document: rawDocument, removed: false, previous: undefined };
+  }
+  const rest: Record<string, unknown> = { ...servers };
+  const previous = rest[serverName];
+  delete rest[serverName];
+  return { ok: true, document: { ...rawDocument, mcpServers: rest }, removed: true, previous };
+}
+
+const SECRET_KEY = /token|secret|key|authorization|password|cookie|bearer/i;
+
+function hideSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(hideSecrets);
+  if (!isPlainObject(value)) return value;
+  const next: Record<string, unknown> = {};
+  for (const [name, inner] of Object.entries(value)) {
+    next[name] = SECRET_KEY.test(name) ? '<已隐藏>' : hideSecrets(inner);
+  }
+  return next;
+}
+
+/**
+ * One-line, secret-free rendering of a server entry for a dialog that can be screenshotted (§16).
+ */
+export function describeEntry(entry: unknown): string {
+  const text = JSON.stringify(hideSecrets(entry) ?? null);
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+}
+
+/** What the confirmation dialog shows before an uninstall write. */
+export function describeRemoval(raw: string | null, serverName: string): string {
+  const outcome = removeServerEntry(parseExistingConfig(raw), serverName);
+  if (!outcome.ok) return `无法安全卸载：${outcome.reason}`;
+  if (!outcome.removed) return `配置中没有「${serverName}」条目，不会修改这个文件`;
+  const servers = (outcome.document['mcpServers'] ?? {}) as Record<string, unknown>;
+  const kept = Object.keys(servers);
+  return [
+    `将删除「${serverName}」条目：${describeEntry(outcome.previous)}`,
+    `保留其他服务器：${kept.length > 0 ? kept.join('、') : '（无其他服务器，但保留 mcpServers 对象本身）'}`,
+  ].join('\n');
+}
+
 /** Stable serialization: the exact bytes shown in the confirmation dialog are what gets written. */
 export function serializeDocument(document: Record<string, unknown>): string {
   return `${JSON.stringify(document, null, 2)}\n`;

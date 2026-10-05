@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   buildServerEntry,
   buildStdioEntry,
+  describeEntry,
+  describeRemoval,
   describeStdioEntry,
   mergeServerEntry,
   parseExistingConfig,
+  removeServerEntry,
   serializeDocument,
   stdioInvocation,
   summarizeMerge,
@@ -131,5 +134,90 @@ describe('stdio entry (§11: 默认 stdio transport，参数数组而非 shell �
     expect(preview).toContain('KNOWLEDGE_API_URL');
     expect(preview).not.toContain('sekret-stdio-token');
     expect(describeStdioEntry({ command: 'node', args: ['x.js'], env: {} })).toContain('环境变量：（无）');
+  });
+});
+
+describe('mcp config uninstall and idempotency (M02)', () => {
+  const MULTI = JSON.stringify({
+    mcpServers: {
+      filesystem: { command: 'npx', args: ['-y', 'fs-server'] },
+      noltri: { type: 'http', url: 'http://127.0.0.1:8790/mcp' },
+      postgres: { command: 'mcp-postgres', env: { DATABASE_URL: 'postgres://localhost' } },
+    },
+    preferences: { theme: 'dark' },
+    unknownFutureKey: { nested: [1, 2, 3] },
+  });
+
+  it('removes only the entry it manages and keeps every sibling verbatim', () => {
+    const outcome = removeServerEntry(parseExistingConfig(MULTI), 'noltri');
+    if (!outcome.ok) throw new Error(outcome.reason);
+    const servers = outcome.document['mcpServers'] as Record<string, unknown>;
+    expect(Object.keys(servers)).toEqual(['filesystem', 'postgres']);
+    expect(servers['filesystem']).toEqual({ command: 'npx', args: ['-y', 'fs-server'] });
+    expect(servers['postgres']).toEqual({ command: 'mcp-postgres', env: { DATABASE_URL: 'postgres://localhost' } });
+    expect(outcome.document['preferences']).toEqual({ theme: 'dark' });
+    expect(outcome.document['unknownFutureKey']).toEqual({ nested: [1, 2, 3] });
+    expect(outcome.removed).toBe(true);
+    expect(outcome.previous).toEqual({ type: 'http', url: 'http://127.0.0.1:8790/mcp' });
+  });
+
+  it('keeps the mcpServers object even when the last server leaves', () => {
+    const outcome = removeServerEntry(parseExistingConfig(JSON.stringify({ mcpServers: { noltri: ENTRY } })), 'noltri');
+    if (!outcome.ok) throw new Error(outcome.reason);
+    expect(outcome.document['mcpServers']).toEqual({});
+  });
+
+  it('touches nothing when the file never carried our entry', () => {
+    const raw = JSON.stringify({ mcpServers: { filesystem: { command: 'npx' } } });
+    const outcome = removeServerEntry(parseExistingConfig(raw), 'noltri');
+    if (!outcome.ok) throw new Error(outcome.reason);
+    expect(outcome.removed).toBe(false);
+    expect(serializeDocument(outcome.document)).toBe(
+      serializeDocument({ mcpServers: { filesystem: { command: 'npx' } } }),
+    );
+    expect(describeRemoval(raw, 'noltri')).toContain('不会修改这个文件');
+  });
+
+  it('refuses to uninstall from a document it cannot merge safely', () => {
+    expect(removeServerEntry([1, 2], 'noltri').ok).toBe(false);
+    expect(removeServerEntry({ mcpServers: 'not-an-object' }, 'noltri').ok).toBe(false);
+    expect(describeRemoval(JSON.stringify({ mcpServers: 'not-an-object' }), 'noltri')).toContain('无法安全卸载');
+  });
+
+  it('installing the same entry twice produces byte-identical output', () => {
+    const once = mergeServerEntry(parseExistingConfig(MULTI), 'noltri', ENTRY);
+    if (!once.ok) throw new Error(once.reason);
+    const twice = mergeServerEntry(once.document, 'noltri', ENTRY);
+    if (!twice.ok) throw new Error(twice.reason);
+    expect(serializeDocument(twice.document)).toBe(serializeDocument(once.document));
+
+    const thrice = mergeServerEntry(twice.document, 'noltri', ENTRY);
+    if (!thrice.ok) throw new Error(thrice.reason);
+    expect(serializeDocument(thrice.document)).toBe(serializeDocument(once.document));
+  });
+
+  it('uninstall then reinstall restores the other servers exactly', () => {
+    const removed = removeServerEntry(parseExistingConfig(MULTI), 'noltri');
+    if (!removed.ok) throw new Error(removed.reason);
+    const reinstalled = mergeServerEntry(removed.document, 'noltri', ENTRY);
+    if (!reinstalled.ok) throw new Error(reinstalled.reason);
+    expect(reinstalled.document['mcpServers']).toEqual({
+      filesystem: { command: 'npx', args: ['-y', 'fs-server'] },
+      postgres: { command: 'mcp-postgres', env: { DATABASE_URL: 'postgres://localhost' } },
+      noltri: ENTRY,
+    });
+  });
+
+  it('describes the removal without printing a secret', () => {
+    const raw = JSON.stringify({ mcpServers: { keep: { command: 'x' }, noltri: ENTRY } });
+    const preview = describeRemoval(raw, 'noltri');
+    expect(preview).toContain('将删除「noltri」条目');
+    expect(preview).toContain('保留其他服务器：keep');
+    expect(preview).not.toContain('device-token');
+    expect(preview).toContain('"Authorization":"<已隐藏>"');
+    expect(describeEntry({ headers: { Authorization: 'Bearer device-token' }, url: 'http://a' })).toBe(
+      '{"headers":{"Authorization":"<已隐藏>"},"url":"http://a"}',
+    );
+    expect(describeEntry({ args: ['x'] })).toBe('{"args":["x"]}');
   });
 });
