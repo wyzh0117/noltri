@@ -37,6 +37,7 @@ import { createId, silentLogger, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
 import type { ActorContext, CoreDeps } from './types';
+import type { ResearchDomain } from './research';
 import { retryCapture, runCapture } from './pipeline/capture';
 import { getTree } from './services/tree';
 import { assignSource, listInbox, readRawSource } from './services/inbox';
@@ -51,10 +52,18 @@ export interface KnowledgeCoreOptions {
   provider: AIProvider;
   config: CoreConfig;
   logger?: Logger;
+  /**
+   * Research façade, built by the host from its own `ResearchRepository`. Optional on purpose: a
+   * knowledge-only embed (an MCP bundle, a test harness) stays constructable without opening a second
+   * database handle it would never use.
+   */
+  research?: ResearchDomain;
 }
 
 export interface KnowledgeCore {
   readonly deps: CoreDeps;
+  /** The Research half of this Core's data, or absent when the host never wired a research repository. */
+  readonly research?: ResearchDomain;
   /** Validate -> save RawSource first -> extract -> normalize -> embed -> similarity -> classify -> persist. */
   capture(input: CaptureRequest, actor: ActorContext): Promise<CaptureResult>;
   /** Re-runs extraction onward from the stored raw text of a previously failed source. */
@@ -90,6 +99,7 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
 
   return {
     deps,
+    research: options.research,
     capture: (input, actor) => runCapture(deps, actor, input),
     retryCapture: (rawSourceId, actor) => retryCapture(deps, actor, rawSourceId),
     getTree: (query, actor) => getTree(deps, actor, query),
