@@ -1,15 +1,23 @@
 import type { CaptureRequest } from '@noltri/schema';
 import {
   isCaptureMessage,
-  MESSAGE_CAPTURE_RESULT,
+  isOutboxCommand,
+  captureResultMessage,
+  MESSAGE_CLEAR_OUTBOX,
   MESSAGE_COLLECT_CONTEXT,
+  MESSAGE_FLUSH_OUTBOX,
+  MESSAGE_OUTBOX_COUNT,
   type CaptureResultMessage,
   type CollectContextReply,
+  type OutboxCountReply,
+  type OutboxFlushReply,
 } from '../messaging';
 import { loadSettings, localArea, syncArea, type ExtensionSettings } from '../settings/storage';
 import { ensureDeviceId } from './device-id';
 import { requestFromMenuSelection, requestFromPillSelection, type CaptureIntent, type CaptureRequestMeta } from '../capture/pipeline';
 import { captureIntent, type CaptureOutcome } from '../api/client';
+import { createOutbox, disabledOutbox, type Outbox } from '../outbox/outbox';
+import { drainOutbox, queueCapture, shouldQueue, type DrainReport } from '../outbox/drain';
 import { CAPTURE_MENU_ID, registerCaptureContextMenu } from '../context-menu/register';
 
 interface AcceptedReply {
@@ -19,9 +27,12 @@ interface AcceptedReply {
 void registerCaptureContextMenu();
 chrome.runtime.onInstalled.addListener(() => {
   void registerCaptureContextMenu();
+  void flushOutbox();
 });
 chrome.runtime.onStartup.addListener(() => {
   void registerCaptureContextMenu();
+  // The browser coming back is the moment a queue written before a restart should be tried again.
+  void flushOutbox();
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -33,10 +44,27 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
  * the page's CORS and cannot rely on the API host permission, so every entry point hands its intent here.
  */
 chrome.runtime.onMessage.addListener(
-  (message: unknown, sender, sendResponse: (reply: AcceptedReply) => void) => {
-    if (!isCaptureMessage(message)) return false;
-    sendResponse({ accepted: true });
-    void handlePillIntent(message.intent, sender.tab?.id);
+  (message: unknown, sender, sendResponse: (reply: AcceptedReply | OutboxCountReply | OutboxFlushReply) => void) => {
+    if (isCaptureMessage(message)) {
+      sendResponse({ accepted: true });
+      void handlePillIntent(message.intent, sender.tab?.id);
+      return false;
+    }
+    if (isOutboxCommand(message, MESSAGE_OUTBOX_COUNT)) {
+      void outboxOf()
+        .read()
+        .then((read) => sendResponse({ count: read.entries.length, enabled: outboxOf().enabled }));
+      return true;
+    }
+    if (isOutboxCommand(message, MESSAGE_FLUSH_OUTBOX)) {
+      void flushOutbox().then((report) => sendResponse(report));
+      return true;
+    }
+    if (isOutboxCommand(message, MESSAGE_CLEAR_OUTBOX)) {
+      sendResponse({ accepted: true });
+      void outboxOf().clear();
+      return false;
+    }
     return false;
   },
 );
@@ -81,19 +109,60 @@ async function requestMeta(): Promise<CaptureRequestMeta> {
   return { deviceId: await ensureDeviceId(localArea()) };
 }
 
+/**
+ * An incognito profile gets no queue. `chrome.storage.local` outlives the session on disk, so promising
+ * 「仅保存在扩展待发送队列」 there would keep text the user meant to forget (§16 无痕模式禁用队列).
+ */
+function outboxOf(): Outbox {
+  return chrome.extension?.inIncognitoContext === true ? disabledOutbox() : createOutbox(localArea());
+}
+
 async function sendCapture(request: CaptureRequest, tabId: number | undefined): Promise<void> {
   const settings: ExtensionSettings = await loadSettings(syncArea());
   const outcome = await captureIntent(settings, request);
-  await broadcast(tabId, outcome);
+  await broadcast(tabId, await keepOrReport(settings, request, outcome));
+  // The Core just answered for this text, so anything queued earlier has a good chance of going through.
+  if (outcome.ok) void flushOutbox();
+}
+
+/**
+ * A refusal the queue may resend is queued; a refusal the Core made on purpose is reported as what it
+ * is. Both cases keep the original text — the difference is only whether we promise to try again.
+ */
+async function keepOrReport(settings: ExtensionSettings, request: CaptureRequest, outcome: CaptureOutcome): Promise<CaptureOutcome> {
+  if (outcome.ok) return outcome;
+  const outbox = outboxOf();
+  if (!shouldQueue(outcome, outbox.enabled)) return outcome;
+  const report = await queueCapture(outbox, {
+    id: request.requestId,
+    request,
+    queuedAt: new Date().toISOString(),
+    tries: 0,
+    lastError: outcome.message,
+  });
+  return { ...outcome, message: report.message, queued: report.queued };
+}
+
+let draining = false;
+
+const EMPTY_DRAIN: DrainReport = { sent: 0, alreadyStored: 0, kept: 0, expired: 0, corrupt: 0, stoppedEarly: true };
+
+/** One drain at a time: two service-worker wakeups resending the same entry would double-file it. */
+async function flushOutbox(): Promise<DrainReport> {
+  const outbox = outboxOf();
+  if (!outbox.enabled || draining) return EMPTY_DRAIN;
+  draining = true;
+  try {
+    const settings = await loadSettings(syncArea());
+    return await drainOutbox({ outbox, send: (request) => captureIntent(settings, request) });
+  } finally {
+    draining = false;
+  }
 }
 
 async function broadcast(tabId: number | undefined, outcome: CaptureOutcome): Promise<void> {
   if (tabId === undefined) return;
-  const message: CaptureResultMessage = {
-    type: MESSAGE_CAPTURE_RESULT,
-    ok: outcome.ok,
-    ...(outcome.ok ? { result: outcome.result } : { message: outcome.message }),
-  };
+  const message: CaptureResultMessage = captureResultMessage(outcome);
   try {
     await chrome.tabs.sendMessage(tabId, message);
   } catch {
