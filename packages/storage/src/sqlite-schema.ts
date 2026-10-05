@@ -1,10 +1,15 @@
 /**
  * SQLite schema ownership: pragmas, versioned DDL and the migration runner.
  *
- * The table set mirrors `supabase/migrations/20261002000200_core_tables.sql` minus Postgres-only
+ * Versions 1–2 mirror `supabase/migrations/20261002000200_core_tables.sql` minus Postgres-only
  * machinery (no roles, no RLS, no `extensions.vector`). Enum CHECK labels are copied from the same
  * source of truth as the Postgres file — `packages/schema/src/enums.ts` — and `sqlite-schema.test.ts`
  * fails if the two drift.
+ *
+ * Version 3 adds the Research tables. They have no Postgres counterpart in this repository: the
+ * archived `research-supabase.ts` driver and its two migrations were left in `ad1d0c6`, so the zod
+ * enums in `packages/schema/src/research.ts` are the only source of truth for these labels, and
+ * `research-schema.test.ts` is what keeps the two from drifting.
  *
  * Durability choices follow the local-desktop brief: WAL for reader/writer concurrency, `FULL`
  * synchronous so a confirmed write survives a power loss, foreign keys on per connection, and a busy
@@ -13,7 +18,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 /** Bumped by appending a new entry to MIGRATIONS; stored in `PRAGMA user_version`. */
-export const SQLITE_SCHEMA_VERSION = 2;
+export const SQLITE_SCHEMA_VERSION = 3;
 
 export interface SqliteOpenOptions {
   /** Absolute path to the database file, or `:memory:`. */
@@ -58,6 +63,25 @@ const ENUM_CHECKS = {
     "('create', 'rename', 'move', 'reparent', 'merge', 'split', 'archive', 'restore')",
   contextScope: "('current_node', 'section', 'tree', 'whole_library')",
   conversationRole: "('system', 'user', 'assistant')",
+  researchProjectStatus: "('active', 'archived', 'completed')",
+  researchQuestionStatus: "('open', 'answered', 'revised', 'dropped')",
+  evidenceType:
+    "('literature', 'dataset', 'analysis_result', 'figure', 'table', 'interview', 'expert_judgement', 'document', 'note', 'external_source', 'other')",
+  claimType:
+    "('descriptive', 'empirical', 'methodological', 'interpretive', 'theoretical', 'contribution', 'limitation')",
+  claimStatus: "('draft', 'proposed', 'confirmed', 'revised', 'dropped')",
+  researchChangeType:
+    "('research_question', 'method', 'scope', 'claim', 'contribution', 'journal', 'structure', 'evidence', 'other')",
+  researchEntityType:
+    "('research_project', 'research_charter', 'research_question', 'evidence', 'claim', 'research_decision', 'research_change', 'drift_finding', 'manuscript_section')",
+  researchRelationType:
+    "('supports', 'partially_supports', 'contradicts', 'qualifies', 'contextualizes', 'answers', 'appears_in', 'changes', 'affects', 'relates_to')",
+  driftType:
+    "('rq_drift', 'contribution_drift', 'evidence_drift', 'causality_drift', 'method_drift', 'journal_drift')",
+  driftSeverity: "('info', 'warning', 'critical')",
+  driftFindingStatus: "('open', 'acknowledged', 'resolved', 'dismissed')",
+  timelineEventType: "('decision', 'change', 'milestone')",
+  timelineSource: "('research_decision', 'research_change', 'manual')",
 } as const;
 
 const DDL_V1 = `
@@ -244,9 +268,221 @@ create unique index if not exists raw_sources_idempotency_uq
   on raw_sources (user_id, client_id, request_id) where request_id is not null;
 `;
 
+/**
+ * Version 3 is the Research domain: eleven additive tables hanging off `research_projects`.
+ *
+ * Nothing in versions 1–2 changes, so a knowledge-only profile upgrades without touching a row it
+ * already had. Two shapes here are enforced in the file rather than only in the driver because the
+ * in-memory driver guarantees them anyway: one charter per project, and one row per
+ * (user, project, source, relation, target) tuple — a repeat `createEntityRelation` returns the
+ * existing relation untouched, so a duplicate must be impossible rather than merely unlikely.
+ *
+ * `project_id` cascades: deleting a project removes its research objects. No code path does that in
+ * V1 (research projects are only archived), but a stray row must never be able to outlive its owner.
+ */
+const DDL_V3 = `
+create table if not exists research_projects (
+  id text primary key,
+  user_id text not null,
+  name text not null,
+  description text,
+  status text not null default 'active'
+    constraint research_projects_status_enum_check check (status in ${ENUM_CHECKS.researchProjectStatus}),
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists research_projects_user_idx on research_projects (user_id, created_at);
+
+create table if not exists research_charters (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  working_title text not null,
+  research_topic text,
+  research_problem text,
+  research_gap text,
+  research_questions_text text,
+  core_contribution text,
+  theoretical_lens text,
+  research_context text,
+  unit_of_analysis text,
+  research_method text,
+  target_article_type text,
+  target_journal text,
+  research_boundary text,
+  claim_boundary text,
+  current_stage text,
+  created_at text not null,
+  updated_at text not null
+);
+create unique index if not exists research_charters_project_uq on research_charters (project_id);
+
+create table if not exists research_questions (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  question_code text not null,
+  question_text text not null,
+  status text not null default 'open'
+    constraint research_questions_status_enum_check check (status in ${ENUM_CHECKS.researchQuestionStatus}),
+  rationale text,
+  related_method text,
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists research_questions_list_idx on research_questions (user_id, project_id, created_at);
+
+create table if not exists research_evidence (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  type text not null constraint research_evidence_type_enum_check check (type in ${ENUM_CHECKS.evidenceType}),
+  title text not null,
+  description text,
+  source_reference text,
+  source_location text,
+  reliability_note text,
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists research_evidence_list_idx on research_evidence (user_id, project_id, created_at);
+
+create table if not exists research_claims (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  claim_code text not null,
+  claim_text text not null,
+  claim_type text not null
+    constraint research_claims_claim_type_enum_check check (claim_type in ${ENUM_CHECKS.claimType}),
+  status text not null default 'draft'
+    constraint research_claims_status_enum_check check (status in ${ENUM_CHECKS.claimStatus}),
+  confidence real not null default 0 constraint research_claims_confidence_range_check
+    check (confidence between 0 and 1),
+  boundary text,
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists research_claims_list_idx on research_claims (user_id, project_id, created_at);
+
+create table if not exists research_manuscript_sections (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  section_name text not null,
+  section_reference text,
+  sort_order integer not null default 0,
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists research_sections_list_idx
+  on research_manuscript_sections (user_id, project_id, created_at);
+
+create table if not exists research_entity_relations (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  source_type text not null
+    constraint research_entity_relations_source_type_enum_check
+      check (source_type in ${ENUM_CHECKS.researchEntityType}),
+  source_id text not null,
+  relation_type text not null
+    constraint research_entity_relations_relation_type_enum_check
+      check (relation_type in ${ENUM_CHECKS.researchRelationType}),
+  target_type text not null
+    constraint research_entity_relations_target_type_enum_check
+      check (target_type in ${ENUM_CHECKS.researchEntityType}),
+  target_id text not null,
+  note text,
+  created_at text not null
+);
+create unique index if not exists research_entity_relations_quintuple_uq
+  on research_entity_relations (user_id, project_id, source_type, source_id, relation_type, target_type, target_id);
+create index if not exists research_entity_relations_list_idx
+  on research_entity_relations (user_id, project_id, created_at);
+
+create table if not exists research_decisions (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  title text not null,
+  decision text not null,
+  reason text,
+  alternatives text,
+  rejected_alternatives text,
+  impact text,
+  related_entities_json text not null default '{}',
+  created_at text not null
+);
+create index if not exists research_decisions_list_idx
+  on research_decisions (user_id, project_id, created_at);
+
+create table if not exists research_changes (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  change_type text not null
+    constraint research_changes_change_type_enum_check check (change_type in ${ENUM_CHECKS.researchChangeType}),
+  before_text text not null,
+  after_text text not null,
+  reason text,
+  impact text,
+  related_entities_json text not null default '{}',
+  created_at text not null
+);
+create index if not exists research_changes_list_idx on research_changes (user_id, project_id, created_at);
+
+create table if not exists research_drift_findings (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  drift_type text not null constraint research_drift_findings_drift_type_enum_check
+    check (drift_type in ${ENUM_CHECKS.driftType}),
+  severity text not null constraint research_drift_findings_severity_enum_check
+    check (severity in ${ENUM_CHECKS.driftSeverity}),
+  description text not null,
+  source_entity_type text
+    constraint research_drift_findings_source_entity_type_enum_check
+    check (source_entity_type is null or source_entity_type in ${ENUM_CHECKS.researchEntityType}),
+  source_entity_id text,
+  target_entity_type text
+    constraint research_drift_findings_target_entity_type_enum_check
+    check (target_entity_type is null or target_entity_type in ${ENUM_CHECKS.researchEntityType}),
+  target_entity_id text,
+  reason text,
+  recommended_action text,
+  status text not null default 'open'
+    constraint research_drift_findings_status_enum_check check (status in ${ENUM_CHECKS.driftFindingStatus}),
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists research_drift_findings_list_idx
+  on research_drift_findings (user_id, project_id, created_at);
+
+create table if not exists research_timeline_events (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  event_type text not null
+    constraint research_timeline_events_event_type_enum_check check (event_type in ${ENUM_CHECKS.timelineEventType}),
+  occurred_at text not null,
+  title text not null,
+  summary text,
+  source_type text
+    constraint research_timeline_events_source_type_enum_check
+    check (source_type is null or source_type in ${ENUM_CHECKS.timelineSource}),
+  source_id text,
+  related_entities_json text not null default '{}',
+  created_at text not null
+);
+create index if not exists research_timeline_events_list_idx
+  on research_timeline_events (user_id, project_id, occurred_at);
+`;
+
 const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => void }> = [
   { version: 1, apply: (db) => db.exec(DDL_V1) },
   { version: 2, apply: (db) => db.exec(DDL_V2) },
+  { version: 3, apply: (db) => db.exec(DDL_V3) },
 ];
 
 function readString(db: DatabaseSync, sql: string): string {
@@ -329,4 +565,9 @@ export function openSqlite(options: SqliteOpenOptions): SqliteConnection {
   return { db, pragmas };
 }
 
-export { MIGRATIONS as SQLITE_MIGRATIONS, DDL_V1 as SQLITE_DDL_V1, DDL_V2 as SQLITE_DDL_V2 };
+export {
+  MIGRATIONS as SQLITE_MIGRATIONS,
+  DDL_V1 as SQLITE_DDL_V1,
+  DDL_V2 as SQLITE_DDL_V2,
+  DDL_V3 as SQLITE_DDL_V3,
+};
