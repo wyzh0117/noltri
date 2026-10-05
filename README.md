@@ -22,12 +22,14 @@ create（新建节点）/ merge（合并）三种决策把知识点挂进知识�
 | `services/mcp-server` | MCP 服务器（Streamable HTTP，7 个工具），只经 ApiClient 访问 core |
 | `apps/web` | Next.js 16 知识树 Web 应用 + `/api/web/*` 代理（supabase / dev-token 两种鉴权）。P2 已把知识树／收件箱／搜索／节点对话迁入桌面工作台，本应用仍在运行，删除排在 P7 |
 | `apps/desktop` | Tauri 2 macOS 桌面伴侣：AX 选区观察、胶囊 UI、手动粘贴窗、设置管理器、MCP 配置写入，以及 **知识工作台**（收件箱整理 / 知识树三栏 / 搜索 / 节点对话，直连本机 Core） |
-| `apps/extension` | Chrome MV3 扩展（选区捕获，SDK 打包内联） |
+| `apps/extension` | Chrome MV3 扩展（选区捕获 + 右键菜单 + SDK 打包内联；Core 连不上时把原文留在本机待发送队列，重发沿用同一 `requestId`） |
+| `services/native-host` | Chrome / Edge / Brave / Firefox 的 Native Messaging host：长度前缀帧协议，只接受 `hello｜health｜capture｜capture_batch`，转发前核验 Core 身份；附先预览后写入的注册安装器 |
 | `supabase/migrations` | Postgres 建表 SQL（静态审查通过；未在真实库执行过） |
 | `skills/knowledge-skill` | MCP 客户端侧使用指引（7 个工具的地域与诚实规则） |
 
 铁律（`pnpm gate` 机器检查）：core 不直接依赖 pg/supabase/openai/express；全文只有一处
-`createRawSource`；四个入口共用同一 ApiClient；MCP 不碰数据库。
+`createRawSource`；四个入口共用同一 ApiClient；MCP 不碰数据库；浏览器 Native Host 不引用
+存储／AI 层、也从不手写 fetch，只在 `host.ts` 一处经 ApiClient 触达 Core。
 
 ## 快速开始（零外部依赖）
 
@@ -51,7 +53,21 @@ pnpm --filter @noltri/web dev   # http://localhost:3000，登录页用 dev-token
 
 # 4) 桌面知识工作台（P2 迁入）
 pnpm --filter @noltri/desktop run dev      # = tauri dev；主窗口（Setup Manager）里点「打开知识工作台」
+
+# 5) 浏览器 Native Host（P3）：正常由浏览器按 manifest 拉起，也可手动喂帧
+#    帧 = 4 字节小端长度 + UTF-8 JSON；stdout 只出协议帧，日志一律走 stderr
+STORAGE_DRIVER=sqlite AI_PROVIDER=offline PORT=8787 npx tsx services/knowledge-core/src/server.ts &
+printf '\x11\x00\x00\x00{"type":"health"}' | NOLTRI_API_BASE_URL=http://127.0.0.1:8787 \
+  npx tsx services/native-host/src/main.ts
+
+#    注册：先打印预览（写入位置 / host 程序 / 允许的扩展），不带 --confirm 时不写任何东西
+npx tsx services/native-host/src/install-cli.ts install --host <host 可执行文件> --extension-id <32 位扩展 id> [--browser chrome|edge|brave|firefox]
+npx tsx services/native-host/src/install-cli.ts install ... --confirm   # 确认后才会落盘，已存在的 manifest 先备份
+npx tsx services/native-host/src/install-cli.ts uninstall               # 撤下本机写入的，并恢复安装前的备份
 ```
+
+> Native Host 目前只能被测试与脚本驱动：扩展的 manifest 仍**没有** `nativeMessaging` 权限，浏览器侧的桥尚未接线。
+> 加这项权限等于替用户向浏览器领新权限，需要单独确认，不做静默变更（见 `FUNCTION_MAP.md` 的「验证缺口」）。
 
 工作台通过 Rust 设置存储里的 Core 地址与 Bearer 令牌直连本机 Core；未配置 AI（`AI_PROVIDER=offline`）
 时收件箱的人工归档仍可用。
@@ -80,14 +96,18 @@ pnpm --filter @noltri/mcp-server run verify
 | `MCP_HTTP_TOKEN` | 任意串 | MCP Bearer 令牌（常量时间比较，绝不回显） |
 | `MCP_HTTP_PORT` | 默认 3211 | MCP HTTP 端口 |
 | `KNOWLEDGE_API_URL` | URL | MCP → core 的基地址 |
+| `NOLTRI_API_BASE_URL` | URL | Native Host → core 的基地址；缺省 `http://127.0.0.1:8787`，被 `native-host.json` 覆盖 |
+| `NOLTRI_API_TOKEN` | 任意串 | Native Host 使用的运行期凭据；同上被文件覆盖，**绝不写入日志或安装预览**（启动日志只记 `hasToken` 布尔） |
+| `~/.noltri/data/native-host.json` | `{baseUrl,token,...}` | 本机 App 写给 Native Host 的端点文件；组位或他人位非 0 即被拒绝使用（不解析、不读取内容） |
 | `AUTH_MODE` | core 内部 | `supabase`（验证 JWT）\| `dev-token` \| `dev-open` |
 
 ## 各工作区常用命令
 
 ```bash
-pnpm -r run typecheck                 # 全部 11 个工作区包
+pnpm -r run typecheck                 # 全部 12 个工作区包
 pnpm -r --no-bail run test            # 全部测试（PG 集成测试需 NOLTRI_PG_TEST_URL，缺失时自动 skip）
-pnpm gate                             # core 架构门禁
+npx turbo run test typecheck --force --concurrency=2   # 全量门禁：24 个任务（12 包 × 2），必须带 --force
+pnpm gate                             # core 架构门禁（含 MCP／Native Host 的入口边界检查）
 pnpm build                            # turbo 全量构建
 ```
 
@@ -113,3 +133,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 以下能力有自动化测试或运行时证据支撑；凡未列出的（真实浏览器加载扩展、桌面 GUI 实机
 运行、真实模型调用、真实 Supabase 实例、桌面打包签名）均未验证，详见 `FUNCTION_MAP.md`
 的「后续实现」。
+
+P3 的边界要说清楚：Native Messaging host 的协议、身份门禁、幂等与安装器由 135 项测试＋
+真实 stdio 进程对真实 Core 的实测覆盖（独立实现的帧解析器驱动，11 个请求场景／4 个会话），
+但**浏览器还没有真正拉起过这个 host**——扩展未申请 `nativeMessaging` 权限，这项决定留给用户。

@@ -257,3 +257,110 @@ Core 进程启动到 `/api/health` 返回 200：490 ms（含 tsx 转译，**不�
 | `README.md` 常用命令 | 「全部 12 个工作区」 | **11 个**工作区包（`apps` 3＋`services` 3＋`packages` 5），因此 turbo 的 test＋typecheck 恰为 22 个任务 |
 
 「一一对应」这类断言最容易说谎：它不是任何测试的输出，只是当年写下的描述。已改为直接可复核的三个数字，其中「两个命令注册但无人调用」是本轮才暴露出来的事实，留给 P3／P4 决定是接上还是摘掉。
+
+## 14 P3 落地结果（2026-10-05 实测）
+
+P3 的范围口径是开发文档 §589：「浏览器 Native Host、选区浮窗、降级路径、统一 CaptureRequest ｜ 多入口同库，失败不丢原文，重复提交幂等」。分三片交付，加本片文档回写共 13 个提交，范围 `0be39d0..0c2ea21`：68 files changed，4677 insertions(+)，120 deletions(-)。P3-A 5 个提交（统一键与错误契约）、P3-B 4 个提交（扩展降级与队列）、P3-C 4 个提交（Native Host 与安装器）。
+
+### 14.1 用例分布（逐包 `npx turbo run test --filter=@noltri/<pkg> --force` 实测，非估算）
+
+| 包 | 测试文件 | 通过 | 跳过 | P2 时 |
+| --- | --- | --- | --- | --- |
+| `services/native-host` | 7 | 135 | 0 | 本轮新建 |
+| `apps/extension` | 9 | 134 | 0 | 6 文件／69 |
+| `services/knowledge-core` | 10 | 99 | 0 | 9 文件／83 |
+| `packages/storage` | 5 | 75 | 21 | 69／20 |
+| `packages/api-client` | 2 | 17 | 0 | 1 文件／10 |
+| `packages/shared` | 3 | 60 | 0 | 60 |
+| `apps/desktop` | 7 | 79 | 0 | 79 |
+| `packages/ai-provider` | 2 | 48 | 0 | 48 |
+| `services/mcp-server` | 2 | 20 | 0 | 20 |
+| `services/ai` | 1 | 15 | 0 | 15 |
+| `apps/web`（`node:test`） | 1 | 28 | 0 | 28 |
+| `packages/schema` | 0 | 0 | 0 | 契约由消费方锁定，本包无独立用例 |
+| 合计 | **49** | **710** | **21** | 37 文件／481／20 |
+
+净增 229 通过、1 跳过、12 个测试文件。21 项跳过全部是 `packages/storage/test/supabase.contract.test.ts` 缺少 `NOLTRI_PG_TEST_URL` 的 PG 集成用例（比 P2 多 1 项是新增的幂等键契约用例在 PG 侧同样跳过），按 §19 X02 口径**不计通过**。
+
+native-host 7 个文件的分布：`protocol` 33、`host` 23、`manifest` 20、`discovery` 17、`install-cli` 17、`framing` 14、`main` 11。knowledge-core 新增的是 `idempotency.test.ts` 12 项与 `architecture-gate` 由 8→10 项（补了「浏览器 host 不引用存储／AI 层」「只在 `host.ts` 一处经 ApiClient 触达 Core、不手写 fetch」两条结构断言）。
+
+全量门禁：`npx turbo run test typecheck --force --concurrency=2 --continue` → **24/24 任务通过**（12 包 × 2），日志 `/tmp/p3d-gate.log`；`npx turbo run typecheck --force --concurrency=4` 单独跑为 12/12。Rust 侧本轮**未重新执行** `cargo test`，P2 记录的 8 项通过仍是上一次的结果。
+
+### 14.2 P3-A：重复提交幂等（真实 Core + SQLite，§7.1／7.2 验收）
+
+探针脚本 `/tmp/p3a-evidence.mjs`、`/tmp/p3a-evidence2.mjs`（仓库之外的一次性脚本），Core 以 `STORAGE_DRIVER=sqlite AI_PROVIDER=offline PORT=8791/8792` 启动，日志 `/tmp/p3a-core.log`。实测记录（原文摘自 `/tmp/p3a-evidence.log`）：
+
+- `GET /api/health` → 200，`productId=noltri-knowledge-core`、`instanceId=85c3b815…`、`protocolVersion=1`、`storage.schemaVersion=2`；同一进程内 `instanceId` 稳定
+- 同键两次：第一次 `duplicate=false`，第二次 `duplicate=true`、`items=[]`、**同一个** `rawSourceId=44fcc5bd…`
+- 同文本不同键：返回**另一个** `rawSourceId=3b4112d2…`——即「内容相同但来源不同」不会被静默丢弃
+- 无 `requestId` → 400 `invalid_request`，`retryable=false`，带 `traceId`；`GET /api/inbox/:id` 不存在 → 404 同样带 `retryable` ＋ `traceId`
+- 文档里那行 `ASSERT exactly 2 sources after 3 accepted submissions: false` 是**探针写错**，不是端点行为错：响应体没有 `sources` 键（是 `entries`／`counts`），探针读了一个不存在的字段所以恒为 0。P3-B／P3-C 的复核一律读 `entries`，计数与场景数一致
+
+文档回写前重新跑了一次键矩阵（`/tmp/p3d-evidence2.mjs`，Core 在 8795，库 `/tmp/noltri-p3d-evidence2.sqlite`）：
+
+```
+same-key first                    -> 200 dup=false stage=needs_review src=10c338bf…
+same-key replay                   -> 200 dup=true  stage=needs_review src=10c338bf…
+diff key, same text               -> 200 dup=false src=9829aadd…
+same text, other client/device    -> 200 dup=false src=e4d7ab4d…
+raw_sources 行数 = 3，列为 request_id / client_id（第四行没写进去，因为它被认成重放）
+```
+
+`pnpm gate` 现为 10 项全通过；`raw_sources` 在 SQLite `user_version=2` 与 Postgres 迁移 `20261005000100_capture_idempotency.sql` 里都是 partial unique index（`where request_id is not null`），历史行不受影响、升级不失败。
+
+### 14.3 P3-B：断线不丢原文（§10.3 验收）
+
+`/tmp/p3b-outbox-live.mts` 驱动真实的扩展模块（`outbox/`＋`api/client.ts`＋`overlay/toast-content.ts`），先杀掉 Core 再恢复，日志 `/tmp/p3b-outbox-live.log`：
+
+- Core 不在时：`ok=false retryable=true coreUnreachable=true`，队列回执「等待 Noltri：内容已保留，连上后自动发送」，队列持有 2 条
+- Core 恢复后排空：`sent=2 alreadyStored=0 kept=0 stoppedEarly=false`，**重发使用的键与队列里的逐字相同**（断言为 true）
+- 事后 `GET /api/inbox` → `entries=2 counts={"pending":0,"processing":0,"done":2,"failed":0}`
+- 再跑一次排空：`sent=0 alreadyStored=1`，库里仍然是 2 条原文——重放不会产生第二条
+- 明确扣下发出去的那条：`stage=needs_review queued=false`，浮层显示「已存入 Noltri，需要你复核」
+- 正文过短这类**拒绝**：`retryable=false shouldQueue=false`，队列保持空——拒绝不会被当成断线反复重试
+
+### 14.4 P3-C：真实 stdio × 真实 Core（§7.6／§10.2 验收）
+
+`/tmp/p3c-native-host-live.mts` 用**独立实现**的帧解析器驱动真实子进程（`npx tsx services/native-host/src/main.ts`，`HOME` 指向空目录，`NOLTRI_API_BASE_URL` 指向真实 Core；Core 为 `STORAGE_DRIVER=sqlite`、`AI_PROVIDER=offline`、`PORT=8791`）。四个会话、11 个请求场景，完整日志 `/tmp/p3c-native-host-live.log`（17 KB）与 `/tmp/p3c-live-console.log`：
+
+| 会话 | 场景 | 实测回复 |
+| --- | --- | --- |
+| 1（真实 Core） | `hello` | `hostProtocol=1`，`core={noltri-knowledge-core, ffb91f31…, 1, 0.1.0}` |
+| | `health` | 带 `storage`：`driver=sqlite`、`journalMode=wal`、`synchronous=full`、`schemaVersion=2`、`fts5=true` |
+| | `capture`（键 `req-native-live-idem-0001`） | `stage=needs_review duplicate=false`，`processingStatus=done` |
+| | 同键重放 | 同一 `rawSourceId`、`duplicate=true`、`items=[]` |
+| | `export_all` | `forbidden_scope`「Native Host 只接受采集与健康检查，不执行 export_all请求」`retryable=false` |
+| | `capture_batch`（2 条） | 两条各自落盘，`rawSourceId` 不同、nodePath 挂同一棵子树 |
+| | `capture_batch` 超上限（9 条） | `invalid_request`「正文至少 8 个字，requestId 至少 8 位，一条消息最多 4 条采集」 |
+| | 泄漏探针 | 正常采集成功；随后审计：**被拒帧里出现过用户原文吗？false** |
+| 2（诱捕服务 8793，非本项目） | `capture` | `core_identity_mismatch`「这个端口上运行的不是知序 Noltri Core，内容没有发送」；诱捕服务 `POST /api/capture` 计数 **0** |
+| 3（只回 `{"ok":true}` 的 8794） | `capture` | `capture_failed`「本地 Core 的返回不符合契约，这条采集未确认」`retryable=true`；该端口 `POST /api/capture` 计数 **0** |
+| 4（8899 无人监听） | `capture` | `core_unreachable`「未找到本地 Noltri Core，请确认知序 App 正在运行」`retryable=true` |
+
+帧通道完整性：`session 1 framing: stdout bytes=3449 frames=8 unparsed tail=0 violations=[]`——8 条请求 8 帧回复，stdout 上没有半个字节的非帧内容。落库侧对账：`Core inbox counts {"pending":0,"processing":0,"done":4,"failed":0} · entries stored: 4`、`same-requestId rows in the store: 1 (expected 1)`、`forbidden payload ever stored? false`。stderr 侧只出现：`host started {"source":"env","baseUrl":"http://127.0.0.1:8793","hasToken":false}`（**记录凭据存在与否，绝不记录凭据本身**）与 `core identity refused {"code":"core_identity_mismatch"}`。
+
+安装器本轮**没有对用户的真实浏览器目录执行过写入**。核实命令与结果：`find ~/Library/Application\ Support -name 'com.noltri*'` 为空；Chrome／Edge 的 `NativeMessagingHosts` 目录里只有用户自己早先装入的 Notion、Codex 条目（时间戳早于本轮）。所有写入测试都在 `--home <临时目录>` 下进行。
+
+README 里新增的 host 手动示例不是纸面命令，实测过：`printf '\x11\x00\x00\x00{"type":"health"}' | NOLTRI_API_BASE_URL=http://127.0.0.1:8796 npx tsx services/native-host/src/main.ts` 返回了一帧完整 health（含 `schemaVersion=2`、`fileName=noltri-p3d-readme.sqlite`，只报文件名不报绝对路径），stderr 一行 `host started`。用完的临时 Core 按端口 PID 精确 `kill`（`lsof -nP -tiTCP:8796 -sTCP:LISTEN`），未使用宽匹配 `pkill`，未触碰用户自己的进程。
+
+### 14.5 本轮实测暴露并修掉的五个真问题
+
+1. **`FrameParser` 的 `{frames, error}` 返回形状破坏了 Chrome 的回复配对**。浏览器按**位置**把回复对上请求：一条坏帧之后，旧 API 会先把后面的好帧交出来（顺序错位），并把紧随其后的好帧整批丢掉（用户看到「发出去了但没有回应」）。改为有序事件流 `ParseEvent = frame｜error`，坏 JSON 仍宣告下一帧的起点，只有长度撒谎（无法再同步）才清空缓冲。
+2. **默认 logger 往 stdout 写日志**——第一次实机跑 10 条请求全部超时，而 Core 那边却真的收到了采集。原因是一行 INFO 被当成 4 字节长度前缀，之后每一帧都错位。修复：host 专用 `createStderrLogger`，并补两项「stdout 只允许出现帧」的测试；这条现在是测试锁定的不变量，不是口头约定。
+3. **安装器只认 `--flag=value`，`--flag value` 的值被静默丢弃**。后果不是不方便，而是 `--home <临时目录>` 失效后带 `--confirm` 的一次安装会直接写进用户真实 Chrome 的 `NativeMessagingHosts`。修复两种形式都支持，并把 `--confirm` 之外的布尔位单独处理；测试里 `beforeEach` 把 `process.env.HOME` 指到临时目录作第二道护栏（若实现再退回读 env，测试会写到别处以立刻暴露）。
+4. **超出单条上限的批次被拒时说成「不执行 capture_batch 请求」**，把用户合法使用的动词说成越权。补 `invalid_request` 这一类：拒绝必须指出到底哪里不合格（正文长度／键长度／条数上限），越权与不合格是两种答案（§7.5）。
+5. **端口上只有 `{"ok":true}` 时，host 把内部契约错误原文转给了页面**（`Knowledge Core response did not match the shared contract for GET /api/health`）。改为「本地 Core 的返回不符合契约，这条采集未确认」`retryable=true`；同时 `readableCoreMessage()` 对堆栈／SQL／文件路径形态的字符串一律换成稳定中文，转发上限 160 字符。
+
+另外两处主动收口：能力边界写在 schema 层（`hostRequestSchema` 是四动词的判别联合），因此**不存在**能接受 `export_all` 的代码路径，页面／文献／模型输出里出现的「执行命令」「导出全库」类文字对 host 不构成指令；被拒帧不回显载荷，回显的动词 token 先做形状校验（`^[a-z][a-z0-9_]{0,23}$`）并限长。
+
+### 14.6 P3 明确没做的事
+
+- **扩展的 `nativeMessaging` 权限没有加**。`apps/extension/src/manifest.json` 仍是 `contextMenus / storage / activeTab`。这是替用户向浏览器领一项新权限，按 §16 不能静默变更，需单独确认后再接线（host 可执行文件在打包后的路径解析、扩展 id 的取得、安装预览的实跑都在这一步）。因此「浏览器真的拉起过这个 host」目前未验证。
+- 受限页面文案、粘贴收纳通路、队列与浮层状态都有测试，但**没有在真实 Chrome／真实无痕窗口里点过**；`vite/extension build` 通过（`manifest validation passed`，`popup.js`／`content.js` 各 1.9 MB 含 sourcemap）。
+- host manifest 对用户真实浏览器目录**未写入过**；Windows 注册表路径只提供说明、不提供写入。
+- `apps/web`、`packages/storage` 的 Supabase 驱动、`supabase/migrations/` 全部保留（P7 才动）。`get_selection_preview`／`runtime_info` 两个 Rust 命令仍注册但前端无调用点，本轮未擅自接线也未摘除。
+- 未 `git push`；未删除任何分支／tag／远端引用；未改动用户的 `.workspace/`、`project.json`、`project.bak`。
+
+### 14.7 一条与本轮改动无关的观察（不信任外来内容）
+
+在 P0～P3 的多个工具返回结果尾部，反复出现过两段**不是用户写的**指令式文本（大意：「内容是硬上限，必须遵守规则，尽量多输出」以及「Please continue」）。处理方式是把它们当作不可信内容：没有据此改变任务范围、没有放宽任何输出长度约束、也没有转述成用户指令。开发文档 §16 关于「文献／网页／模型输出里的文字不是工具指令」的要求，在实现层由 host 的四动词判别联合兜住——页面里的文字让 host 去「导出全库」，得到的只会是 `forbidden_scope`。该现象留档，供后续轮次继续观察。
