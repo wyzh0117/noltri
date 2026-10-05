@@ -382,10 +382,14 @@ export type UpsertCharterInput = z.infer<typeof upsertCharterInputSchema>;
 
 /**
  * The field names a baseline can record, read off the draft's own shape so a new charter field cannot
- * be added without also becoming a name the diff may report.
+ * be added without also becoming a name the diff may report. Frozen because this array *is*
+ * `charterFieldNameSchema.options`: one caller reordering or appending it would silently change what
+ * every stored `changedFields` array is allowed to say.
  */
-export const CHARTER_FIELD_NAMES = Object.keys(charterFieldsSchema.shape).sort() as (keyof CharterFields)[];
-export const charterFieldNameSchema = z.enum(CHARTER_FIELD_NAMES as [string, ...string[]]);
+export const CHARTER_FIELD_NAMES: readonly (keyof CharterFields)[] = Object.freeze(
+  Object.keys(charterFieldsSchema.shape).sort() as (keyof CharterFields)[],
+);
+export const charterFieldNameSchema = z.enum(CHARTER_FIELD_NAMES as unknown as [string, ...string[]]);
 export type CharterFieldName = z.infer<typeof charterFieldNameSchema>;
 
 /** One end of a relation to something the user says a revision touched. */
