@@ -1,0 +1,24 @@
+{
+  "name": "@noltri/native-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/main.ts",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@noltri/api-client": "workspace:*",
+    "@noltri/schema": "workspace:*",
+    "@noltri/shared": "workspace:*",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}
