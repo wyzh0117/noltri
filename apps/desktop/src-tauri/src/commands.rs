@@ -483,6 +483,51 @@ pub fn read_config_file(path: String) -> Result<Option<String>, String> {
     mcp::read_text(&path, CONFIG_READ_LIMIT)
 }
 
+/// The absolute path Setup Manager resolved for this target, and nothing else. The UI may only ever
+/// write or restore this exact path, so a webview cannot aim a write at a file we did not choose.
+fn expected_path_for(state: &SharedState, target: &str) -> Result<String, String> {
+    let facts = facts_for(state, target)?;
+    if !facts.write_supported {
+        return Err("该客户端的配置不由 Setup Manager 代写".to_string());
+    }
+    facts
+        .config_path
+        .ok_or_else(|| "该客户端没有配置文件写入路径".to_string())
+}
+
+/// Re-validate a document the UI already merged or trimmed. Whatever is on disk right now must still
+/// be there, minus at most our own entry — that is the M02 promise 其他配置不受损, enforced here
+/// rather than trusted to the merge function alone (§16).
+fn validate_document(path: &str, contents: &str, carries_our_entry: bool) -> Result<(), String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(contents).map_err(|error| format!("待写入内容不是合法 JSON：{error}"))?;
+    let servers = parsed
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("待写入内容缺少 mcpServers 对象")?;
+    if carries_our_entry && !servers.contains_key(mcp::SERVER_NAME) {
+        return Err("待写入内容缺少知序服务器条目".to_string());
+    }
+    if !carries_our_entry && servers.contains_key(mcp::SERVER_NAME) {
+        return Err("待写入内容仍包含知序服务器条目，卸载未生效".to_string());
+    }
+    if let Ok(Some(current)) = mcp::read_text(path, CONFIG_READ_LIMIT) {
+        let on_disk: serde_json::Value = serde_json::from_str(&current)
+            .map_err(|error| format!("现有配置文件不是合法 JSON：{error}，请先手动处理"))?;
+        if let Some(existing) = on_disk.get("mcpServers").and_then(serde_json::Value::as_object) {
+            for name in existing.keys() {
+                if name == mcp::SERVER_NAME {
+                    continue;
+                }
+                if !servers.contains_key(name) {
+                    return Err(format!("待写入内容丢失了已有服务器「{name}」，已拒绝写入"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Writes an already-merged document. The UI has shown this exact absolute path in a confirmation
 /// dialog before reaching here; `Target::write_supported` and the file-name allowlist are the
 /// second and third gate.
@@ -493,28 +538,79 @@ pub fn write_mcp_config(
     path: String,
     contents: String,
 ) -> Result<String, String> {
-    let facts = facts_for(&state, &target)?;
-    if !facts.write_supported {
-        return Err("该客户端的配置不由 Setup Manager 代写".to_string());
-    }
-    let expected = facts
-        .config_path
-        .ok_or("该客户端没有配置文件写入路径".to_string())?;
+    let expected = expected_path_for(&state, &target)?;
     if expected != path {
         return Err(format!("拒绝写入 {path}：与 {expected} 不一致"));
     }
-    // Re-validate that the document is JSON and still carries the other servers' keys.
-    let parsed: serde_json::Value =
-        serde_json::from_str(&contents).map_err(|error| format!("待写入内容不是合法 JSON：{error}"))?;
-    let servers = parsed
-        .get("mcpServers")
-        .and_then(|value| value.as_object())
-        .ok_or("待写入内容缺少 mcpServers 对象")?;
-    if !servers.contains_key(mcp::SERVER_NAME) {
-        return Err("待写入内容缺少知序服务器条目".to_string());
-    }
+    validate_document(&path, &contents, true)?;
     let written = mcp::write_text_atomically(&path, &contents)?;
     Ok(written.display().to_string())
+}
+
+/// Uninstall: writes back a document whose only difference is the removed `noltri` entry. Same three
+/// gates as a write, plus the check that our entry really is gone and no other server was lost.
+#[tauri::command]
+pub fn remove_mcp_config(
+    state: State<'_, SharedState>,
+    target: String,
+    path: String,
+    contents: String,
+) -> Result<String, String> {
+    let expected = expected_path_for(&state, &target)?;
+    if expected != path {
+        return Err(format!("拒绝写入 {path}：与 {expected} 不一致"));
+    }
+    validate_document(&path, &contents, false)?;
+    let written = mcp::write_text_atomically(&path, &contents)?;
+    Ok(written.display().to_string())
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupOut {
+    pub file: String,
+    pub made_at: u64,
+    pub bytes: u64,
+    /// Local `HH:MM:SS` stamp, newest first, so the undo list reads as a timeline.
+    pub made_at_label: String,
+}
+
+/// Backups this app made for a config file — the 修改前备份 M01 asked for, listed so the user can
+/// pick one to go back to.
+#[tauri::command]
+pub fn list_config_backups(
+    state: State<'_, SharedState>,
+    target: String,
+    path: String,
+) -> Result<Vec<BackupOut>, String> {
+    let expected = expected_path_for(&state, &target)?;
+    if expected != path {
+        return Err(format!("只列出 {expected} 的备份"));
+    }
+    Ok(mcp::list_backups(&path)?
+        .into_iter()
+        .map(|backup| BackupOut {
+            made_at_label: crate::time::clock_label(backup.made_at),
+            file: backup.file,
+            made_at: backup.made_at,
+            bytes: backup.bytes,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn restore_mcp_config(
+    state: State<'_, SharedState>,
+    target: String,
+    path: String,
+    backup_file: String,
+) -> Result<String, String> {
+    let expected = expected_path_for(&state, &target)?;
+    if expected != path {
+        return Err(format!("拒绝恢复 {path}：与 {expected} 不一致"));
+    }
+    let restored = mcp::restore_backup(&path, &backup_file)?;
+    Ok(restored.display().to_string())
 }
 
 #[tauri::command]
@@ -622,4 +718,81 @@ pub fn runtime_info(app: AppHandle, state: State<'_, SharedState>) -> Result<Run
         trusted: ax::is_trusted(false),
         shortcut: guard.settings.global_shortcut.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str, contents: Option<&str>) -> String {
+        let dir = std::env::temp_dir().join(format!("noltri-cmd-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude_desktop_config.json");
+        if let Some(text) = contents {
+            std::fs::write(&path, text).unwrap();
+        }
+        path.to_str().unwrap().to_string()
+    }
+
+    fn cleanup(path: &str) {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn a_write_must_carry_our_entry_and_every_existing_one() {
+        let path = scratch("write", Some(r#"{"mcpServers":{"filesystem":{"command":"fs"}}}"#));
+        let missing_ours = r#"{"mcpServers":{"filesystem":{"command":"fs"}}}"#;
+        let error = validate_document(&path, missing_ours, true).unwrap_err();
+        assert!(error.contains("缺少知序服务器条目"), "{error}");
+
+        let drops_other = r#"{"mcpServers":{"noltri":{"type":"http"}}}"#;
+        let error = validate_document(&path, drops_other, true).unwrap_err();
+        assert!(error.contains("丢失了已有服务器「filesystem」"), "{error}");
+
+        let keeps_both = r#"{"mcpServers":{"filesystem":{"command":"fs"},"noltri":{"type":"http"}}}"#;
+        assert!(validate_document(&path, keeps_both, true).is_ok());
+        cleanup(&path);
+    }
+
+    /// M02: the uninstall path is checked the other way round — ours gone, everyone else still there.
+    #[test]
+    fn a_removal_must_drop_our_entry_and_touch_nothing_else() {
+        let path = scratch(
+            "remove",
+            Some(r#"{"mcpServers":{"noltri":{"type":"http"},"postgres":{"command":"pg"}},"prefs":1}"#),
+        );
+        let still_ours = r#"{"mcpServers":{"noltri":{"type":"http"},"postgres":{"command":"pg"}},"prefs":1}"#;
+        let error = validate_document(&path, still_ours, false).unwrap_err();
+        assert!(error.contains("仍包含知序服务器条目"), "{error}");
+
+        let lost_sibling = r#"{"mcpServers":{}}"#;
+        let error = validate_document(&path, lost_sibling, false).unwrap_err();
+        assert!(error.contains("丢失了已有服务器「postgres」"), "{error}");
+
+        let correct = r#"{"mcpServers":{"postgres":{"command":"pg"}},"prefs":1}"#;
+        assert!(validate_document(&path, correct, false).is_ok());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_document_that_is_not_json_or_has_no_servers_is_refused() {
+        let path = scratch("junk", None);
+        assert!(validate_document(&path, "not json", true).unwrap_err().contains("不是合法 JSON"));
+        assert!(validate_document(&path, r#"{"mcpServers":[]}"#, true)
+            .unwrap_err()
+            .contains("缺少 mcpServers 对象"));
+        cleanup(&path);
+    }
+
+    /// A file we cannot parse is a reason not to write, even when the new document is perfect.
+    #[test]
+    fn an_unparseable_existing_file_blocks_the_write() {
+        let path = scratch("broken", Some("{ trashed"));
+        let error = validate_document(&path, r#"{"mcpServers":{"noltri":{}}}"#, true).unwrap_err();
+        assert!(error.contains("现有配置文件不是合法 JSON"), "{error}");
+        cleanup(&path);
+    }
 }
