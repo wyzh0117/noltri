@@ -163,6 +163,30 @@ describe('architecture gate — mcp server', () => {
   });
 });
 
+describe('architecture gate — native messaging host', () => {
+  const hostSrc = join(ROOT, 'services', 'native-host', 'src');
+  const relative = (file: string): string => file.slice(hostSrc.length + 1);
+
+  it.skipIf(!existsSync(hostSrc))('never touches the storage or AI layers, nor a database file', () => {
+    const violations: string[] = [];
+    for (const file of tsFilesUnder(hostSrc)) {
+      const source = readFileSync(file, 'utf8');
+      for (const forbidden of ['@noltri/storage', '@noltri/ai-provider', 'node:sqlite', 'node:better-sqlite3', 'pg', '@supabase/']) {
+        if (source.includes(forbidden)) violations.push(`${relative(file)} -> ${forbidden}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it.skipIf(!existsSync(hostSrc))('reaches Core only through the shared ApiClient, never a hand-rolled fetch', () => {
+    const files = tsFilesUnder(hostSrc);
+    const clients = files.filter((file) => readFileSync(file, 'utf8').includes('@noltri/api-client'));
+    expect(clients.map(relative)).toEqual(['host.ts']);
+    const directFetch = files.filter((file) => /(?:^|[^.\w])fetch\s*\(/.test(readFileSync(file, 'utf8')));
+    expect(directFetch.map(relative)).toEqual([]);
+  });
+});
+
 describe('architecture gate — storage seam', () => {
   it('the repository factory is the only place a driver is chosen', () => {
     const coreSources = tsFilesUnder(CORE_SRC).map((file) => readFileSync(file, 'utf8')).join('\n');
