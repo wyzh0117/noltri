@@ -32,7 +32,8 @@ import type {
   KnowledgeNode,
   NodeContext,
 } from '@noltri/schema';
-import { silentLogger, type Logger } from '@noltri/shared';
+import { CORE_PRODUCT_ID, CORE_PROTOCOL_VERSION } from '@noltri/schema';
+import { createId, silentLogger, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
 import type { ActorContext, CoreDeps } from './types';
@@ -83,6 +84,9 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
     config: options.config,
     logger: options.logger ?? silentLogger,
   };
+  // One id per running instance, not per request: a caller that sees it change is talking to a Core that
+  // restarted underneath it, which is exactly what the Native Messaging relay has to detect.
+  const instanceId = createId();
 
   return {
     deps,
@@ -100,7 +104,7 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
     chat: (request, actor) => chatTurn(deps, actor, request),
     listConversations: (actor, nodeId) => listConversationRows(deps, actor, nodeId),
     listConversationMessages: (conversationId, actor) => listMessageRows(deps, actor, conversationId),
-    health: () => healthOf(deps),
+    health: () => healthOf(deps, instanceId),
   };
 }
 
@@ -108,13 +112,20 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
  * Reports wiring without touching the network or scanning the library: a provider that cannot embed, an
  * OpenAI-compatible driver with no key, and a storage driver that does not consider itself usable all
  * show up as `degraded` rather than as a green light.
+ *
+ * It also answers *who* is answering. A loopback port that returns JSON is not proof that Noltri is
+ * listening — the desktop host and the browser relay have to identify the product, the running instance
+ * and the protocol before they forward a user's text (本地桌面版开发文档 §16).
  */
-function healthOf(deps: CoreDeps): HealthResponse {
+function healthOf(deps: CoreDeps, instanceId: string): HealthResponse {
   const { config, provider, repository } = deps;
   const missingKey = config.ai.driver === 'openai' && config.ai.apiKey.trim().length === 0;
   const storage = repository.storageHealth();
   return {
     status: provider.capabilities.embeddings && !missingKey && storage.ok ? 'ok' : 'degraded',
+    productId: CORE_PRODUCT_ID,
+    instanceId,
+    protocolVersion: CORE_PROTOCOL_VERSION,
     version: config.version,
     storageDriver: repository.driver,
     storage,

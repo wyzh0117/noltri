@@ -26,7 +26,7 @@ import {
   type SearchRequest,
   type TreeQuery,
 } from '@noltri/schema';
-import { asKnowledgeError, knowledgeError, type Logger } from '@noltri/shared';
+import { asKnowledgeError, createId, errorResponseBody, knowledgeError, type Logger } from '@noltri/shared';
 import type { CoreConfig } from '../config';
 import type { Identity } from '../auth';
 import { resolveIdentity as defaultResolveIdentity } from '../auth';
@@ -137,12 +137,15 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
 
     if (route === undefined) {
       if (shapeMatches.length === 0) {
-        return json(404, knowledgeError('not_found', `未知端点 ${url.pathname} / unknown endpoint`).toJSON(), cors);
+        return json(404, errorResponseBody(knowledgeError('not_found', `未知端点 ${url.pathname} / unknown endpoint`), createId()), cors);
       }
       const allowed = shapeMatches.map((candidate) => candidate.method).join(', ');
       return json(
         405,
-        knowledgeError('invalid_request', `${url.pathname} 仅支持 ${allowed} / method not allowed`).toJSON(),
+        errorResponseBody(
+          knowledgeError('invalid_request', `${url.pathname} 仅支持 ${allowed} / method not allowed`),
+          createId(),
+        ),
         cors,
       );
     }
@@ -161,12 +164,18 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
       return payload ?? json(200, { ok: true }, cors);
     } catch (error) {
       const mapped = asKnowledgeError(error);
+      // One id per failed attempt: it goes into the envelope and into the log line, so a client's report
+      // and the server's record of that report are the same event.
+      const traceId = createId();
+      mapped.traceId ??= traceId;
       if (logger) {
         logger.warn('request failed', {
           method,
           path: url.pathname,
           code: mapped.code,
           status: mapped.status,
+          retryable: mapped.retryable,
+          traceId,
           ms: Date.now() - startedAt,
         });
       }

@@ -62,7 +62,13 @@ describe('architecture gate — knowledge core', () => {
       const harness = makeHarness();
       const result = await harness.core.capture(captureOf(CHINESE_TEXT, client), harness.actor);
       expect(result.processingStatus).toBe('done');
-      expect(Object.keys(result).sort()).toEqual(['items', 'processingStatus', 'rawSourceId'].sort());
+      expect(Object.keys(result).sort()).toEqual(
+        ['duplicate', 'items', 'processingStatus', 'rawSourceId', 'requestId', 'stage'].sort(),
+      );
+      // The unified request is what makes a replay recognisable, so every entry point has to carry it.
+      expect(result.requestId.length).toBeGreaterThan(0);
+      expect(['completed', 'needs_review']).toContain(result.stage);
+      expect(result.duplicate).toBe(false);
       expect(result.items.length).toBeGreaterThan(0);
       for (const item of result.items) {
         expect(Object.keys(item).sort()).toEqual(
@@ -76,6 +82,7 @@ describe('architecture gate — knowledge core', () => {
     const harness = makeHarness();
     const result = await harness.core.capture(
       {
+        requestId: 'req-gate-desktop-0001',
         text: CHINESE_TEXT,
         source: { type: 'desktop_app' },
         capture: { capturedAt: '2026-10-02T12:00:00.000Z', client: 'desktop' },
@@ -86,6 +93,8 @@ describe('architecture gate — knowledge core', () => {
     const rawSource = await harness.repository.findRawSource(result.rawSourceId, harness.actor.userId);
     expect(rawSource?.sourceType).toBe('desktop_app');
     expect(rawSource?.sourceApp).toBeNull();
+    // With no install identity the entry point itself scopes the idempotency key.
+    expect(rawSource?.clientId).toBe('desktop');
   });
 
   it('the V2 graph model already exists beside the tree: links and edges are independent of parent_id', async () => {

@@ -45,6 +45,28 @@ describe('http router', () => {
     expect(healthResponseSchema.parse(await jsonOf(response)).status).toBe('ok');
   });
 
+  /**
+   * A loopback port that answers JSON is not proof of *which* service is listening — the desktop host and
+   * the Native Messaging relay both have to be able to tell Noltri's Core from anything else on 127.0.0.1.
+   */
+  it('identifies the product, the running instance and the protocol in health', async () => {
+    const handle = handlerOf(makeHarness());
+    const first = healthResponseSchema.parse(await jsonOf(await handle(new Request('http://core.local/api/health'))));
+    const second = healthResponseSchema.parse(await jsonOf(await handle(new Request('http://core.local/api/health'))));
+
+    expect(first.productId).toBe('noltri-knowledge-core');
+    expect(first.protocolVersion.length).toBeGreaterThan(0);
+    expect(first.instanceId.length).toBeGreaterThan(0);
+    expect(first.instanceId).toBe(second.instanceId);
+
+    const otherHandle = handlerOf(makeHarness());
+    const other = healthResponseSchema.parse(await jsonOf(await otherHandle(new Request('http://core.local/api/health'))));
+    expect(other.instanceId).not.toBe(first.instanceId);
+    // Health is also the place a caller learns what the storage driver really believes about itself.
+    expect(first.storage.driver).toBe('memory');
+    expect(first.storage.ok).toBe(true);
+  });
+
   it('answers CORS preflight before identity exists', async () => {
     const handle = handlerOf(makeHarness());
     const response = await handle(new Request('http://core.local/api/capture', { method: 'OPTIONS' }));
@@ -84,6 +106,50 @@ describe('http router', () => {
     );
     expect(response.status).toBe(400);
     expect(apiErrorSchema.parse(await jsonOf(response)).error.code).toBe('invalid_request');
+  });
+
+  /**
+   * A client deciding whether to resend needs more than a code: `retryable` says whether retrying can ever
+   * help, and `traceId` ties the answer to the line the server logged.
+   */
+  it('labels retryable failures and carries a trace id, per code', async () => {
+    const handle = handlerOf(makeHarness());
+    const refused = await handle(
+      new Request('http://core.local/api/capture', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          text: CHINESE_TEXT,
+          source: { type: 'web' },
+          capture: { capturedAt: '2026-01-01T00:00:00Z', client: 'extension' },
+        }),
+      }),
+    );
+    expect(refused.status).toBe(400);
+    const refusal = apiErrorSchema.parse(await jsonOf(refused));
+    expect(refusal.error.code).toBe('invalid_request');
+    // The unified request shape is mandatory: a missing requestId is a client bug, not a transient failure.
+    expect(refusal.error.retryable).toBe(false);
+    expect(refusal.error.traceId).toBeTruthy();
+
+    const providerDown = handlerOf(makeHarness({ script: { fail: ['embed'] } }));
+    const upstream = await providerDown(
+      new Request('http://core.local/api/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: '元组', mode: 'semantic', limit: 5 }),
+      }),
+    );
+    expect(upstream.status).toBe(502);
+    const failure = apiErrorSchema.parse(await jsonOf(upstream));
+    expect(failure.error.code).toBe('provider_error');
+    expect(failure.error.retryable).toBe(true);
+    expect(failure.error.traceId).toBeTruthy();
+
+    const gated = handlerOf(makeHarness({ config: testConfig({ devTokenRequired: true, devToken: 'secret-dev-token' }) }));
+    const anonymous = await gated(new Request('http://core.local/api/tree'));
+    expect(anonymous.status).toBe(401);
+    expect(apiErrorSchema.parse(await jsonOf(anonymous)).error.retryable).toBe(false);
   });
 
   it('distinguishes 404 unknown endpoint from 405 wrong method', async () => {

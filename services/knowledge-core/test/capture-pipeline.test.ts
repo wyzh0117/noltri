@@ -14,7 +14,9 @@ describe('capture pipeline', () => {
     const result = await harness.core.capture(captureOf(CHINESE_TEXT), harness.actor);
 
     expect(result.processingStatus).toBe('done');
-    expect(repoCalls(harness.timeline)[0]).toBe('createRawSource');
+    // The dedupe read is the first repository call of all: the pipeline asks "have I already seen this
+    // key?" before it writes, which is what makes a resend cost nothing.
+    expect(repoCalls(harness.timeline)[0]).toBe('findRawSourceByIdempotencyKey');
 
     const rawSourceWrite = indexOfCall(harness.timeline, 'repo', 'createRawSource');
     const firstProviderCall = harness.timeline.findIndex((entry) => entry.kind === 'ai');
