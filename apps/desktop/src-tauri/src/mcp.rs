@@ -18,7 +18,31 @@ pub enum Target {
     ClaudeDesktop,
     ClaudeCode,
     Cursor,
+    Hermes,
+    Qoder,
     Generic,
+}
+
+/// What Setup Manager is actually allowed to claim about a client (V1 §11: 没有真实握手与调用证据不得标
+/// 「已支持」；M06 要求「不支持／待人工配置／未验证」必须是可见的第三种状态）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Support {
+    /// The config file format is known well enough to merge into it on the user's behalf.
+    Writable,
+    /// Format known, entry prepared, but writing is left to the user.
+    Guided,
+    /// Detected on this machine, but its MCP registration path has not been verified. Never shown as connected.
+    Unverified,
+}
+
+impl Support {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Writable => "writable",
+            Self::Guided => "guided",
+            Self::Unverified => "unverified",
+        }
+    }
 }
 
 impl Target {
@@ -28,10 +52,23 @@ impl Target {
             "claude" | "claude_desktop" => Some(Self::ClaudeDesktop),
             "claude_code" => Some(Self::ClaudeCode),
             "cursor" => Some(Self::Cursor),
+            "hermes" => Some(Self::Hermes),
+            "qoder" => Some(Self::Qoder),
             "other_mcp_client" | "generic" | "mcp_client" => Some(Self::Generic),
             _ => None,
         }
     }
+
+    /// Every card the Setup Manager shows, in display order.
+    pub const ALL: [Target; 7] = [
+        Self::ClaudeDesktop,
+        Self::ClaudeCode,
+        Self::ChatGptCodex,
+        Self::Cursor,
+        Self::Hermes,
+        Self::Qoder,
+        Self::Generic,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -39,6 +76,8 @@ impl Target {
             Self::ClaudeDesktop => "claude_desktop",
             Self::ClaudeCode => "claude_code",
             Self::Cursor => "cursor",
+            Self::Hermes => "hermes",
+            Self::Qoder => "qoder",
             Self::Generic => "other_mcp_client",
         }
     }
@@ -49,44 +88,59 @@ impl Target {
             Self::ClaudeDesktop => "Claude Desktop",
             Self::ClaudeCode => "Claude Code",
             Self::Cursor => "Cursor",
+            Self::Hermes => "Hermes",
+            Self::Qoder => "Qoder",
             Self::Generic => "其他 MCP Client",
         }
     }
 
-    /// Relative to the user's home directory; `None` for clients with no local config file.
+    /// Relative to the user's home directory; `None` for clients with no local config file — and for
+    /// clients whose file we have not verified, because guessing a path is how another product's
+    /// settings get overwritten (§11: 不凭名称写死配置文件).
     fn config_relative_path(self) -> Option<&'static str> {
         match self {
             Self::ChatGptCodex => Some(".codex/config.toml"),
             Self::ClaudeDesktop => Some("Library/Application Support/Claude/claude_desktop_config.json"),
             Self::ClaudeCode => Some(".claude.json"),
             Self::Cursor => Some(".cursor/mcp.json"),
-            Self::Generic => None,
+            Self::Hermes | Self::Qoder | Self::Generic => None,
+        }
+    }
+
+    pub fn support(self) -> Support {
+        match self {
+            Self::ClaudeDesktop | Self::ClaudeCode => Support::Writable,
+            Self::ChatGptCodex | Self::Cursor | Self::Generic => Support::Guided,
+            Self::Hermes | Self::Qoder => Support::Unverified,
         }
     }
 
     /// Only JSON `mcpServers` files belonging to the Claude family are ever written for the user;
     /// Codex stores TOML and Cursor / 其他客户端 are guided instead (V1 §12.2 step 3-4).
     pub fn write_supported(self) -> bool {
-        matches!(self, Self::ClaudeDesktop | Self::ClaudeCode)
+        self.support() == Support::Writable
     }
 
-    pub fn official_settings_url(self) -> &'static str {
+    /// `None` when we have no verified official entry point to hand the user to — an invented URL would
+    /// be worse than no button at all.
+    pub fn official_settings_url(self) -> Option<&'static str> {
         match self {
-            Self::ChatGptCodex => "https://chatgpt.com/settings/connectors",
-            Self::ClaudeDesktop => "https://www.anthropic.com/claude/desktop",
-            Self::ClaudeCode => "https://claude.ai/login",
-            Self::Cursor => "https://cursor.com/settings",
-            Self::Generic => "https://modelcontextprotocol.io",
+            Self::ChatGptCodex => Some("https://chatgpt.com/settings/connectors"),
+            Self::ClaudeDesktop => Some("https://www.anthropic.com/claude/desktop"),
+            Self::ClaudeCode => Some("https://claude.ai/login"),
+            Self::Cursor => Some("https://cursor.com/settings"),
+            Self::Hermes | Self::Qoder | Self::Generic => None,
         }
     }
 
-    pub fn docs_url(self) -> &'static str {
+    pub fn docs_url(self) -> Option<&'static str> {
         match self {
-            Self::ChatGptCodex => "https://developers.openai.com/codex/mcp",
-            Self::ClaudeDesktop => "https://docs.claude.com/en/docs/claude-desktop/mcp",
-            Self::ClaudeCode => "https://docs.claude.com/en/docs/claude-code/mcp",
-            Self::Cursor => "https://docs.cursor.com/context/model-context-protocol",
-            Self::Generic => "https://modelcontextprotocol.io",
+            Self::ChatGptCodex => Some("https://developers.openai.com/codex/mcp"),
+            Self::ClaudeDesktop => Some("https://docs.claude.com/en/docs/claude-desktop/mcp"),
+            Self::ClaudeCode => Some("https://docs.claude.com/en/docs/claude-code/mcp"),
+            Self::Cursor => Some("https://docs.cursor.com/context/model-context-protocol"),
+            Self::Hermes | Self::Qoder => None,
+            Self::Generic => Some("https://modelcontextprotocol.io"),
         }
     }
 
@@ -96,6 +150,8 @@ impl Target {
             Self::ChatGptCodex => &["ChatGPT.app", "Codex.app"],
             Self::ClaudeDesktop | Self::ClaudeCode => &["Claude.app"],
             Self::Cursor => &["Cursor.app"],
+            Self::Hermes => &["Hermes.app"],
+            Self::Qoder => &["Qoder.app"],
             Self::Generic => &[],
         }
     }
@@ -107,6 +163,8 @@ impl Target {
             Self::ClaudeDesktop => "写入后需要完全退出并重新打开 Claude Desktop，才会在 MCP 列表里看到知序。",
             Self::ClaudeCode => "也可以执行 `claude mcp add --transport http noltri <endpoint>`；写入 ~/.claude.json 会保留其它服务器。",
             Self::Cursor => "在 Cursor 的 Settings → MCP 中粘贴下面的条目（V1 不代写该文件）。",
+            Self::Hermes => "已检测到本机安装，但其 MCP 注册方式本轮未经真实握手验证：请在该客户端内手动添加，验证前不显示为已连接。",
+            Self::Qoder => "已检测到本机安装，但其 MCP 注册方式本轮未经真实握手验证：请在该客户端内手动添加，验证前不显示为已连接。",
             Self::Generic => "任何支持 Streamable HTTP 的 MCP Client 都可以连接同一个 endpoint。",
         }
     }
@@ -122,10 +180,15 @@ pub struct TargetFacts {
     pub config_path: Option<String>,
     pub config_path_exists: bool,
     pub write_supported: bool,
-    pub official_settings_url: &'static str,
-    pub docs_url: &'static str,
+    /// `writable` / `guided` / `unverified` — the UI must render this, not a guess derived from the other flags.
+    pub support_state: &'static str,
+    pub official_settings_url: Option<String>,
+    pub docs_url: Option<String>,
     pub guidance: &'static str,
     pub installed_apps: Vec<String>,
+    /// `.app` bundle we actually found, and the version its own Info.plist reports.
+    pub app_path: Option<String>,
+    pub app_version: Option<String>,
     /// The endpoint this companion advertises, straight from settings.
     pub endpoint: String,
     pub core_base_url: String,
@@ -142,7 +205,35 @@ const ALLOWED_WRITE_NAMES: &[&str] = &[
     "settings.json",
 ];
 
-pub fn resolve(target: Target, home: &Path, endpoint: String, core_base_url: String, token_configured: bool) -> TargetFacts {
+pub fn resolve(
+    target: Target,
+    home: &Path,
+    endpoint: String,
+    core_base_url: String,
+    token_configured: bool,
+) -> TargetFacts {
+    resolve_with(
+        target,
+        home,
+        endpoint,
+        core_base_url,
+        token_configured,
+        &installed_bundles,
+        &bundle_version,
+    )
+}
+
+/// `finder` and `version_of` are seams: the reporting logic has to be testable without depending on
+/// which apps happen to be installed on the machine running the test.
+pub fn resolve_with(
+    target: Target,
+    home: &Path,
+    endpoint: String,
+    core_base_url: String,
+    token_configured: bool,
+    finder: &dyn Fn(Target) -> Vec<PathBuf>,
+    version_of: &dyn Fn(&Path) -> Option<String>,
+) -> TargetFacts {
     let config_path = target
         .config_relative_path()
         .map(|relative| home.join(relative))
@@ -152,12 +243,13 @@ pub fn resolve(target: Target, home: &Path, endpoint: String, core_base_url: Str
             path.starts_with(home)
         });
     let exists = config_path.as_deref().map(|path| path.is_file()).unwrap_or(false);
-    let installed_apps = target
-        .app_candidates()
+    let bundles = finder(target);
+    let installed_apps = bundles
         .iter()
-        .filter(|name| is_installed_app(name))
-        .map(|name| format!("/Applications/{name}"))
+        .map(|path| path.to_string_lossy().to_string())
         .collect();
+    let app_path = bundles.first().cloned();
+    let app_version = app_path.as_deref().and_then(version_of);
     TargetFacts {
         target: target.key(),
         label: target.label(),
@@ -165,18 +257,60 @@ pub fn resolve(target: Target, home: &Path, endpoint: String, core_base_url: Str
         config_path: config_path.and_then(|path| path.to_str().map(str::to_string)),
         config_path_exists: exists,
         write_supported: target.write_supported(),
-        official_settings_url: target.official_settings_url(),
-        docs_url: target.docs_url(),
+        support_state: target.support().key(),
+        official_settings_url: target.official_settings_url().map(str::to_string),
+        docs_url: target.docs_url().map(str::to_string),
         guidance: target.guidance(),
         installed_apps,
+        app_path: app_path.and_then(|path| path.to_str().map(str::to_string)),
+        app_version,
         endpoint,
         core_base_url,
         token_configured,
     }
 }
 
-fn is_installed_app(name: &str) -> bool {
-    Path::new("/Applications").join(name).is_dir() || home_dir().join("Applications").join(name).is_dir()
+/// `.app` bundles for this target, system location first, then the user's own Applications folder.
+fn installed_bundles(target: Target) -> Vec<PathBuf> {
+    target
+        .app_candidates()
+        .iter()
+        .filter_map(|name| {
+            let system = Path::new("/Applications").join(name);
+            if system.is_dir() {
+                return Some(system);
+            }
+            let user = home_dir().join("Applications").join(name);
+            if user.is_dir() {
+                Some(user)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Ask the bundle itself which version it is, using Apple's own reader and an argument array — never a
+/// assembled shell string (§11). A missing or absurd value reports `None`, which the UI shows as
+/// 「版本未知」 rather than a number invented from the app's name.
+pub fn bundle_version(bundle: &Path) -> Option<String> {
+    let plist = bundle.join("Contents").join("Info.plist");
+    let output = std::process::Command::new("/usr/bin/plutil")
+        .arg("-extract")
+        .arg("CFBundleShortVersionString")
+        .arg("raw")
+        .arg(&plist)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 || trimmed.contains('\n') || trimmed.contains("(null)") {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 pub fn home_dir() -> PathBuf {
@@ -260,6 +394,16 @@ pub fn open_with_system(url: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn fake_finder(name: &'static str) -> impl Fn(Target) -> Vec<PathBuf> {
+        move |target| {
+            if target.app_candidates().contains(&name) {
+                vec![PathBuf::from("/fake/Applications").join(name)]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
     #[test]
     fn only_claude_family_files_are_writable_targets() {
         assert!(Target::from_key("claude").unwrap().write_supported());
@@ -278,5 +422,86 @@ mod tests {
     fn rejects_writes_outside_the_allowlist() {
         let error = write_text_atomically("/etc/passwd", "{}").unwrap_err();
         assert!(error.contains("拒绝写入"), "{error}");
+    }
+
+    /// M06: an agent we can see but have not handshaked with must be reported as unverified, with no
+    /// config path to write and no invented URL to open.
+    #[test]
+    fn detected_but_unverified_agents_get_no_write_path_and_no_url() {
+        for key in ["hermes", "qoder"] {
+            let target = Target::from_key(key).unwrap();
+            let facts = resolve_with(
+                target,
+                Path::new("/Users/tester"),
+                "http://127.0.0.1:8790/mcp".to_string(),
+                "http://127.0.0.1:8787".to_string(),
+                true,
+                &fake_finder(if key == "hermes" { "Hermes.app" } else { "Qoder.app" }),
+                &|_| Some("1.2.3".to_string()),
+            );
+            assert_eq!(facts.support_state, "unverified", "{key}");
+            assert!(!facts.write_supported, "{key}");
+            assert!(facts.config_path.is_none(), "{key}");
+            assert!(facts.official_settings_url.is_none(), "{key}");
+            assert!(facts.docs_url.is_none(), "{key}");
+            assert_eq!(facts.app_version.as_deref(), Some("1.2.3"), "{key}");
+            assert_eq!(facts.installed_apps.len(), 1, "{key}");
+        }
+    }
+
+    #[test]
+    fn writable_and_guided_states_are_distinguished() {
+        let claude = Target::from_key("claude").unwrap().support().key();
+        let cursor = Target::from_key("cursor").unwrap().support().key();
+        let generic = Target::from_key("other_mcp_client").unwrap().support().key();
+        assert_eq!(claude, "writable");
+        assert_eq!(cursor, "guided");
+        assert_eq!(generic, "guided");
+    }
+
+    #[test]
+    fn an_absent_agent_reports_no_version() {
+        let facts = resolve_with(
+            Target::Hermes,
+            Path::new("/Users/tester"),
+            "http://127.0.0.1:8790/mcp".to_string(),
+            "http://127.0.0.1:8787".to_string(),
+            false,
+            &|_| Vec::new(),
+            &|_| panic!("must not read a version for a bundle that was not found"),
+        );
+        assert!(facts.installed_apps.is_empty());
+        assert!(facts.app_path.is_none());
+        assert!(facts.app_version.is_none());
+    }
+
+    /// The version comes from the bundle's own Info.plist, read by Apple's tool with an argument array.
+    #[test]
+    fn bundle_version_reads_the_plist_and_refuses_junk() {
+        let root = std::env::temp_dir().join(format!("noltri-plist-{}", std::process::id()));
+        let bundle = root.join("Test.app");
+        std::fs::create_dir_all(bundle.join("Contents")).unwrap();
+        std::fs::write(
+            bundle.join("Contents").join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>7.3.1</string></dict></plist>"#,
+        )
+        .unwrap();
+        assert_eq!(bundle_version(&bundle).as_deref(), Some("7.3.1"));
+
+        std::fs::write(bundle.join("Contents").join("Info.plist"), "<plist><dict></dict></plist>").unwrap();
+        assert_eq!(bundle_version(&bundle), None);
+
+        assert_eq!(bundle_version(&root.join("Missing.app")), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn every_declared_target_is_routable() {
+        for target in Target::ALL {
+            assert_eq!(Target::from_key(target.key()), Some(target), "{}", target.key());
+        }
+        assert_eq!(Target::ALL.len(), 7);
     }
 }

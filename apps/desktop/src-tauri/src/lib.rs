@@ -204,6 +204,7 @@ pub fn run() {
             commands::list_incompatible_apps,
             commands::clear_incompatible_app,
             commands::mcp_config_for,
+            commands::list_agents,
             commands::test_connection,
             commands::read_config_file,
             commands::write_mcp_config,

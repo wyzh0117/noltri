@@ -73,7 +73,11 @@ pub struct ConnectionProbeOut {
     pub config_entry_present: bool,
     pub config_entry_detail: Option<String>,
     pub write_supported: bool,
+    /// `writable` / `guided` / `unverified`, as registered for this target — never inferred by the UI.
+    pub support_state: &'static str,
     pub installed_apps: Vec<String>,
+    pub app_path: Option<String>,
+    pub app_version: Option<String>,
     /// Where the two network legs (`GET /api/health`, JSON-RPC `tools/list`) are executed and why:
     /// the native layer deliberately carries no TLS/HTTP stack in V1, and Knowledge Core answers
     /// CORS with `CORS_ORIGIN=*`, so the webview can perform the real request.
@@ -444,7 +448,10 @@ pub fn test_connection(
         config_entry_present: present,
         config_entry_detail: detail,
         write_supported: facts.write_supported,
-        installed_apps: facts.installed_apps,
+        support_state: facts.support_state,
+        installed_apps: facts.installed_apps.clone(),
+        app_path: facts.app_path.clone(),
+        app_version: facts.app_version.clone(),
         network_from: "webview",
     })
 }
@@ -513,7 +520,10 @@ pub fn write_mcp_config(
 #[tauri::command]
 pub fn open_connection_url(target: String) -> Result<String, String> {
     let resolved = Target::from_key(&target).ok_or_else(|| format!("未知的连接目标：{target}"))?;
-    let url = resolved.official_settings_url().to_string();
+    let url = resolved
+        .official_settings_url()
+        .ok_or("该客户端没有已核实的官方设置入口，不提供跳转链接")?
+        .to_string();
     mcp::open_with_system(&url)?;
     Ok(url)
 }
@@ -521,9 +531,22 @@ pub fn open_connection_url(target: String) -> Result<String, String> {
 #[tauri::command]
 pub fn open_documentation(target: String) -> Result<String, String> {
     let resolved = Target::from_key(&target).ok_or_else(|| format!("未知的连接目标：{target}"))?;
-    let url = resolved.docs_url().to_string();
+    let url = resolved
+        .docs_url()
+        .ok_or("该客户端的接入文档本轮未核实，不提供链接")?
+        .to_string();
     mcp::open_with_system(&url)?;
     Ok(url)
+}
+
+/// The whole support matrix in one call, so the UI never has to guess a state from partial flags
+/// (M06: 「不支持／待人工配置／未验证」必须是显式返回的第三态).
+#[tauri::command]
+pub fn list_agents(state: State<'_, SharedState>) -> Result<Vec<TargetFacts>, String> {
+    Ok(Target::ALL
+        .iter()
+        .map(|target| facts_for(&state, &target.key().to_string()))
+        .collect::<Result<Vec<TargetFacts>, String>>()?)
 }
 
 /// The overlay/paste windows report what happened; the native layer owns the log and rebroadcasts
