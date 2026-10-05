@@ -53,7 +53,7 @@ export async function buildHandler(
     authorization: grants === null ? 'single-credential' : 'grants',
   });
 
-  const deps: RouterDeps = { core, config, logger };
+  const deps: RouterDeps = { core, config, logger, grants };
   if (grants !== null) {
     // Every request re-reads the store, so 撤销 takes effect on connections that are already open (M04).
     deps.identityResolver = createGrantResolver(grants, (request, cfg) => resolveIdentity(request, cfg, logger));

@@ -1,15 +1,16 @@
 /**
  * 本地客户端授权 (V1 §12, M01/M04).
  *
- * Two halves: the grant model on its own, and the same model seen from the wire, because the acceptance
- * rows are about what a *connection* can do — including after the user presses 撤销 while that connection
- * is still open.
+ * Three halves: the grant model on its own, the same model seen from the wire, and 连接中心's own
+ * endpoints — because the acceptance rows are about what a *connection* can do, including after the user
+ * presses 撤销 while that connection is still open, and about who is allowed to hand out a credential.
  */
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { apiErrorSchema, captureResultSchema, treeResponseSchema } from '@noltri/schema';
+import { apiErrorSchema, captureResultSchema, grantListResponseSchema, issueGrantResponseSchema, revokeGrantResponseSchema, treeResponseSchema } from '@noltri/schema';
+import { silentLogger } from '@noltri/shared';
 import { resolveIdentity } from '../src/auth';
 import {
   FileGrantStore,
@@ -28,7 +29,8 @@ import {
   type GrantStore,
 } from '../src/authorization';
 import { createRequestHandler, type RequestHandler } from '../src/http/router';
-import type { CoreConfig } from '../src/config';
+import { buildHandler } from '../src/http';
+import { loadCoreConfig, type CoreConfig } from '../src/config';
 import { captureOf, CHINESE_TEXT, attachItemRecord, createNodeRecord, makeHarness, testConfig, type Harness } from './fakes';
 
 async function errorOf(response: Response): Promise<{ status: number; code: string; message: string; retryable: boolean; reason: string }> {
@@ -255,11 +257,15 @@ describe('scope and project rules', () => {
   });
 });
 
-function handlerOf(harness: Harness, store: GrantStore, config: CoreConfig = harness.config): RequestHandler {
+function handlerOf(harness: Harness, store: GrantStore | null, options: { config?: CoreConfig } = {}): RequestHandler {
+  const config = options.config ?? harness.config;
   return createRequestHandler({
     core: harness.core,
     config,
-    identityResolver: createGrantResolver(store, (request, cfg) => resolveIdentity(request, cfg)),
+    ...(store === null ? {} : { grants: store }),
+    ...(store === null
+      ? {}
+      : { identityResolver: createGrantResolver(store, (request, cfg) => resolveIdentity(request, cfg)) }),
   });
 }
 
@@ -377,5 +383,145 @@ describe('authorization over the wire', () => {
     expect(await errorOf(await handle(request('GET', `/api/conversations/${foreign.conversationId}/messages`, secret)))).toMatchObject({
       reason: 'node_not_granted',
     });
+  });
+});
+
+describe('连接中心 over the wire (M01 明确授权)', () => {
+  const device = { config: testConfig({ devTokenRequired: true, devToken: 'device-token' }) };
+
+  function deviceHarness(): Harness {
+    return makeHarness({ config: device.config });
+  }
+
+  it('mints a credential that works on the very next request', async () => {
+    const harness = deviceHarness();
+    const store = new InMemoryGrantStore();
+    const handle = handlerOf(harness, store);
+
+    const issued = await handle(
+      request('POST', '/api/admin/grants', 'device-token', { label: 'Claude Desktop', client: 'claude', scopes: ['capture', 'read'] }),
+    );
+    expect(issued.status).toBe(200);
+    const body = issueGrantResponseSchema.parse(await issued.json());
+    expect(body.grant.label).toBe('Claude Desktop');
+    expect(body.grant.nodeIds).toBeNull();
+    expect(body.grant.revokedAt).toBeNull();
+
+    const captured = await handle(request('POST', '/api/capture', body.secret, captureOf(CHINESE_TEXT, 'web_app')));
+    expect(captureResultSchema.parse(await captured.json()).processingStatus).toBe('done');
+    // The write is attributed to the client the credential carries, not to a header the client chose.
+    const tree = treeResponseSchema.parse(await (await handle(request('GET', '/api/tree', body.secret))).json());
+    expect(tree.totalNodes).toBeGreaterThan(0);
+  });
+
+  it('lists connections without ever repeating a credential', async () => {
+    const harness = deviceHarness();
+    const store = new InMemoryGrantStore();
+    const handle = handlerOf(harness, store);
+    const first = await issueGrant(store, { label: '已存在的连接', scopes: ['read'] });
+    await issueGrant(store, { label: '另一条', scopes: ['capture'], nodeIds: ['n1'] });
+
+    const listed = await handle(request('GET', '/api/admin/grants', 'device-token'));
+    const body = grantListResponseSchema.parse(await listed.json());
+    expect(body.grants.map((grant) => grant.label).sort()).toEqual(['另一条', '已存在的连接'].sort());
+    const wire = JSON.stringify(body);
+    expect(wire).not.toContain(first.secret);
+    expect(wire).not.toContain(first.grant.secretHash);
+  });
+
+  it('revokes by id, and the old connection is dead on the next request', async () => {
+    const harness = deviceHarness();
+    const store = new InMemoryGrantStore();
+    const handle = handlerOf(harness, store);
+    const { secret } = await issueGrant(store, { label: '要撤销的', scopes: ['read'] });
+    const [grant] = await listGrants(store);
+
+    expect((await handle(request('GET', '/api/tree', secret))).status).toBe(200);
+    const revoked = await handle(request('POST', `/api/admin/grants/${grant?.id}/revoke`, 'device-token'));
+    expect(revokeGrantResponseSchema.parse(await revoked.json()).grant.revokedAt).toBeTruthy();
+    expect(await errorOf(await handle(request('GET', '/api/tree', secret)))).toMatchObject({ reason: 'grant_revoked' });
+
+    expect((await handle(request('POST', '/api/admin/grants/never-issued/revoke', 'device-token'))).status).toBe(404);
+  });
+
+  it('refuses to manage grants with a grant, with no credential, or with a bad payload', async () => {
+    const harness = deviceHarness();
+    const store = new InMemoryGrantStore();
+    const handle = handlerOf(harness, store);
+    const { secret } = await issueGrant(store, { label: '越权尝试', scopes: ['read', 'capture', 'mutate'] });
+
+    // A grant holds the widest scope it can be given and still cannot mint another client.
+    expect(await errorOf(await handle(request('GET', '/api/admin/grants', secret)))).toMatchObject({
+      status: 401,
+      reason: 'route_not_granted',
+    });
+    expect((await handle(request('GET', '/api/admin/grants'))).status).toBe(401);
+    expect((await handle(request('POST', '/api/admin/grants', 'device-token', { label: 'x' }))).status).toBe(400);
+    expect((await handle(request('POST', '/api/admin/grants', 'device-token', { label: 'x', scopes: [] }))).status).toBe(400);
+    expect((await handle(request('POST', '/api/admin/grants', 'device-token', { label: 'x', scopes: ['read'], nodeIds: [] }))).status).toBe(400);
+    expect((await handle(request('POST', '/api/admin/grants', 'device-token', { label: '', scopes: ['read'] }))).status).toBe(400);
+  });
+
+  it('refuses to mint from a Core that asks for no credential at all', async () => {
+    const harness = makeHarness({ config: testConfig({ devTokenRequired: false, devToken: '' }) });
+    const store = new InMemoryGrantStore();
+    const handle = handlerOf(harness, store);
+
+    // Loopback without a credential can already read the library; it must not be able to hand out keys.
+    expect(await errorOf(await handle(request('POST', '/api/admin/grants', undefined, { label: 'x', scopes: ['read'] })))).toMatchObject({
+      status: 401,
+      reason: 'admin_credential_required',
+    });
+    expect(await listGrants(store)).toEqual([]);
+  });
+
+  it('says the feature is off, rather than half-working, when no store is configured', async () => {
+    const harness = deviceHarness();
+    const handle = handlerOf(harness, null);
+    const refused = await handle(request('GET', '/api/admin/grants', 'device-token'));
+    expect(refused.status).toBe(409);
+    expect(apiErrorSchema.parse(await refused.json()).error.message).toContain('未启用');
+  });
+});
+
+describe('grants from a configured store', () => {
+  const dirs: string[] = [];
+
+  afterAll(async () => {
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('turns on from NOLTRI_GRANT_FILE alone, and a restart still knows the credential', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'noltri-grants-wire-'));
+    dirs.push(dir);
+    const grantFile = join(dir, 'grants.json');
+    const env = {
+      STORAGE_DRIVER: 'memory',
+      NOLTRI_GRANT_FILE: grantFile,
+      NOLTRI_DEV_REQUIRE_TOKEN: 'true',
+      NOLTRI_DEV_TOKEN: 'device-token',
+    };
+
+    const bundle = await buildHandler(loadCoreConfig(env), { logger: silentLogger });
+    const issued = await bundle.handle(
+      request('POST', '/api/admin/grants', 'device-token', { label: '重启后仍然有效', scopes: ['read'] }),
+    );
+    const { secret } = issueGrantResponseSchema.parse(await issued.json());
+    expect((await bundle.handle(request('GET', '/api/tree', secret))).status).toBe(200);
+    await bundle.close();
+
+    // A new bundle is what a relaunched Core is: the same file, the same credential, no memory of the first.
+    const restarted = await buildHandler(loadCoreConfig(env), { logger: silentLogger });
+    expect(restarted.grants).not.toBeNull();
+    expect((await restarted.handle(request('GET', '/api/tree', secret))).status).toBe(200);
+    const [recorded] = await listGrants(restarted.grants as GrantStore);
+    const revoked = await restarted.handle(
+      request('POST', `/api/admin/grants/${String(recorded?.id)}/revoke`, 'device-token'),
+    );
+    expect(revokeGrantResponseSchema.parse(await revoked.json()).grant.label).toBe('重启后仍然有效');
+    expect((await restarted.handle(request('GET', '/api/tree', secret))).status).toBe(401);
+    await restarted.close();
+
+    expect(await readdir(dir)).toEqual(['grants.json']);
   });
 });

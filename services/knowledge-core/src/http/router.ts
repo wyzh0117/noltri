@@ -5,7 +5,6 @@
  * `src/server.ts`) and inside a Next.js route handler (`apps/web`), which is what keeps one Knowledge
  * Core deployable on Vercel today and embeddable in a Desktop Local Core later.
  */
-import type { z } from 'zod';
 import {
   assignSourceRequestSchema,
   captureRequestSchema,
@@ -29,8 +28,10 @@ import {
 import { asKnowledgeError, createId, errorResponseBody, knowledgeError, type Logger } from '@noltri/shared';
 import type { CoreConfig } from '../config';
 import { resolveIdentity as defaultResolveIdentity, type IdentityResolver } from '../auth';
-import { requireNodeAccess, requireScope } from '../authorization';
+import { requireNodeAccess, requireScope, type GrantStore } from '../authorization';
 import type { KnowledgeCore } from '../core';
+import { handleAdminGrants } from './admin';
+import { parseWith, readJsonBody } from './parse';
 
 export type RequestHandler = (request: Request) => Promise<Response>;
 
@@ -40,6 +41,8 @@ export interface RouterDeps {
   logger?: Logger;
   /** Injectable so a host with its own auth can swap the strategy; identity still never comes from the body. */
   identityResolver?: IdentityResolver;
+  /** Presence of a store is what turns 连接中心's own endpoints on. */
+  grants?: GrantStore | null;
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
@@ -66,6 +69,10 @@ const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'conversations'] },
   { method: 'GET', segments: ['api', 'conversations', ':id', 'messages'] },
   { method: 'POST', segments: ['api', 'capture', ':id', 'retry'] },
+  // 连接中心: the device credential manages the clients, and no client manages itself.
+  { method: 'GET', segments: ['api', 'admin', 'grants'] },
+  { method: 'POST', segments: ['api', 'admin', 'grants'] },
+  { method: 'POST', segments: ['api', 'admin', 'grants', ':id', 'revoke'] },
 ];
 
 function matchesShape(route: readonly string[], actual: readonly string[]): boolean {
@@ -96,29 +103,10 @@ function json(status: number, payload: unknown, headers: Record<string, string>)
   return new Response(JSON.stringify(payload), { status, headers: { ...headers, ...JSON_HEADERS } });
 }
 
-function parseWith<Output>(schema: z.ZodType<Output>, body: unknown, label: string): Output {
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    throw knowledgeError('invalid_request', `${label} 请求体校验失败 / ${label} payload failed validation`, parsed.error.issues);
-  }
-  return parsed.data;
-}
-
-async function readJsonBody(request: Request): Promise<unknown> {
-  const text = await request.text();
-  if (text.trim().length === 0) {
-    throw knowledgeError('invalid_request', '请求体必须是 JSON 对象 / an empty body is not accepted');
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw knowledgeError('invalid_request', '请求体不是合法 JSON / body is not valid JSON');
-  }
-}
-
 export function createRequestHandler(deps: RouterDeps): RequestHandler {
   const { core, config } = deps;
   const logger = deps.logger;
+  const grants = deps.grants ?? null;
   const resolve = deps.identityResolver ?? ((request, cfg) => defaultResolveIdentity(request, cfg, logger));
 
   return async function handle(request: Request): Promise<Response> {
@@ -159,6 +147,7 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
         request,
         core,
         config,
+        grants,
         resolve,
         cors,
       });
@@ -195,12 +184,13 @@ interface DispatchArgs {
   request: Request;
   core: KnowledgeCore;
   config: CoreConfig;
+  grants: GrantStore | null;
   resolve: IdentityResolver;
   cors: Record<string, string>;
 }
 
 async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
-  const { route, segments, method, url, request, core, config, resolve, cors } = args;
+  const { route, segments, method, url, request, core, config, grants, resolve, cors } = args;
   const path = route.join('/');
 
   // Health is the one public endpoint: platforms probe it before any credential exists.
@@ -213,6 +203,21 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
   // Cheap rejection before any body is read: the credential decides what this client may do at all.
   requireScope(grant, method, path);
   const actor = { userId: identity.userId, actor: identity.actor };
+
+  if (path === 'api/admin/grants' || path === 'api/admin/grants/:id/revoke') {
+    return json(
+      200,
+      await handleAdminGrants({
+        method,
+        path,
+        identity,
+        store: grants,
+        ...(path === 'api/admin/grants/:id/revoke' ? { id: decodeURIComponent(paramAt(route, segments, 'id')) } : {}),
+        body: method === 'POST' && path === 'api/admin/grants' ? await readJsonBody(request) : undefined,
+      }),
+      cors,
+    );
+  }
 
   switch (path) {
     case 'api/capture': {

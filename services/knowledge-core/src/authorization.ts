@@ -16,12 +16,15 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createId, knowledgeError } from '@noltri/shared';
+import { grantScopeSchema, type GrantScope, type PublicGrant } from '@noltri/schema';
 import type { CoreConfig } from './config';
 import { bearerOf, type Identity, type IdentityResolver } from './auth';
 
-export type GrantScope = 'capture' | 'read' | 'mutate';
+// The wire contract owns the vocabulary: a store that accepted a scope the API does not recognise would
+// be a grant nobody can issue and everybody has to guess at.
+export type { GrantScope, PublicGrant };
 
-export const GRANT_SCOPES: readonly GrantScope[] = ['capture', 'read', 'mutate'];
+export const GRANT_SCOPES: readonly GrantScope[] = grantScopeSchema.options;
 
 export interface ClientGrant {
   readonly id: string;
@@ -32,17 +35,6 @@ export interface ClientGrant {
   readonly scopes: readonly GrantScope[];
   readonly secretHash: string;
   /** `null` = 全部项目; a list means only those node ids may be read or changed. */
-  readonly nodeIds: readonly string[] | null;
-  readonly createdAt: string;
-  readonly revokedAt: string | null;
-}
-
-/** What 连接中心 lists: everything about a grant except the credential material. */
-export interface PublicGrant {
-  readonly id: string;
-  readonly label: string;
-  readonly client: string;
-  readonly scopes: readonly GrantScope[];
   readonly nodeIds: readonly string[] | null;
   readonly createdAt: string;
   readonly revokedAt: string | null;
