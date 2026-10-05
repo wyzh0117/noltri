@@ -55,7 +55,8 @@ export interface KnowledgeCoreOptions {
   /**
    * Research façade, built by the host from its own `ResearchRepository`. Optional on purpose: a
    * knowledge-only embed (an MCP bundle, a test harness) stays constructable without opening a second
-   * database handle it would never use.
+   * database handle it would never use. Archiving a node then skips the R03 复核标记 step entirely rather
+   * than failing — the same optionality applies, and it is why `CoreDeps` carries it too.
    */
   research?: ResearchDomain;
 }
@@ -92,6 +93,7 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
     provider: options.provider,
     config: options.config,
     logger: options.logger ?? silentLogger,
+    research: options.research,
   };
   // One id per running instance, not per request: a caller that sees it change is talking to a Core that
   // restarted underneath it, which is exactly what the Native Messaging relay has to detect.

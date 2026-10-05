@@ -8,6 +8,7 @@ import type { AIProvider } from '@noltri/ai-provider';
 import { truncate, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
+import type { ResearchDomain } from './research';
 
 /**
  * Who is acting. `userId` always comes from the authenticated request (see `src/auth.ts`),
@@ -31,6 +32,11 @@ export interface CoreDeps {
   readonly provider: AIProvider;
   readonly config: CoreConfig;
   readonly logger: Logger;
+  /**
+   * The Research façade, absent on a knowledge-only host. R03 needs it in one place — archiving a node
+   * marks the 证据 that cite it — and `undefined` is what lets that step be skipped instead of failed.
+   */
+  readonly research?: ResearchDomain;
 }
 
 /** Upper bound of a node chain the pipeline is willing to create from one classification answer. */

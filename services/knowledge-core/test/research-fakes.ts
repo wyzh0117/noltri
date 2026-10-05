@@ -44,6 +44,7 @@ import type {
   ClaimListOptions,
   DriftFindingListOptions,
   EvidenceListOptions,
+  EvidenceSourceFilter,
   RelationFilter,
   ResearchChangeListOptions,
   ResearchProjectStats,
@@ -339,12 +340,27 @@ export class FakeResearchRepository implements ResearchRepository {
       description: input.description ?? null,
       sourceReference: input.sourceReference ?? null,
       sourceLocation: input.sourceLocation ?? null,
+      rawSourceId: input.rawSourceId ?? null,
+      nodeId: input.nodeId ?? null,
+      locationOrigin: input.locationOrigin ?? null,
       reliabilityNote: input.reliabilityNote ?? null,
       createdAt: now,
       updatedAt: now,
     };
     this.evidence.set(evidence.id, evidence);
     return evidence;
+  }
+
+  /** Mirrors both drivers: an unfiltered call answers `[]`, never the whole table. */
+  async listEvidenceBySource(userId: string, filter: EvidenceSourceFilter): Promise<Evidence[]> {
+    const { nodeId, rawSourceId } = filter;
+    if (nodeId === undefined && rawSourceId === undefined) return [];
+    return [...this.evidence.values()].filter(
+      (evidence) =>
+        evidence.userId === userId &&
+        ((nodeId !== undefined && evidence.nodeId === nodeId) ||
+          (rawSourceId !== undefined && evidence.rawSourceId === rawSourceId)),
+    );
   }
 
   async findEvidence(id: string, userId: string): Promise<Evidence | null> {

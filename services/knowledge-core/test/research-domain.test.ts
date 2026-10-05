@@ -491,3 +491,187 @@ describe('approved charter baselines and review marks (R06)', () => {
     await expectCode(domain.approveCharter(projectId, USER, { revisionReason: '' }), 'invalid_request');
   });
 });
+
+describe('source references and archive marks (R03)', () => {
+  /** 一个引用了知识节点的 证据，外加它支撑的 论点。 */
+  async function citedEvidence(
+    domain: ResearchDomain,
+    projectId: string,
+    overrides: { title: string; nodeId?: string; rawSourceId?: string },
+  ): Promise<{ evidenceId: string; claimId: string }> {
+    const evidence = await domain.createEvidence(projectId, USER, {
+      type: 'interview',
+      title: overrides.title,
+      sourceReference: '访谈转录稿 第 4 页',
+      sourceLocation: '第 4 段',
+      locationOrigin: 'captured',
+      ...(overrides.nodeId === undefined ? {} : { nodeId: overrides.nodeId }),
+      ...(overrides.rawSourceId === undefined ? {} : { rawSourceId: overrides.rawSourceId }),
+    });
+    const claim = await domain.createClaim(projectId, USER, {
+      claimCode: `C-${overrides.title}`,
+      claimText: '可靠性因素处于结构性中介位置。',
+      claimType: 'empirical',
+    });
+    await domain.createRelation(projectId, USER, {
+      sourceType: 'evidence',
+      sourceId: evidence.id,
+      relationType: 'supports',
+      targetType: 'claim',
+      targetId: claim.id,
+    });
+    return { evidenceId: evidence.id, claimId: claim.id };
+  }
+
+  it('carries typed provenance without replacing the locator the user typed', async () => {
+    const domain = harness();
+    const projectId = await seededProject(domain);
+    const created = await domain.createEvidence(projectId, USER, {
+      type: 'interview',
+      title: '访谈：王工 2026-03',
+      sourceReference: '访谈转录稿 第 4 页',
+      sourceLocation: '第 4 段',
+      nodeId: 'node-1',
+      rawSourceId: 'raw-1',
+      locationOrigin: 'captured',
+    });
+    expect(created).toMatchObject({ nodeId: 'node-1', rawSourceId: 'raw-1', locationOrigin: 'captured' });
+    // 手动定位 is the user's own words and stays exactly that, whatever the typed pointers say.
+    expect(created.sourceReference).toBe('访谈转录稿 第 4 页');
+    expect(created.sourceLocation).toBe('第 4 段');
+
+    const patched = await domain.updateEvidence(created.id, USER, { nodeId: 'node-2', locationOrigin: 'manual' });
+    expect(patched).toMatchObject({ nodeId: 'node-2', rawSourceId: 'raw-1', locationOrigin: 'manual' });
+    expect((await domain.updateEvidence(created.id, USER, { nodeId: null })).nodeId).toBeNull();
+  });
+
+  it('finds every 证据 that cites a source, across projects, with the 论点 it supports', async () => {
+    const domain = harness();
+    const first = await seededProject(domain, '冷链物流服务质量研究');
+    const second = await seededProject(domain, '城市配送研究');
+    const a = await citedEvidence(domain, first, { title: '访谈 A', nodeId: 'node-shared' });
+    const b = await citedEvidence(domain, second, { title: '访谈 B', rawSourceId: 'raw-shared' });
+    // An unrelated 证据 in the same project must not show up.
+    await domain.createEvidence(first, USER, { type: 'note', title: '没有出处的笔记' });
+
+    const byNode = await domain.findReferences(USER, { nodeId: 'node-shared' });
+    expect(byNode).toHaveLength(1);
+    expect(byNode[0]).toMatchObject({
+      projectId: first,
+      projectName: '冷链物流服务质量研究',
+      evidenceId: a.evidenceId,
+      evidenceTitle: '访谈 A',
+      evidenceType: 'interview',
+      claimIds: [a.claimId],
+    });
+
+    const byRaw = await domain.findReferences(USER, { rawSourceId: 'raw-shared' });
+    expect(byRaw.map((row) => row.evidenceId)).toEqual([b.evidenceId]);
+
+    // Both halves at once: the union, each row keeping its own project.
+    const both = await domain.findReferences(USER, { nodeId: 'node-shared', rawSourceId: 'raw-shared' });
+    expect(both.map((row) => row.evidenceId).sort()).toEqual([a.evidenceId, b.evidenceId].sort());
+
+    // Someone else's 证据 is simply not in the answer — the query is by source, and there is no project to
+    // prove, so the honest reply to another user is 「没有你引用的东西」.
+    expect(await domain.findReferences(OTHER_USER, { nodeId: 'node-shared' })).toEqual([]);
+  });
+
+  it('refuses a reference query that names no source', async () => {
+    const domain = harness();
+    await expectCode(domain.findReferences(USER, {}), 'invalid_request');
+  });
+
+  it('marks the 引用 and the 论点 they support, and archiving twice leaves one mark each', async () => {
+    const domain = harness();
+    const projectId = await seededProject(domain);
+    const a = await citedEvidence(domain, projectId, { title: '访谈 A', nodeId: 'node-1' });
+    const b = await citedEvidence(domain, projectId, { title: '访谈 B', nodeId: 'node-1' });
+    // 两条 证据 都支撑 A 的那个 论点 → 那个 论点 gets one warning, not two.
+    await domain.createRelation(projectId, USER, {
+      sourceType: 'evidence',
+      sourceId: b.evidenceId,
+      relationType: 'partially_supports',
+      targetType: 'claim',
+      targetId: a.claimId,
+    });
+
+    const marks = await domain.markSourceArchived(USER, { nodeId: 'node-1', sourceTitle: '冷链访谈记录' });
+    expect(marks.markedEvidenceIds.sort()).toEqual([a.evidenceId, b.evidenceId].sort());
+    expect(marks.markedClaimIds.sort()).toEqual([a.claimId, b.claimId].sort());
+    expect(marks.projectIds).toEqual([projectId]);
+
+    const pending = await domain.listReviewMarks(projectId, USER, {});
+    expect(pending.map((mark) => mark.entityType).sort()).toEqual(['claim', 'claim', 'evidence', 'evidence']);
+    expect(pending.filter((mark) => mark.entityType === 'claim').map((mark) => mark.entityId).sort())
+      .toEqual([a.claimId, b.claimId].sort());
+    expect(pending.every((mark) => mark.raisedBy === 'source_archived')).toBe(true);
+    expect(pending.every((mark) => mark.charterVersion === null)).toBe(true);
+    expect(pending.every((mark) => mark.status === 'pending')).toBe(true);
+    expect(pending[0]?.reason).toContain('冷链访谈记录');
+
+    // 归档后引用仍可追溯：指针没有被改写，也没有被重新绑定到别的文本。
+    expect((await domain.listEvidence(projectId, USER, {})).find((row) => row.id === a.evidenceId)?.nodeId).toBe(
+      'node-1',
+    );
+
+    const again = await domain.markSourceArchived(USER, { nodeId: 'node-1', sourceTitle: '冷链访谈记录' });
+    expect(again.markedEvidenceIds).toHaveLength(2);
+    expect(await domain.listReviewMarks(projectId, USER, {})).toHaveLength(4);
+  });
+
+  it('marks nothing when no 证据 cites the source', async () => {
+    const domain = harness();
+    const projectId = await seededProject(domain);
+    await citedEvidence(domain, projectId, { title: '访谈 A', nodeId: 'node-1' });
+
+    const marks = await domain.markSourceArchived(USER, { nodeId: 'node-unused', sourceTitle: '没人引用的节点' });
+    expect(marks).toEqual({ markedEvidenceIds: [], markedClaimIds: [], projectIds: [] });
+    expect(await domain.listReviewMarks(projectId, USER, {})).toEqual([]);
+
+    // A call that names neither id marks nothing rather than everything.
+    expect(await domain.markSourceArchived(USER, {})).toEqual({
+      markedEvidenceIds: [],
+      markedClaimIds: [],
+      projectIds: [],
+    });
+  });
+
+  it('counts a 反证 as affected but not a loose relates_to edge', async () => {
+    const domain = harness();
+    const projectId = await seededProject(domain);
+    const evidence = await domain.createEvidence(projectId, USER, {
+      type: 'interview',
+      title: '访谈 A',
+      nodeId: 'node-1',
+    });
+    const contradicted = await domain.createClaim(projectId, USER, {
+      claimCode: 'C1',
+      claimText: '可靠性是首要因素。',
+      claimType: 'empirical',
+    });
+    const adjacent = await domain.createClaim(projectId, USER, {
+      claimCode: 'C2',
+      claimText: '成本次之。',
+      claimType: 'empirical',
+    });
+    await domain.createRelation(projectId, USER, {
+      sourceType: 'evidence',
+      sourceId: evidence.id,
+      relationType: 'contradicts',
+      targetType: 'claim',
+      targetId: contradicted.id,
+    });
+    await domain.createRelation(projectId, USER, {
+      sourceType: 'evidence',
+      sourceId: evidence.id,
+      relationType: 'relates_to',
+      targetType: 'claim',
+      targetId: adjacent.id,
+    });
+
+    const references = await domain.findReferences(USER, { nodeId: 'node-1' });
+    expect(references[0]?.claimIds).toEqual([contradicted.id]);
+    expect((await domain.markSourceArchived(USER, { nodeId: 'node-1' })).markedClaimIds).toEqual([contradicted.id]);
+  });
+});

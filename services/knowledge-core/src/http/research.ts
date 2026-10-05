@@ -1,5 +1,5 @@
 /**
- * `/api/research/*` — the 32 REST endpoints of the Research chain (research contract §1).
+ * `/api/research/*` — the 33 REST endpoints of the Research chain (research contract §1).
  *
  * They live here instead of inside `router.ts` for the same reason 连接中心 does: the router owns
  * identity, scope, CORS and the error envelope, and a handler module owns one API surface's payload
@@ -7,7 +7,9 @@
  *
  * Identity follows contract §0 rule 1: `userId` is the caller's from the credential and `projectId`
  * comes from the path — no research body may carry either. Ownership is then proven by the domain,
- * which answers `not_found` for a project that is not the caller's.
+ * which answers `not_found` for a project that is not the caller's. `api/research/references` is the one
+ * route with no project in its path: a 出处 can be cited by several projects, so it is keyed by the
+ * source id and answers per project, still scoped to the caller.
  *
  * There is deliberately **no `SCOPE_BY_ACTION` entry** for any of these paths. A request that arrives
  * with a 本地客户端授权 grant is refused with `route_not_granted` before reaching this file, because
@@ -38,6 +40,7 @@ import {
   patchResearchQuestionRequestSchema,
   patchSectionRequestSchema,
   relationListQuerySchema,
+  researchReferenceQuerySchema,
   reviewMarkListQuerySchema,
 } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
@@ -110,6 +113,12 @@ export async function handleResearch(args: ResearchArgs): Promise<unknown> {
     }
     case 'api/research/review-marks/:markId/clear': {
       return domain.clearReviewMark(args.id, userId);
+    }
+    // 归档/删除前检查引用 (R03)。Read-only by design: it reports what is connected and marks nothing, so a
+    // caller can ask before it decides. `?nodeId=` and `?rawSourceId=` — the schema requires at least one.
+    case 'api/research/references': {
+      const query = readQuery(researchReferenceQuerySchema, 'research reference query');
+      return { references: await domain.findReferences(userId, query) };
     }
     case 'api/research/projects/:projectId/questions': {
       if (args.method === 'GET') return { questions: await domain.listQuestions(args.id, userId) };

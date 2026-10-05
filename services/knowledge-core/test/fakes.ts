@@ -23,6 +23,7 @@ import { createId, nowIso, silentLogger } from '@noltri/shared';
 import { createInMemoryRepository, type KnowledgeRepository } from '@noltri/storage';
 import { loadCoreConfig, type CoreConfig } from '../src/config';
 import { createKnowledgeCore, type KnowledgeCore } from '../src/core';
+import type { ResearchDomain } from '../src/research';
 import type { ActorContext } from '../src/types';
 
 export type TimelineKind = 'repo' | 'ai';
@@ -152,13 +153,27 @@ export interface Harness {
   config: CoreConfig;
 }
 
-export function makeHarness(options: { config?: CoreConfig; script?: Script; repository?: KnowledgeRepository } = {}): Harness {
+export function makeHarness(
+  options: {
+    config?: CoreConfig;
+    script?: Script;
+    repository?: KnowledgeRepository;
+    /** Omitted on the knowledge-only host, which is what 无 research 接线时归档不被阻断 tests. */
+    research?: ResearchDomain;
+  } = {},
+): Harness {
   const timeline: TimelineEntry[] = [];
   const config = options.config ?? testConfig();
   const inner = options.repository ?? createInMemoryRepository();
   const repository = tracedRepository(inner, timeline);
   const provider = new ScriptedProvider(timeline, options.script ?? {});
-  const core = createKnowledgeCore({ repository, provider, config, logger: silentLogger });
+  const core = createKnowledgeCore({
+    repository,
+    provider,
+    config,
+    logger: silentLogger,
+    ...(options.research === undefined ? {} : { research: options.research }),
+  });
   return {
     core,
     repository,

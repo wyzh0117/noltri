@@ -89,6 +89,8 @@ const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'charter', 'baseline'] },
   { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'review-marks'] },
   { method: 'POST', segments: ['api', 'research', 'review-marks', ':markId', 'clear'] },
+  // 归档/删除前检查研究引用 (R03): read-only, and it spans projects, so it is keyed by the source, not a project.
+  { method: 'GET', segments: ['api', 'research', 'references'] },
   { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'questions'] },
   { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'questions'] },
   { method: 'PATCH', segments: ['api', 'research', 'questions', ':questionId'] },

@@ -4,8 +4,9 @@
  * shape holds in both directions.
  *
  * Two things here are about this branch rather than the archived cloud build: research reaches the router
- * only through `core.research` (there is no separate `deps.research`), and a 本地客户端授权 grant is
- * refused before it gets here — see the granted-client case.
+ * only through `core.research` (`deps.research` exists for one job — marking 引用 when a knowledge node is
+ * archived, see `research-archive.test.ts`), and a 本地客户端授权 grant is refused before it gets here — see
+ * the granted-client case.
  */
 import { describe, expect, it } from 'vitest';
 import { createOfflineProvider } from '@noltri/ai-provider';
@@ -15,10 +16,13 @@ import {
   charterResponseSchema,
   charterVersionListResponseSchema,
   charterVersionSchema,
+  claimSchema,
+  evidenceSchema,
   researchProjectListResponseSchema,
   researchProjectSchema,
   researchQuestionListResponseSchema,
   researchQuestionSchema,
+  researchReferenceResponseSchema,
   researchReviewMarkSchema,
   reviewMarkListResponseSchema,
 } from '@noltri/schema';
@@ -215,6 +219,7 @@ describe('research http routes', () => {
       ['GET', '/api/research/projects/whatever/charter/baseline'],
       ['GET', '/api/research/projects/whatever/review-marks'],
       ['POST', '/api/research/review-marks/whatever/clear'],
+      ['GET', '/api/research/references?nodeId=whatever'],
     ] as const) {
       const response = await call(
         handle,
@@ -353,5 +358,78 @@ describe('the approved baseline and review mark routes', () => {
     const badQuery = await call(handle, 'GET', `/api/research/projects/${projectId}/review-marks?status=stale`);
     expect(badQuery.status).toBe(400);
     expect(apiErrorSchema.parse(await jsonOf(badQuery)).error.code).toBe('invalid_request');
+  });
+});
+
+/**
+ * R03 的归档前检查 over the wire: one read-only route, keyed by the source rather than a project, because a
+ * 出处 can be cited by several 研究项目 at once.
+ */
+describe('the research reference route', () => {
+  it('reports the 证据 that cite a source and the 论点 they support', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle, '冷链物流服务质量研究');
+    const claim = claimSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/claims`, {
+          claimCode: 'C1',
+          claimText: '可靠性因素处于结构性中介位置。',
+          claimType: 'empirical',
+        }),
+      ),
+    );
+    const evidence = evidenceSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/evidence`, {
+          type: 'interview',
+          title: '访谈：王工 2026-03',
+          nodeId: 'node-9',
+          rawSourceId: 'raw-9',
+          locationOrigin: 'captured',
+        }),
+      ),
+    );
+    expect(evidence).toMatchObject({ nodeId: 'node-9', rawSourceId: 'raw-9', locationOrigin: 'captured' });
+    await call(handle, 'POST', `/api/research/projects/${projectId}/relations`, {
+      sourceType: 'evidence',
+      sourceId: evidence.id,
+      relationType: 'supports',
+      targetType: 'claim',
+      targetId: claim.id,
+    });
+
+    const byNode = researchReferenceResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', '/api/research/references?nodeId=node-9')),
+    );
+    expect(byNode.references).toHaveLength(1);
+    expect(byNode.references[0]).toMatchObject({
+      projectId,
+      projectName: '冷链物流服务质量研究',
+      evidenceId: evidence.id,
+      evidenceTitle: '访谈：王工 2026-03',
+      evidenceType: 'interview',
+      claimIds: [claim.id],
+    });
+
+    // The same walk from the raw capture, and a source nothing cites.
+    const byRaw = researchReferenceResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', '/api/research/references?rawSourceId=raw-9')),
+    );
+    expect(byRaw.references.map((row) => row.evidenceId)).toEqual([evidence.id]);
+    const none = researchReferenceResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', '/api/research/references?nodeId=node-never-cited')),
+    );
+    expect(none.references).toEqual([]);
+  });
+
+  it('refuses a query that names no source', async () => {
+    const handle = handlerOf();
+    const nothing = await call(handle, 'GET', '/api/research/references');
+    expect(nothing.status).toBe(400);
+    expect(apiErrorSchema.parse(await jsonOf(nothing)).error.code).toBe('invalid_request');
+
+    // `?nodeId=` arrives as an empty string, which is 「没指名道」 rather than a search for ''.
+    const blank = await call(handle, 'GET', '/api/research/references?nodeId=');
+    expect(apiErrorSchema.parse(await jsonOf(blank)).error.code).toBe('invalid_request');
   });
 });

@@ -90,6 +90,11 @@ export async function getNodeDetail(deps: CoreDeps, actor: ActorContext, nodeId:
 /**
  * PATCH applies title / summary / status only — the frozen V1 contract.
  * A title change is a rename and writes a VersionRecord, so it stays reversible (§2.4).
+ *
+ * Archiving also has to answer for research (R03): 证据 that cite this node keep pointing at it — the id
+ * is never re-bound to other text — and get a 复核标记 along with the 论点 they support. Restoring does
+ * *not* clear those marks; a 证据 whose 出处 came back still needs the user's second look, and 「恢复不误报为
+ * 已核验」 is what the mark staying `pending` means.
  */
 export async function patchNode(
   deps: CoreDeps,
@@ -106,6 +111,13 @@ export async function patchNode(
   const nextTitle = title === undefined || title.length === 0 ? existing.title : title;
   const renamed = nextTitle !== existing.title;
   const statusChanged = patch.status !== undefined && patch.status !== existing.status;
+
+  // Before the write, because the alternative is an archived node whose 引用 were never marked — and a
+  // mark raised twice is one refreshed row, so a retry after a failed archive costs nothing. A host with
+  // no research wiring has nothing to mark and archives anyway (contract §2).
+  if (statusChanged && patch.status === 'archived' && deps.research !== undefined) {
+    await deps.research.markSourceArchived(actor.userId, { nodeId, sourceTitle: nextTitle });
+  }
 
   const updated = await deps.repository.updateNode({
     id: nodeId,

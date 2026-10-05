@@ -9,6 +9,10 @@
  * mutable document the user is writing, and each approval appends an immutable snapshot beside it plus
  * the 需复核 marks for the objects the caller named (R06).
  *
+ * `findReferences` / `markSourceArchived` are R03's research half: the read-only 归档前检查 and the
+ * 复核标记 write the knowledge side calls when a node it owns is archived. They reach across projects
+ * because a 出处 may be cited by more than one 研究项目, and they never re-bind a pointer.
+ *
  * The archived façade also carried `runDriftCheck`, `listDriftFindings`, `updateDriftFinding`,
  * `buildMap` and `buildContextPack`. They are deliberately absent here: 六类偏移检查、研究地图与上下文包
  * is phase P6 of the local-desktop plan, and shipping the storage rows for a finding is not the same as
@@ -17,6 +21,8 @@
  */
 import type {
   ApproveCharterRequest,
+  ArchiveSourceRequest,
+  ArchivedSourceMarks,
   ChangeListQuery,
   CharterRequest,
   CharterVersion,
@@ -47,6 +53,8 @@ import type {
   ResearchDecision,
   ResearchProject,
   ResearchQuestion,
+  ResearchReferenceMatch,
+  ResearchReferenceQuery,
   ResearchReviewMark,
   ReviewMarkListQuery,
   TimelineEvent,
@@ -54,6 +62,7 @@ import type {
 import type { ResearchRepository } from '@noltri/storage';
 import * as baselines from './baselines';
 import * as changes from './changes';
+import * as references from './references';
 import * as claims from './claims';
 import * as decisions from './decisions';
 import * as evidence from './evidence';
@@ -75,6 +84,8 @@ export interface ResearchDomain {
   getCharterBaseline(projectId: string, userId: string): Promise<CharterVersion | null>;
   listReviewMarks(projectId: string, userId: string, query: ReviewMarkListQuery): Promise<ResearchReviewMark[]>;
   clearReviewMark(markId: string, userId: string): Promise<ResearchReviewMark>;
+  findReferences(userId: string, query: ResearchReferenceQuery): Promise<ResearchReferenceMatch[]>;
+  markSourceArchived(userId: string, body: ArchiveSourceRequest): Promise<ArchivedSourceMarks>;
   createQuestion(projectId: string, userId: string, body: CreateResearchQuestionRequest): Promise<ResearchQuestion>;
   listQuestions(projectId: string, userId: string): Promise<ResearchQuestion[]>;
   updateQuestion(questionId: string, userId: string, body: PatchResearchQuestionRequest): Promise<ResearchQuestion>;
@@ -114,6 +125,10 @@ export function createResearchDomain(repo: ResearchRepository): ResearchDomain {
     getCharterBaseline: (projectId, userId) => baselines.getCharterBaseline(repo, projectId, userId),
     listReviewMarks: (projectId, userId, query) => baselines.listReviewMarks(repo, projectId, userId, query),
     clearReviewMark: (markId, userId) => baselines.clearReviewMark(repo, markId, userId),
+
+    // --- 来源引用 (P5-C: R03 的归档前检查与归档标记) ---
+    findReferences: (userId, query) => references.findResearchReferences(repo, userId, query),
+    markSourceArchived: (userId, body) => references.markSourceArchived(repo, userId, body),
 
     // --- questions ---
     createQuestion: (projectId, userId, body) => questions.createQuestion(repo, projectId, userId, body),
