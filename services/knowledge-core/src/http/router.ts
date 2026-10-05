@@ -30,6 +30,7 @@ import type { CoreConfig } from '../config';
 import { resolveIdentity as defaultResolveIdentity, type IdentityResolver } from '../auth';
 import { requireNodeAccess, requireScope, type GrantStore } from '../authorization';
 import type { KnowledgeCore } from '../core';
+import type { ActorContext } from '../types';
 import { handleAdminGrants } from './admin';
 import { parseWith, readJsonBody } from './parse';
 
@@ -202,7 +203,14 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
   const grant = identity.grant;
   // Cheap rejection before any body is read: the credential decides what this client may do at all.
   requireScope(grant, method, path);
-  const actor = { userId: identity.userId, actor: identity.actor };
+  // §435 限制返回片段 rides on the actor, so every read service cuts the text it hands back. The device
+  // credential and the legacy path carry no cap: 收件箱 triage has to be able to see the whole capture.
+  const snippetChars = grant?.snippetChars ?? undefined;
+  const actor: ActorContext = {
+    userId: identity.userId,
+    actor: identity.actor,
+    ...(snippetChars === undefined ? {} : { snippetChars }),
+  };
 
   if (path === 'api/admin/grants' || path === 'api/admin/grants/:id/revoke') {
     return json(

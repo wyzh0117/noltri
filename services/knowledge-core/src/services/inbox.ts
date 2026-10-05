@@ -18,18 +18,20 @@ import {
   type RawSource,
 } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
-import type { ActorContext, CoreDeps } from '../types';
+import { capText, type ActorContext, type CoreDeps } from '../types';
 
 /** Characters shown in the feed before the reader has to open the source. */
 const PREVIEW_CHARS = 160;
 const DEFAULT_PAGE = 50;
 
-function previewOf(rawText: string): string {
+function previewOf(rawText: string, actor: ActorContext): string {
   const trimmed = rawText.trim();
-  return trimmed.length <= PREVIEW_CHARS ? trimmed : `${trimmed.slice(0, PREVIEW_CHARS)}…`;
+  // A 160-character preview per row is still a library export at 200 rows, so the feed honours the cap.
+  const capped = capText(actor, trimmed);
+  return capped.length <= PREVIEW_CHARS ? capped : `${capped.slice(0, PREVIEW_CHARS)}…`;
 }
 
-function toEntry(source: RawSource): InboxEntry {
+function toEntry(source: RawSource, actor: ActorContext): InboxEntry {
   return {
     id: source.id,
     sourceType: source.sourceType,
@@ -40,7 +42,7 @@ function toEntry(source: RawSource): InboxEntry {
     capturedAt: source.capturedAt,
     processingStatus: source.processingStatus,
     errorReason: source.errorReason,
-    textPreview: previewOf(source.rawText),
+    textPreview: previewOf(source.rawText, actor),
     rawTextLength: source.rawText.length,
   };
 }
@@ -73,12 +75,15 @@ export async function listInbox(deps: CoreDeps, actor: ActorContext, query: Inbo
     deps.repository.listInbox({ userId: actor.userId, statuses, limit, offset }),
     deps.repository.countInboxByStatus(actor.userId),
   ]);
-  return { entries: rows.map(toEntry), counts: counts satisfies InboxCounts, limit, offset };
+  return { entries: rows.map((row) => toEntry(row, actor)), counts: counts satisfies InboxCounts, limit, offset };
 }
 
 /** Full text for one capture, for the triage view. Ownership is the only filter, so a miss is null. */
 export async function readRawSource(deps: CoreDeps, actor: ActorContext, id: string): Promise<RawSource | null> {
-  return deps.repository.findRawSource(id, actor.userId);
+  const source = await deps.repository.findRawSource(id, actor.userId);
+  // §435: 原文 is the widest single read a client has, so the cap has to cover it too — otherwise
+  // 「限制返回片段」 would hold everywhere except the one call that returns the whole document.
+  return source === null ? null : { ...source, rawText: capText(actor, source.rawText) };
 }
 
 /**

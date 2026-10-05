@@ -64,6 +64,7 @@ export async function handleAdminGrants(args: AdminArgs): Promise<AdminResponse>
       ...(input.client === undefined ? {} : { client: input.client }),
       scopes: input.scopes,
       ...(input.nodeIds === undefined ? {} : { nodeIds: input.nodeIds }),
+      ...(input.snippetChars === undefined ? {} : { snippetChars: input.snippetChars }),
     });
     return { grant: publicGrant(grant), secret };
   }

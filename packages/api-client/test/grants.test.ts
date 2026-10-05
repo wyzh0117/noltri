@@ -56,8 +56,10 @@ describe('ApiClient grant calls', () => {
     expect(grants[0]?.label).toBe('Claude Desktop');
     // A listing is a screenshot-able surface: its shape carries no credential field at all.
     expect(Object.keys(grants[0] ?? {}).sort()).toEqual(
-      ['client', 'createdAt', 'id', 'label', 'nodeIds', 'revokedAt', 'scopes'].sort(),
+      ['client', 'createdAt', 'id', 'label', 'nodeIds', 'revokedAt', 'scopes', 'snippetChars'].sort(),
     );
+    // The fixture above predates 限制返回片段, so this also proves an older Core still reads as 不限制.
+    expect(grants[0]?.snippetChars).toBeNull();
   });
 
   it('issues a grant and hands the one-time secret through untouched', async () => {
@@ -77,12 +79,26 @@ describe('ApiClient grant calls', () => {
     expect(JSON.parse(String(calls[0]?.body)).nodeIds).toEqual(['n1']);
   });
 
+  it('sends 限制返回片段 when the panel narrows it, and omits it when it does not', async () => {
+    const payload = { grant: { ...GRANT, snippetChars: 200 }, secret: SECRET };
+    const { calls, fetchImpl } = stub({ status: 200, payload });
+    const client = clientFor(fetchImpl);
+    await client.issueGrant({ label: '窄口 Agent', scopes: ['read'], snippetChars: 200 });
+    await client.issueGrant({ label: '宽口 Agent', scopes: ['read'] });
+
+    expect(JSON.parse(String(calls[0]?.body)).snippetChars).toBe(200);
+    expect('snippetChars' in JSON.parse(String(calls[1]?.body))).toBe(false);
+  });
+
   /** A half-built grant must not reach the network: it would mint a credential nobody intended. */
   const refused: readonly (readonly [string, unknown])[] = [
     ['an empty label', { label: '', scopes: ['read'] }],
     ['no scope', { label: 'x', scopes: [] }],
     ['an unknown scope', { label: 'x', scopes: ['everything'] }],
     ['an empty project list', { label: 'x', scopes: ['read'], nodeIds: [] }],
+    // 限制返回片段 below the floor would return nothing readable; the panel offers a whole-document cap.
+    ['a snippet cap too small to be useful', { label: 'x', scopes: ['read'], snippetChars: 4 }],
+    ['a snippet cap bigger than a document', { label: 'x', scopes: ['read'], snippetChars: 90_000 }],
   ];
   it.each(refused)('refuses %s before sending', (_name, payload) => {
     const { calls, fetchImpl } = stub({ status: 200, payload: { grant: GRANT, secret: SECRET } });

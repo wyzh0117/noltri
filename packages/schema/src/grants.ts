@@ -10,6 +10,10 @@ import { z } from 'zod';
 export const grantScopeSchema = z.enum(['capture', 'read', 'mutate']);
 export type GrantScope = z.infer<typeof grantScopeSchema>;
 
+/** §435 限制返回片段 bounds. A cap below this would truncate a hit to nothing useful. */
+export const MIN_SNIPPET_CHARS = 20;
+export const MAX_SNIPPET_CHARS = 4_000;
+
 /** One connection in 连接中心: what was allowed, to whom, and whether it still is. */
 export const publicGrantSchema = z.object({
   id: z.string(),
@@ -18,6 +22,17 @@ export const publicGrantSchema = z.object({
   scopes: z.array(grantScopeSchema),
   /** `null` = 全部项目; a list means only those node ids may be read or changed. */
   nodeIds: z.array(z.string()).nullable(),
+  /**
+   * §435 限制返回片段. `null` returns what 检索 stores; a number caps each hit's text. It has a default
+   * because a grants file written before this option existed must still parse.
+   */
+  snippetChars: z
+    .number()
+    .int()
+    .min(MIN_SNIPPET_CHARS)
+    .max(MAX_SNIPPET_CHARS)
+    .nullable()
+    .default(null),
   createdAt: z.string(),
   revokedAt: z.string().nullable(),
 });
@@ -34,6 +49,8 @@ export const issueGrantRequestSchema = z.object({
   scopes: z.array(grantScopeSchema).min(1).max(3),
   /** Omit for 全部项目. An empty array is a mistake, not a request to allow nothing. */
   nodeIds: z.array(z.string().min(1)).min(1).max(100).optional(),
+  /** Omit for 不限制返回片段. */
+  snippetChars: z.number().int().min(MIN_SNIPPET_CHARS).max(MAX_SNIPPET_CHARS).optional(),
 });
 export type IssueGrantRequest = z.infer<typeof issueGrantRequestSchema>;
 

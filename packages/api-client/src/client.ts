@@ -52,6 +52,8 @@ import { createId, nowIso } from '@noltri/shared';
 
 /** The grant payload and response types, re-exported so a UI can build one without the schema package. */
 export type { GrantScope, IssueGrantRequest, IssueGrantResponse, PublicGrant } from '@noltri/schema';
+/** The 限制返回片段 bounds, re-exported as values so a panel can enforce what the Core will accept. */
+export { MAX_SNIPPET_CHARS, MIN_SNIPPET_CHARS } from '@noltri/schema';
 
 export const apiRoutes = {
   health: '/api/health',

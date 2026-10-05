@@ -16,7 +16,7 @@ import {
   type NodeContextRequest,
 } from '@noltri/schema';
 import { estimateTokens, knowledgeError, truncate } from '@noltri/shared';
-import type { ActorContext, CoreDeps } from '../types';
+import { capText, type ActorContext, type CoreDeps } from '../types';
 
 type ContextSource = NodeContext['sources'][number];
 type RelatedNode = NodeContext['relatedNodes'][number];
@@ -43,6 +43,12 @@ const RELATION_LABEL: Record<string, string> = {
 
 interface ItemEntry {
   item: KnowledgeItem;
+  /**
+   * §435: the text this caller is allowed to see — `item.normalizedText`, or the grant's 限制返回片段 cut
+   * of it. Assembly uses this, so the markdown, the item list and `estimatedTokens` all describe the
+   * same capped context instead of disagreeing with each other.
+   */
+  snippet: string;
   nodeTitle: string;
   isSelectedNode: boolean;
 }
@@ -106,7 +112,12 @@ export async function buildNodeContext(
     push(
       itemLine(entry, assembled.sourcesFor(entry.item)),
       () => {
-        items.push(entry.item);
+        // The row keeps its identity and provenance; only the text fields carry the caller's cap.
+        items.push({
+          ...entry.item,
+          normalizedText: entry.snippet,
+          summary: entry.item.summary === null ? null : capText(actor, entry.item.summary),
+        });
         const source = assembled.sourceByRawId.get(entry.item.rawSourceId);
         if (source !== undefined && !sources.some((row) => row.rawSourceId === source.rawSourceId)) sources.push(source);
       },
@@ -171,7 +182,8 @@ function headerOf(scope: ContextScope, assembled: Assembled, node: KnowledgeNode
 
 function itemLine(entry: ItemEntry, sourceText: string): string {
   const suffix = entry.isSelectedNode ? '' : `（属于：${entry.nodeTitle}）`;
-  return `- ${entry.item.normalizedText}${suffix}${sourceText.length > 0 ? ` ${sourceText}` : ''}`;
+  // `snippet` is what the caller may see; `normalizedText` stays the stored row for dedupe and provenance.
+  return `- ${entry.snippet}${suffix}${sourceText.length > 0 ? ` ${sourceText}` : ''}`;
 }
 
 function sectionBlock(title: string, lines: string[]): string {
@@ -220,7 +232,12 @@ async function collectScope(
   let relatedNodes: RelatedNode[] = [];
 
   const ownItems = await repository.listKnowledgeItemsForNode(node.id, actor.userId);
-  itemEntries = ownItems.map((item) => ({ item, nodeTitle: node.title, isSelectedNode: true }));
+  itemEntries = ownItems.map((item) => ({
+    item,
+    snippet: capText(actor, item.normalizedText),
+    nodeTitle: node.title,
+    isSelectedNode: true,
+  }));
 
   if (scope === 'section') {
     const grandchildren = directChildren.flatMap((child) => childrenOf(child.id));
@@ -228,7 +245,15 @@ async function collectScope(
     structureCaption = '章节内节点';
     for (const child of directChildren) {
       const childItems = await repository.listKnowledgeItemsForNode(child.id, actor.userId);
-      itemEntries = [...itemEntries, ...childItems.map((item) => ({ item, nodeTitle: child.title, isSelectedNode: false }))];
+      itemEntries = [
+        ...itemEntries,
+        ...childItems.map((item) => ({
+          item,
+          snippet: capText(actor, item.normalizedText),
+          nodeTitle: child.title,
+          isSelectedNode: false,
+        })),
+      ];
     }
   } else if (scope === 'tree') {
     const treeRoot = ancestors.length > 0 ? ancestors[0] : node;
@@ -252,7 +277,7 @@ async function collectScope(
       {
         rawSourceId: source.id,
         label: sourceLabel(source),
-        excerpt: truncate(source.rawText, 220),
+        excerpt: capText(actor, truncate(source.rawText, 220)),
         url: source.sourceUrl,
         capturedAt: source.capturedAt,
       },

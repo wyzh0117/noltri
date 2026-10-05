@@ -9,7 +9,19 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { apiErrorSchema, captureResultSchema, grantListResponseSchema, issueGrantResponseSchema, revokeGrantResponseSchema, treeResponseSchema } from '@noltri/schema';
+import {
+  apiErrorSchema,
+  captureResultSchema,
+  grantListResponseSchema,
+  inboxResponseSchema,
+  issueGrantResponseSchema,
+  nodeContextSchema,
+  nodeDetailSchema,
+  rawSourceSchema,
+  revokeGrantResponseSchema,
+  searchResponseSchema,
+  treeResponseSchema,
+} from '@noltri/schema';
 import { silentLogger } from '@noltri/shared';
 import { resolveIdentity } from '../src/auth';
 import {
@@ -80,6 +92,21 @@ describe('grant model', () => {
     await expect(issueGrant(store, { label: 'x', scopes: ['nope' as GrantScope] })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(issueGrant(store, { label: 'x', scopes: ['read'], nodeIds: ['  '] })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(await store.read()).toHaveLength(0);
+  });
+
+  it('keeps 限制返回片段 only when it is a sane number of characters', async () => {
+    const store = new InMemoryGrantStore();
+    const capped = await issueGrant(store, { label: '窄口 Agent', scopes: ['read'], snippetChars: 40 });
+    expect(capped.grant.snippetChars).toBe(40);
+    expect((await listGrants(store))[0]?.snippetChars).toBe(40);
+    expect((await issueGrant(store, { label: '不限', scopes: ['read'] })).grant.snippetChars).toBeNull();
+
+    await expect(issueGrant(store, { label: 'x', scopes: ['read'], snippetChars: 4 })).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+    await expect(issueGrant(store, { label: 'x', scopes: ['read'], snippetChars: 90_000 })).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
   });
 
   it('defaults a missing client label so version records never say empty', async () => {
@@ -169,6 +196,21 @@ describe('FileGrantStore', () => {
     expect(await readFile(join(dir, 'grants.json'), 'utf8')).not.toContain(secret);
   });
 
+  it('reads a grants file written before 限制返回片段 existed', async () => {
+    const dir = await freshDir();
+    const path = join(dir, 'grants.json');
+    const store = new FileGrantStore(path);
+    const { secret } = await issueGrant(store, { label: '旧连接', scopes: ['read'] });
+    // An older build left the key out entirely; that must read as 「不限制」, not as a broken store.
+    const written = JSON.parse(await readFile(path, 'utf8')) as { grants: Record<string, unknown>[] };
+    for (const row of written.grants) delete row['snippetChars'];
+    await writeFile(path, JSON.stringify(written), { mode: 0o600 });
+
+    expect((await store.read())[0]?.snippetChars).toBeNull();
+    expect((await listGrants(store))[0]?.snippetChars).toBeNull();
+    expect((await findGrant(store, secret)).kind).toBe('live');
+  });
+
   it('treats a missing file as an empty store', async () => {
     const dir = await freshDir();
     expect(await new FileGrantStore(join(dir, 'nothing-here.json')).read()).toEqual([]);
@@ -214,7 +256,11 @@ describe('FileGrantStore', () => {
   });
 });
 
-function grantOf(scopes: readonly GrantScope[], nodeIds: readonly string[] | null = null): ClientGrant {
+function grantOf(
+  scopes: readonly GrantScope[],
+  nodeIds: readonly string[] | null = null,
+  snippetChars: number | null = null,
+): ClientGrant {
   return {
     id: 'grant-1',
     label: '测试连接',
@@ -222,6 +268,7 @@ function grantOf(scopes: readonly GrantScope[], nodeIds: readonly string[] | nul
     scopes,
     secretHash: hashSecret('unused'),
     nodeIds,
+    snippetChars,
     createdAt: '2026-10-05T00:00:00.000Z',
     revokedAt: null,
   };
@@ -383,6 +430,93 @@ describe('authorization over the wire', () => {
     expect(await errorOf(await handle(request('GET', `/api/conversations/${foreign.conversationId}/messages`, secret)))).toMatchObject({
       reason: 'node_not_granted',
     });
+  });
+});
+
+/** Long enough that a capped read has to cut, with a tail that must never reach a capped client. */
+const LONG_TEXT =
+  '浓缩咖啡的萃取依赖研磨度、粉水比、水温与时间四个变量，任何一个变化都需要重新校准。' +
+  '萃取不足时酸味突出，过度萃取时苦味压过香气。TAIL_SENTINEL_这一段只允许完整读取的客户端看到。';
+
+describe('限制返回片段 over the wire (§435)', () => {
+  async function coffee(harness: Harness): Promise<{ nodeId: string; rawSourceId: string }> {
+    const nodeId = await createNodeRecord(harness, '咖啡');
+    const { rawSourceId } = await attachItemRecord(harness, nodeId, LONG_TEXT);
+    return { nodeId, rawSourceId };
+  }
+
+  it('caps every read surface a limited connection has, and leaves the uncapped one whole', async () => {
+    const harness = makeHarness();
+    const { nodeId, rawSourceId } = await coffee(harness);
+
+    const store = new InMemoryGrantStore();
+    const wide = await issueGrant(store, { label: '完整读取', scopes: ['read'] });
+    const narrow = await issueGrant(store, { label: '限制片段', scopes: ['read'], snippetChars: 24 });
+    const handle = handlerOf(harness, store);
+    const get = (path: string, secret: string): Promise<unknown> =>
+      handle(request('GET', path, secret)).then((response) => response.json());
+    const post = (path: string, secret: string, body: unknown): Promise<unknown> =>
+      handle(request('POST', path, secret, body)).then((response) => response.json());
+
+    const wideHits = searchResponseSchema.parse(await post('/api/search', wide.secret, { query: '萃取' }));
+    expect(wideHits.hits[0]?.text).toBe(LONG_TEXT);
+
+    const cutHits = searchResponseSchema.parse(await post('/api/search', narrow.secret, { query: '萃取' }));
+    expect(cutHits.hits[0]?.text).toHaveLength(24);
+    expect(cutHits.hits[0]?.text.endsWith('…')).toBe(true);
+    expect(cutHits.hits[0]?.text).not.toContain('TAIL_SENTINEL');
+
+    const detail = nodeDetailSchema.parse(await get(`/api/nodes/${nodeId}`, narrow.secret));
+    expect(detail.items[0]?.item.normalizedText).not.toContain('TAIL_SENTINEL');
+
+    const context = nodeContextSchema.parse(
+      await post('/api/node-context', narrow.secret, { nodeId, scope: 'current_node' }),
+    );
+    expect(context.markdown).not.toContain('TAIL_SENTINEL');
+    expect(context.items[0]?.normalizedText).not.toContain('TAIL_SENTINEL');
+    expect(context.sources[0]?.excerpt).not.toContain('TAIL_SENTINEL');
+    // The estimate describes the text that was handed over, not the stored document.
+    expect(context.markdown).toContain(context.items[0]?.normalizedText ?? '');
+
+    const feed = inboxResponseSchema.parse(await get('/api/inbox', narrow.secret));
+    expect(feed.entries[0]?.textPreview).not.toContain('TAIL_SENTINEL');
+    expect(rawSourceSchema.parse(await get(`/api/inbox/${rawSourceId}`, narrow.secret)).rawText).toHaveLength(24);
+    expect(rawSourceSchema.parse(await get(`/api/inbox/${rawSourceId}`, wide.secret)).rawText).toBe(LONG_TEXT);
+  });
+
+  it('leaves the device credential uncapped, because 收件箱 triage needs the whole capture', async () => {
+    const harness = makeHarness({ config: testConfig({ devTokenRequired: true, devToken: 'device-token' }) });
+    const { nodeId } = await coffee(harness);
+    const store = new InMemoryGrantStore();
+    await issueGrant(store, { label: '限制片段', scopes: ['read'], snippetChars: 24 });
+    const handle = handlerOf(harness, store);
+
+    const hits = searchResponseSchema.parse(
+      await (await handle(request('POST', '/api/search', 'device-token', { query: '萃取' }))).json(),
+    ).hits;
+    expect(hits[0]?.text).toBe(LONG_TEXT);
+
+    const detailBody = await (await handle(request('GET', `/api/nodes/${nodeId}`, 'device-token'))).json();
+    expect(nodeDetailSchema.parse(detailBody).items[0]?.item.normalizedText).toBe(LONG_TEXT);
+  });
+
+  it('refuses an absurd cap at 连接中心 instead of storing one', async () => {
+    const harness = makeHarness({ config: testConfig({ devTokenRequired: true, devToken: 'device-token' }) });
+    const store = new InMemoryGrantStore();
+    const handle = handlerOf(harness, store);
+    const mint = (body: unknown): Promise<Response> =>
+      handle(request('POST', '/api/admin/grants', 'device-token', body));
+
+    expect(await errorOf(await mint({ label: 'Claude Desktop', scopes: ['read'], snippetChars: 3 }))).toMatchObject({
+      status: 400,
+      code: 'invalid_request',
+    });
+    expect(await store.read()).toHaveLength(0);
+
+    const minted = issueGrantResponseSchema.parse(
+      await (await mint({ label: 'Claude Desktop', scopes: ['read'], snippetChars: 120 })).json(),
+    );
+    expect(minted.grant.snippetChars).toBe(120);
   });
 });
 

@@ -16,7 +16,13 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createId, knowledgeError } from '@noltri/shared';
-import { grantScopeSchema, type GrantScope, type PublicGrant } from '@noltri/schema';
+import {
+  grantScopeSchema,
+  MAX_SNIPPET_CHARS,
+  MIN_SNIPPET_CHARS,
+  type GrantScope,
+  type PublicGrant,
+} from '@noltri/schema';
 import type { CoreConfig } from './config';
 import { bearerOf, type Identity, type IdentityResolver } from './auth';
 
@@ -36,6 +42,8 @@ export interface ClientGrant {
   readonly secretHash: string;
   /** `null` = 全部项目; a list means only those node ids may be read or changed. */
   readonly nodeIds: readonly string[] | null;
+  /** §435 限制返回片段. `null` returns what 检索 stores; a number caps each search hit's text. */
+  readonly snippetChars: number | null;
   readonly createdAt: string;
   readonly revokedAt: string | null;
 }
@@ -45,6 +53,7 @@ export interface NewGrantInput {
   readonly client?: string;
   readonly scopes: readonly GrantScope[];
   readonly nodeIds?: readonly string[];
+  readonly snippetChars?: number;
   readonly now?: string;
 }
 
@@ -58,6 +67,7 @@ function cloneGrant(grant: ClientGrant): ClientGrant {
     ...grant,
     scopes: [...grant.scopes],
     nodeIds: grant.nodeIds === null ? null : [...grant.nodeIds],
+    snippetChars: grant.snippetChars ?? null,
   };
 }
 
@@ -85,6 +95,10 @@ function isGrant(value: unknown): value is ClientGrant {
     Array.isArray(grant['scopes']) &&
     grant['scopes'].every((scope) => GRANT_SCOPES.includes(scope as GrantScope)) &&
     (grant['nodeIds'] === null || Array.isArray(grant['nodeIds'])) &&
+    // Absent is legal: a grants file written before 限制返回片段 existed carries no such field.
+    (grant['snippetChars'] === undefined ||
+      grant['snippetChars'] === null ||
+      (typeof grant['snippetChars'] === 'number' && Number.isInteger(grant['snippetChars']))) &&
     (grant['revokedAt'] === null || typeof grant['revokedAt'] === 'string')
   );
 }
@@ -161,6 +175,7 @@ export function publicGrant(grant: ClientGrant): PublicGrant {
     client: grant.client,
     scopes: [...grant.scopes],
     nodeIds: grant.nodeIds === null ? null : [...grant.nodeIds],
+    snippetChars: grant.snippetChars ?? null,
     createdAt: grant.createdAt,
     revokedAt: grant.revokedAt,
   };
@@ -181,6 +196,10 @@ export async function issueGrant(
   const nodeIds = input.nodeIds === undefined ? null : [...new Set(input.nodeIds.map((id) => id.trim()).filter((id) => id !== ''))];
   if (nodeIds !== null && nodeIds.length === 0) throw badGrant('限制项目列表为空 / the project list is empty');
   const client = (input.client ?? '').trim();
+  const snippetChars = input.snippetChars ?? null;
+  if (snippetChars !== null && (snippetChars < MIN_SNIPPET_CHARS || snippetChars > MAX_SNIPPET_CHARS)) {
+    throw badGrant(`限制返回片段需在 ${String(MIN_SNIPPET_CHARS)}–${String(MAX_SNIPPET_CHARS)} 之间 / snippet cap out of range`);
+  }
 
   const secret = randomBytes(32).toString('base64url');
   const grant: ClientGrant = {
@@ -190,6 +209,7 @@ export async function issueGrant(
     scopes,
     secretHash: hashSecret(secret),
     nodeIds,
+    snippetChars,
     createdAt: input.now ?? new Date().toISOString(),
     revokedAt: null,
   };

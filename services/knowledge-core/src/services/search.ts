@@ -8,7 +8,7 @@
  */
 import type { NodeSourceSummary, SearchHit, SearchMode, SearchRequest, SearchResponse } from '@noltri/schema';
 import { knowledgeError, truncate } from '@noltri/shared';
-import { clamp01, type ActorContext, type CoreDeps } from '../types';
+import { clamp01, capText, type ActorContext, type CoreDeps } from '../types';
 import { callProvider } from '../pipeline/provider';
 
 const MAX_SEARCH_LIMIT = 50;
@@ -137,7 +137,7 @@ export async function search(deps: CoreDeps, actor: ActorContext, request: Searc
           ? 'semantic'
           : 'keyword';
 
-    const text = item !== null ? item.normalizedText : channel.text;
+    const text = capText(actor, item !== null ? item.normalizedText : channel.text);
     hits.push({
       itemId: channel.itemId,
       nodeId: channel.nodeId,
