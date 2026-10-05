@@ -233,8 +233,9 @@ describe('architecture gate — research domain', () => {
       if (segments[0] === 'api' && segments[1] === 'research') routes.push([String(match[1]), segments.join('/')]);
     }
 
-    // The 27 is contract §1; a route added here without a scope entry keeps its current refusal.
-    expect(routes).toHaveLength(27);
+    // The 32 is contract §1: P5-B's 27 plus the five 基线／复核标记 routes P5-C added. A route added
+    // here without a scope entry keeps its current refusal.
+    expect(routes).toHaveLength(32);
     expect(routes.filter(([method, path]) => scopeForAction(method, path) !== undefined)).toEqual([]);
   });
 });

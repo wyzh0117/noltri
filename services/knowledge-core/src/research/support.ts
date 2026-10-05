@@ -10,6 +10,7 @@ import type {
   JsonValue,
   ResearchChange,
   ResearchDecision,
+  ResearchEntityType,
   ResearchProject,
 } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
@@ -26,6 +27,60 @@ export async function requireProject(
     throw knowledgeError('not_found', '研究项目不存在或无权访问 / research project not found');
   }
   return project;
+}
+
+/**
+ * Resolves one entity id inside *this* project; `false` means "not here", which for a foreign id is
+ * indistinguishable from one that does not exist.
+ *
+ * Relations check their endpoints with it (contract §2) and 批准章程 checks the objects the user says the
+ * revision touched — both need the same proof, and a second copy would let one of them drift.
+ */
+export async function entityIsInProject(
+  repo: ResearchRepository,
+  projectId: string,
+  userId: string,
+  entityType: ResearchEntityType,
+  entityId: string,
+): Promise<boolean> {
+  switch (entityType) {
+    case 'research_project':
+      return entityId === projectId;
+    case 'research_charter': {
+      const charter = await repo.findCharter(projectId, userId);
+      return charter !== null && charter.id === entityId;
+    }
+    case 'research_question': {
+      const question = await repo.findResearchQuestion(entityId, userId);
+      return question !== null && question.projectId === projectId;
+    }
+    case 'evidence': {
+      const evidence = await repo.findEvidence(entityId, userId);
+      return evidence !== null && evidence.projectId === projectId;
+    }
+    case 'claim': {
+      const claim = await repo.findClaim(entityId, userId);
+      return claim !== null && claim.projectId === projectId;
+    }
+    case 'research_decision': {
+      const decision = await repo.findResearchDecision(entityId, userId);
+      return decision !== null && decision.projectId === projectId;
+    }
+    case 'research_change': {
+      const change = await repo.findResearchChange(entityId, userId);
+      return change !== null && change.projectId === projectId;
+    }
+    case 'drift_finding': {
+      const finding = await repo.findDriftFinding(entityId, userId);
+      return finding !== null && finding.projectId === projectId;
+    }
+    case 'manuscript_section': {
+      const section = await repo.findManuscriptSection(entityId, userId);
+      return section !== null && section.projectId === projectId;
+    }
+    default:
+      return false;
+  }
 }
 
 /** Runtime validation at the domain seam: callers may bypass HTTP, the rules may not move. */

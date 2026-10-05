@@ -11,11 +11,16 @@ import { describe, expect, it } from 'vitest';
 import { createOfflineProvider } from '@noltri/ai-provider';
 import {
   apiErrorSchema,
+  charterBaselineResponseSchema,
   charterResponseSchema,
+  charterVersionListResponseSchema,
+  charterVersionSchema,
   researchProjectListResponseSchema,
   researchProjectSchema,
   researchQuestionListResponseSchema,
   researchQuestionSchema,
+  researchReviewMarkSchema,
+  reviewMarkListResponseSchema,
 } from '@noltri/schema';
 import { silentLogger } from '@noltri/shared';
 import { createInMemoryRepository } from '@noltri/storage';
@@ -204,6 +209,12 @@ describe('research http routes', () => {
       ['POST', '/api/research/projects'],
       ['GET', '/api/research/projects/whatever/questions'],
       ['DELETE', '/api/research/relations/whatever'],
+      // P5-C 的批准与标记同样不向 grant 开放：文本还没走 `capText`。
+      ['POST', '/api/research/projects/whatever/charter/approve'],
+      ['GET', '/api/research/projects/whatever/charter/versions'],
+      ['GET', '/api/research/projects/whatever/charter/baseline'],
+      ['GET', '/api/research/projects/whatever/review-marks'],
+      ['POST', '/api/research/review-marks/whatever/clear'],
     ] as const) {
       const response = await call(
         handle,
@@ -230,5 +241,117 @@ describe('research http routes', () => {
     const body = apiErrorSchema.parse(await jsonOf(response)).error;
     expect(body.code).toBe('internal_error');
     expect((body.details as { reason?: string }).reason).toBe('research_not_wired');
+  });
+});
+
+/**
+ * P5-C 的五条新路由（R06 批准基线 + R03/R06 复核标记）。Parsed with the frozen response schemas, so a
+ * renamed wrapper key fails here rather than in the workbench.
+ */
+describe('the approved baseline and review mark routes', () => {
+  it('approves, lists, reads the baseline, then marks and clears over the wire', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle);
+    await call(handle, 'PUT', `/api/research/projects/${projectId}/charter`, {
+      workingTitle: '碳定价与工业排放',
+      researchMethod: 'DID',
+    });
+    const question = researchQuestionSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/questions`, {
+          questionCode: 'RQ1',
+          questionText: '碳定价是否降低排放？',
+        }),
+      ),
+    );
+
+    const approved = charterVersionSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/charter/approve`, {
+          revisionReason: '开题时批准的基线',
+          affectedEntities: [{ entityType: 'research_question', entityId: question.id }],
+        }),
+      ),
+    );
+    expect(approved.version).toBe(1);
+    expect(approved.previousVersion).toBeNull();
+    expect(approved.changedFields).toEqual([]);
+
+    const versions = charterVersionListResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/charter/versions`)),
+    );
+    expect(versions.versions.map((row) => row.version)).toEqual([1]);
+
+    const baseline = charterBaselineResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/charter/baseline`)),
+    );
+    expect(baseline.baseline?.id).toBe(approved.id);
+    expect(baseline.baseline?.charter.workingTitle).toBe('碳定价与工业排放');
+
+    const marked = reviewMarkListResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/review-marks`)),
+    );
+    expect(marked.marks.map((mark) => mark.entityId)).toEqual([question.id]);
+    expect(marked.marks[0]?.raisedBy).toBe('charter_baseline');
+    expect(marked.marks[0]?.status).toBe('pending');
+
+    // 处理完只改状态：清空之后整条列表仍读得到这一行（开发文档 §14）。
+    const cleared = researchReviewMarkSchema.parse(
+      await jsonOf(await call(handle, 'POST', `/api/research/review-marks/${marked.marks[0]!.id}/clear`)),
+    );
+    expect(cleared.status).toBe('cleared');
+    const pending = reviewMarkListResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/review-marks?status=pending`)),
+    );
+    expect(pending.marks).toEqual([]);
+    const stillThere = reviewMarkListResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/review-marks`)),
+    );
+    expect(stillThere.marks).toHaveLength(1);
+
+    // 第二次批准：新的版本号，改动的字段名，基线随之换绑。
+    await call(handle, 'PUT', `/api/research/projects/${projectId}/charter`, {
+      workingTitle: '碳定价与工业排放',
+      researchMethod: '合成控制',
+    });
+    const second = charterVersionSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/charter/approve`, {
+          revisionReason: '换识别策略',
+        }),
+      ),
+    );
+    expect(second.version).toBe(2);
+    expect(second.changedFields).toEqual(['researchMethod']);
+    expect(
+      charterBaselineResponseSchema.parse(
+        await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/charter/baseline`)),
+      ).baseline?.id,
+    ).toBe(second.id);
+  });
+
+  it('refuses an unparseable approval and an unknown mark through the shared envelope', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle);
+
+    const emptyReason = await call(handle, 'POST', `/api/research/projects/${projectId}/charter/approve`, {
+      revisionReason: '',
+    });
+    expect(emptyReason.status).toBe(400);
+    expect(apiErrorSchema.parse(await jsonOf(emptyReason)).error.code).toBe('invalid_request');
+
+    // 批准要求理由，草稿还得先存在。
+    const noDraft = await call(handle, 'POST', `/api/research/projects/${projectId}/charter/approve`, {
+      revisionReason: '批准一个还没写的章程',
+    });
+    expect(apiErrorSchema.parse(await jsonOf(noDraft)).error.code).toBe('invalid_request');
+
+    const absent = await call(handle, 'POST', '/api/research/review-marks/no-such-mark/clear');
+    expect(absent.status).toBe(404);
+    expect(apiErrorSchema.parse(await jsonOf(absent)).error.code).toBe('not_found');
+
+    const badQuery = await call(handle, 'GET', `/api/research/projects/${projectId}/review-marks?status=stale`);
+    expect(badQuery.status).toBe(400);
+    expect(apiErrorSchema.parse(await jsonOf(badQuery)).error.code).toBe('invalid_request');
   });
 });

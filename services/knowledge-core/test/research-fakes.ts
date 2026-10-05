@@ -13,6 +13,9 @@
  */
 import type {
   CharterFields,
+  CharterVersion,
+  CreateCharterVersionInput,
+  CreateReviewMarkInput,
   Claim,
   CreateClaimInput,
   CreateDriftFindingInput,
@@ -33,6 +36,7 @@ import type {
   ResearchDecision,
   ResearchProject,
   ResearchQuestion,
+  ResearchReviewMark,
   TimelineEvent,
 } from '@noltri/schema';
 import { createId, knowledgeError } from '@noltri/shared';
@@ -44,6 +48,7 @@ import type {
   ResearchChangeListOptions,
   ResearchProjectStats,
   ResearchRepository,
+  ReviewMarkListOptions,
   UpdateEvidencePatch,
   UpdateClaimPatch,
   UpdateManuscriptSectionPatch,
@@ -59,6 +64,8 @@ export class FakeResearchRepository implements ResearchRepository {
   private clockMs = Date.parse(START_CLOCK);
   private readonly projects = new Map<string, ResearchProject>();
   private readonly charters = new Map<string, ResearchCharter>();
+  private readonly charterVersions = new Map<string, CharterVersion>();
+  private readonly reviewMarks = new Map<string, ResearchReviewMark>();
   private readonly questions = new Map<string, ResearchQuestion>();
   private readonly evidence = new Map<string, Evidence>();
   private readonly claims = new Map<string, Claim>();
@@ -166,6 +173,114 @@ export class FakeResearchRepository implements ResearchRepository {
     };
     this.charters.set(charter.id, charter);
     return charter;
+  }
+
+  // --- approved baselines / review marks (P5-C: R06 快照 + R03/R06 标记) ---
+
+  async createCharterVersion(input: CreateCharterVersionInput): Promise<CharterVersion> {
+    const clash = [...this.charterVersions.values()].find(
+      (candidate) => candidate.projectId === input.projectId && candidate.version === input.version,
+    );
+    if (clash !== undefined) {
+      throw knowledgeError('storage_error', `章程版本 ${input.version} 已存在 / charter version already exists`);
+    }
+    const version: CharterVersion = {
+      id: createId(),
+      userId: input.userId,
+      projectId: input.projectId,
+      version: input.version,
+      previousVersion: input.previousVersion,
+      charter: input.charter,
+      changedFields: [...input.changedFields],
+      revisionReason: input.revisionReason,
+      decisionId: input.decisionId,
+      approvedAt: this.stamp(),
+    };
+    this.charterVersions.set(version.id, version);
+    return version;
+  }
+
+  async listCharterVersions(projectId: string, userId: string): Promise<CharterVersion[]> {
+    return [...this.charterVersions.values()]
+      .filter((version) => version.projectId === projectId && version.userId === userId)
+      .sort((first, second) => second.version - first.version);
+  }
+
+  /** A plain read, like `findCharter`: another user's project answers `null`, not 「存在」. */
+  async findCharterBaseline(projectId: string, userId: string): Promise<CharterVersion | null> {
+    return (await this.listCharterVersions(projectId, userId))[0] ?? null;
+  }
+
+  async raiseReviewMark(input: CreateReviewMarkInput): Promise<ResearchReviewMark> {
+    const charterVersion = input.charterVersion ?? null;
+    const existing = [...this.reviewMarks.values()].find(
+      (mark) =>
+        mark.projectId === input.projectId &&
+        mark.userId === input.userId &&
+        mark.entityType === input.entityType &&
+        mark.entityId === input.entityId &&
+        mark.raisedBy === input.raisedBy &&
+        mark.charterVersion === charterVersion,
+    );
+    if (existing !== undefined) {
+      // One warning per (entity, cause, baseline), refreshed in place — id and createdAt survive.
+      const refreshed: ResearchReviewMark = {
+        ...existing,
+        reason: input.reason,
+        status: 'pending',
+        updatedAt: this.stamp(),
+      };
+      this.reviewMarks.set(refreshed.id, refreshed);
+      return refreshed;
+    }
+    const now = this.stamp();
+    const mark: ResearchReviewMark = {
+      id: createId(),
+      userId: input.userId,
+      projectId: input.projectId,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      reason: input.reason,
+      raisedBy: input.raisedBy,
+      charterVersion,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.reviewMarks.set(mark.id, mark);
+    return mark;
+  }
+
+  async findReviewMark(id: string, userId: string): Promise<ResearchReviewMark | null> {
+    const mark = this.reviewMarks.get(id);
+    return mark !== undefined && mark.userId === userId ? mark : null;
+  }
+
+  async listReviewMarks(
+    projectId: string,
+    userId: string,
+    options: ReviewMarkListOptions = {},
+  ): Promise<ResearchReviewMark[]> {
+    return [...this.reviewMarks.values()].filter(
+      (mark) =>
+        mark.projectId === projectId &&
+        mark.userId === userId &&
+        (options.status === undefined || mark.status === options.status) &&
+        (options.entityType === undefined || mark.entityType === options.entityType) &&
+        (options.entityId === undefined || mark.entityId === options.entityId) &&
+        (options.raisedBy === undefined || mark.raisedBy === options.raisedBy),
+    );
+  }
+
+  async clearReviewMark(id: string, userId: string): Promise<ResearchReviewMark> {
+    const mark = this.reviewMarks.get(id);
+    if (mark === undefined || mark.userId !== userId) {
+      throw knowledgeError('not_found', `ResearchReviewMark ${id} not found`);
+    }
+    // Status only: the row is the record that this warning was raised and then handled.
+    const cleared: ResearchReviewMark = { ...mark, status: 'cleared', updatedAt: this.stamp() };
+    this.reviewMarks.set(id, cleared);
+    return cleared;
   }
 
   // --- questions ---

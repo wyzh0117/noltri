@@ -15,59 +15,10 @@ import {
   type DeleteRelationResponse,
   type EntityRelation,
   type RelationListQuery,
-  type ResearchEntityType,
 } from '@noltri/schema';
 import type { ResearchRepository } from '@noltri/storage';
 import { knowledgeError } from '@noltri/shared';
-import { requireProject, validateRequest } from './support';
-
-/** Resolves one relation endpoint; `null` means "no such entity in this project". */
-async function findEntityInProject(
-  repo: ResearchRepository,
-  projectId: string,
-  userId: string,
-  entityType: ResearchEntityType,
-  entityId: string,
-): Promise<boolean> {
-  switch (entityType) {
-    case 'research_project':
-      return entityId === projectId;
-    case 'research_charter': {
-      const charter = await repo.findCharter(projectId, userId);
-      return charter !== null && charter.id === entityId;
-    }
-    case 'research_question': {
-      const question = await repo.findResearchQuestion(entityId, userId);
-      return question !== null && question.projectId === projectId;
-    }
-    case 'evidence': {
-      const evidence = await repo.findEvidence(entityId, userId);
-      return evidence !== null && evidence.projectId === projectId;
-    }
-    case 'claim': {
-      const claim = await repo.findClaim(entityId, userId);
-      return claim !== null && claim.projectId === projectId;
-    }
-    case 'research_decision': {
-      const decision = await repo.findResearchDecision(entityId, userId);
-      return decision !== null && decision.projectId === projectId;
-    }
-    case 'research_change': {
-      const change = await repo.findResearchChange(entityId, userId);
-      return change !== null && change.projectId === projectId;
-    }
-    case 'drift_finding': {
-      const finding = await repo.findDriftFinding(entityId, userId);
-      return finding !== null && finding.projectId === projectId;
-    }
-    case 'manuscript_section': {
-      const section = await repo.findManuscriptSection(entityId, userId);
-      return section !== null && section.projectId === projectId;
-    }
-    default:
-      return false;
-  }
-}
+import { entityIsInProject, requireProject, validateRequest } from './support';
 
 export async function createRelation(
   repo: ResearchRepository,
@@ -95,7 +46,7 @@ export async function createRelation(
     { type: request.sourceType, id: request.sourceId, label: 'source' },
     { type: request.targetType, id: request.targetId, label: 'target' },
   ]) {
-    const exists = await findEntityInProject(repo, projectId, userId, endpoint.type, endpoint.id);
+    const exists = await entityIsInProject(repo, projectId, userId, endpoint.type, endpoint.id);
     if (!exists) {
       throw knowledgeError(
         'invalid_request',

@@ -83,6 +83,12 @@ const ROUTES: Route[] = [
   { method: 'PATCH', segments: ['api', 'research', 'projects', ':projectId'] },
   { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'charter'] },
   { method: 'PUT', segments: ['api', 'research', 'projects', ':projectId', 'charter'] },
+  // 批准的基线与复核标记 (P5-C, R06/R03): 批准追加不可变快照，影响对象被标记，处理完只改状态。
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'charter', 'approve'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'charter', 'versions'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'charter', 'baseline'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'review-marks'] },
+  { method: 'POST', segments: ['api', 'research', 'review-marks', ':markId', 'clear'] },
   { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'questions'] },
   { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'questions'] },
   { method: 'PATCH', segments: ['api', 'research', 'questions', ':questionId'] },

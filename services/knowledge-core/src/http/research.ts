@@ -1,5 +1,5 @@
 /**
- * `/api/research/*` — the 27 REST endpoints of the Research chain (research contract §1).
+ * `/api/research/*` — the 32 REST endpoints of the Research chain (research contract §1).
  *
  * They live here instead of inside `router.ts` for the same reason 连接中心 does: the router owns
  * identity, scope, CORS and the error envelope, and a handler module owns one API surface's payload
@@ -18,6 +18,7 @@
  */
 import type { z } from 'zod';
 import {
+  approveCharterRequestSchema,
   changeListQuerySchema,
   charterRequestSchema,
   claimListQuerySchema,
@@ -37,6 +38,7 @@ import {
   patchResearchQuestionRequestSchema,
   patchSectionRequestSchema,
   relationListQuerySchema,
+  reviewMarkListQuerySchema,
 } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
 import type { ResearchDomain } from '../research';
@@ -91,6 +93,23 @@ export async function handleResearch(args: ResearchArgs): Promise<unknown> {
     case 'api/research/projects/:projectId/charter': {
       if (args.method === 'GET') return { charter: await domain.getCharter(args.id, userId) };
       return domain.upsertCharter(args.id, userId, await readBody(charterRequestSchema, 'charter'));
+    }
+    case 'api/research/projects/:projectId/charter/approve': {
+      const body = await readBody(approveCharterRequestSchema, 'approve charter');
+      return domain.approveCharter(args.id, userId, body);
+    }
+    case 'api/research/projects/:projectId/charter/versions': {
+      return { versions: await domain.listCharterVersions(args.id, userId) };
+    }
+    case 'api/research/projects/:projectId/charter/baseline': {
+      return { baseline: await domain.getCharterBaseline(args.id, userId) };
+    }
+    case 'api/research/projects/:projectId/review-marks': {
+      const query = readQuery(reviewMarkListQuerySchema, 'review mark query');
+      return { marks: await domain.listReviewMarks(args.id, userId, query) };
+    }
+    case 'api/research/review-marks/:markId/clear': {
+      return domain.clearReviewMark(args.id, userId);
     }
     case 'api/research/projects/:projectId/questions': {
       if (args.method === 'GET') return { questions: await domain.listQuestions(args.id, userId) };

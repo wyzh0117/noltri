@@ -5,6 +5,10 @@
  * takes the caller's `userId` (from credentials only — contract §0 rule 1) and proves project
  * ownership before touching data. Decision/Change writes also append timeline events.
  *
+ * P5-C added the 批准基线 group (`approveCharter` … `clearReviewMark`): the charter draft stays the
+ * mutable document the user is writing, and each approval appends an immutable snapshot beside it plus
+ * the 需复核 marks for the objects the caller named (R06).
+ *
  * The archived façade also carried `runDriftCheck`, `listDriftFindings`, `updateDriftFinding`,
  * `buildMap` and `buildContextPack`. They are deliberately absent here: 六类偏移检查、研究地图与上下文包
  * is phase P6 of the local-desktop plan, and shipping the storage rows for a finding is not the same as
@@ -12,8 +16,10 @@
  * today, including the drift-finding table, so P6 extends this file rather than reshaping it.
  */
 import type {
+  ApproveCharterRequest,
   ChangeListQuery,
   CharterRequest,
+  CharterVersion,
   Claim,
   ClaimListQuery,
   CreateClaimRequest,
@@ -41,9 +47,12 @@ import type {
   ResearchDecision,
   ResearchProject,
   ResearchQuestion,
+  ResearchReviewMark,
+  ReviewMarkListQuery,
   TimelineEvent,
 } from '@noltri/schema';
 import type { ResearchRepository } from '@noltri/storage';
+import * as baselines from './baselines';
 import * as changes from './changes';
 import * as claims from './claims';
 import * as decisions from './decisions';
@@ -61,6 +70,11 @@ export interface ResearchDomain {
   updateProject(projectId: string, userId: string, body: PatchResearchProjectRequest): Promise<ResearchProject>;
   getCharter(projectId: string, userId: string): Promise<ResearchCharter | null>;
   upsertCharter(projectId: string, userId: string, body: CharterRequest): Promise<ResearchCharter>;
+  approveCharter(projectId: string, userId: string, body: ApproveCharterRequest): Promise<CharterVersion>;
+  listCharterVersions(projectId: string, userId: string): Promise<CharterVersion[]>;
+  getCharterBaseline(projectId: string, userId: string): Promise<CharterVersion | null>;
+  listReviewMarks(projectId: string, userId: string, query: ReviewMarkListQuery): Promise<ResearchReviewMark[]>;
+  clearReviewMark(markId: string, userId: string): Promise<ResearchReviewMark>;
   createQuestion(projectId: string, userId: string, body: CreateResearchQuestionRequest): Promise<ResearchQuestion>;
   listQuestions(projectId: string, userId: string): Promise<ResearchQuestion[]>;
   updateQuestion(questionId: string, userId: string, body: PatchResearchQuestionRequest): Promise<ResearchQuestion>;
@@ -93,6 +107,13 @@ export function createResearchDomain(repo: ResearchRepository): ResearchDomain {
     updateProject: (projectId, userId, body) => projects.updateProject(repo, projectId, userId, body),
     getCharter: (projectId, userId) => projects.getCharter(repo, projectId, userId),
     upsertCharter: (projectId, userId, body) => projects.upsertCharter(repo, projectId, userId, body),
+
+    // --- approved baselines / review marks (P5-C: R06 + R03 的标记面) ---
+    approveCharter: (projectId, userId, body) => baselines.approveCharter(repo, projectId, userId, body),
+    listCharterVersions: (projectId, userId) => baselines.listCharterVersions(repo, projectId, userId),
+    getCharterBaseline: (projectId, userId) => baselines.getCharterBaseline(repo, projectId, userId),
+    listReviewMarks: (projectId, userId, query) => baselines.listReviewMarks(repo, projectId, userId, query),
+    clearReviewMark: (markId, userId) => baselines.clearReviewMark(repo, markId, userId),
 
     // --- questions ---
     createQuestion: (projectId, userId, body) => questions.createQuestion(repo, projectId, userId, body),
