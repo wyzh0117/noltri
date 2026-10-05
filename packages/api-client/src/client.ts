@@ -8,7 +8,10 @@ import {
   conversationListResponseSchema,
   conversationMessagesResponseSchema,
   healthResponseSchema,
+  grantListResponseSchema,
   inboxResponseSchema,
+  issueGrantRequestSchema,
+  issueGrantResponseSchema,
   knowledgeNodeSchema,
   moveNodeResponseSchema,
   nodeChatResponseSchema,
@@ -16,6 +19,7 @@ import {
   nodeDetailSchema,
   rawSourceSchema,
   RETRYABLE_ERROR_CODES,
+  revokeGrantResponseSchema,
   searchResponseSchema,
   treeResponseSchema,
   type AssignSourceRequest,
@@ -26,6 +30,8 @@ import {
   type ConversationMessage,
   type HealthResponse,
   type InboxResponse,
+  type IssueGrantRequest,
+  type IssueGrantResponse,
   type KnowledgeNode,
   type MoveNodeRequest,
   type MoveNodeResponse,
@@ -35,6 +41,7 @@ import {
   type NodeContextRequest,
   type NodeDetail,
   type PatchNodeRequest,
+  type PublicGrant,
   type RawSource,
   type SearchRequest,
   type SearchResponse,
@@ -42,6 +49,9 @@ import {
   type TreeResponse,
 } from '@noltri/schema';
 import { createId, nowIso } from '@noltri/shared';
+
+/** The grant payload and response types, re-exported so a UI can build one without the schema package. */
+export type { GrantScope, IssueGrantRequest, IssueGrantResponse, PublicGrant } from '@noltri/schema';
 
 export const apiRoutes = {
   health: '/api/health',
@@ -58,6 +68,8 @@ export const apiRoutes = {
   chat: '/api/chat',
   conversations: '/api/conversations',
   conversationMessages: (id: string) => `/api/conversations/${encodeURIComponent(id)}/messages`,
+  grants: '/api/admin/grants',
+  grantRevoke: (id: string) => `/api/admin/grants/${encodeURIComponent(id)}/revoke`,
 } as const;
 
 export class ApiClientError extends Error {
@@ -246,6 +258,31 @@ export class ApiClient {
       conversationMessagesResponseSchema,
     );
     return result.messages;
+  }
+
+  /**
+   * 连接中心's list: every local client this Core knows, its scopes and whether it is still live.
+   * Deliberately credential-free, so a screenshot of this panel never leaks a key.
+   */
+  async grants(): Promise<PublicGrant[]> {
+    return (await this.request('GET', apiRoutes.grants, grantListResponseSchema)).grants;
+  }
+
+  /**
+   * Mint a per-client credential. The plaintext `secret` exists in this one response only — the store
+   * keeps a digest, so there is no call that reads a live key back.
+   */
+  issueGrant(request: IssueGrantRequest): Promise<IssueGrantResponse> {
+    const validated = issueGrantRequestSchema.safeParse(request);
+    if (!validated.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Grant payload is not sendable', validated.error.issues);
+    }
+    return this.request('POST', apiRoutes.grants, issueGrantResponseSchema, { body: validated.data });
+  }
+
+  /** Revocation is immediate: a connection that is already open fails on its next request. */
+  async revokeGrant(id: string): Promise<PublicGrant> {
+    return (await this.request('POST', apiRoutes.grantRevoke(id), revokeGrantResponseSchema)).grant;
   }
 
   private async request<Output>(
