@@ -27,6 +27,57 @@ export function buildServerEntry(endpoint: string, token: string): Record<string
   };
 }
 
+/**
+ * A stdio server registration: an executable plus an argument *array*. §11 forbids assembling a shell
+ * string from a path and a username, so nothing here ever joins `args`, and the script path has to be
+ * absolute — a relative one would resolve against whatever directory the Agent happens to launch from.
+ */
+export interface StdioParams {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+}
+
+/** The local Core address always travels; the token only when this install actually uses one. */
+export function stdioInvocation(input: {
+  readonly nodePath: string;
+  readonly scriptPath: string;
+  readonly coreBaseUrl: string;
+  readonly token?: string;
+}): StdioParams {
+  const script = input.scriptPath.trim();
+  const node = input.nodePath.trim();
+  if (node === '') throw new Error('stdio 入口需要明确的 node 可执行文件');
+  if (!script.startsWith('/')) throw new Error(`stdio 入口的脚本路径必须是绝对路径，收到 ${script}`);
+  const core = input.coreBaseUrl.trim().replace(/\/+$/, '');
+  if (core === '') throw new Error('stdio 入口需要本地 Core 地址');
+  return {
+    command: node,
+    args: ['--import', 'tsx', script],
+    env: {
+      KNOWLEDGE_API_URL: core,
+      ...(input.token === undefined || input.token.trim() === ''
+        ? {}
+        : { NOLTRI_ACCESS_TOKEN: input.token.trim() }),
+    },
+  };
+}
+
+export function buildStdioEntry(params: StdioParams): Record<string, unknown> {
+  return { type: 'stdio', command: params.command, args: [...params.args], env: { ...params.env } };
+}
+
+/**
+ * What the confirmation dialog shows. The secret is named but never printed, because the dialog is a
+ * screenshot-able surface and §16 keeps credentials out of previews, logs and exports.
+ */
+export function describeStdioEntry(params: StdioParams): string {
+  const secretKeys = Object.keys(params.env).filter((key) => /token|secret|key/i.test(key));
+  const plainKeys = Object.keys(params.env).filter((key) => !/token|secret|key/i.test(key));
+  const shown = [...plainKeys, ...secretKeys.map((key) => `${key}=<已隐藏>`)];
+  return [`命令：${params.command}`, `参数：${params.args.join(' ')}`, `环境变量：${shown.length > 0 ? shown.join('、') : '（无）'}`].join('\n');
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
