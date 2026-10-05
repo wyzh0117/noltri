@@ -1,8 +1,10 @@
 import type {
   CharterFields,
+  CharterVersion,
   Claim,
   ClaimStatus,
   ClaimType,
+  CreateCharterVersionInput,
   CreateClaimInput,
   CreateDriftFindingInput,
   CreateEntityRelationInput,
@@ -12,6 +14,7 @@ import type {
   CreateResearchDecisionInput,
   CreateResearchProjectInput,
   CreateResearchQuestionInput,
+  CreateReviewMarkInput,
   CreateTimelineEventInput,
   DriftFinding,
   DriftFindingStatus,
@@ -30,6 +33,9 @@ import type {
   ResearchQuestion,
   ResearchRelationType,
   ResearchEntityType,
+  ResearchReviewMark,
+  ReviewMarkRaisedBy,
+  ReviewMarkStatus,
   TimelineEvent,
 } from '@noltri/schema';
 import type { StorageDriverName } from './types';
@@ -79,6 +85,13 @@ export interface DriftFindingListOptions {
   severity?: DriftSeverity;
 }
 
+export interface ReviewMarkListOptions {
+  status?: ReviewMarkStatus;
+  entityType?: ResearchEntityType;
+  entityId?: string;
+  raisedBy?: ReviewMarkRaisedBy;
+}
+
 export type UpdateResearchProjectPatch = Partial<
   Pick<ResearchProject, 'name' | 'description' | 'status'>
 >;
@@ -115,6 +128,31 @@ export interface ResearchRepository {
   // --- charter (one per project; create-or-update, history via ResearchChange) ---
   findCharter(projectId: string, userId: string): Promise<ResearchCharter | null>;
   upsertCharter(input: CharterFields & { userId: string; projectId: string }): Promise<ResearchCharter>;
+
+  // --- approved baselines (R06: 不可变批准版本 + 当前草稿) ---
+  /**
+   * Appends one frozen snapshot. The domain picks `version` and computes `changedFields` — a driver that
+   * numbered or diffed on its own would give the same database two histories — and the
+   * `(project_id, version)` uniqueness is what turns a lost race into an error instead of a second v2.
+   */
+  createCharterVersion(input: CreateCharterVersionInput): Promise<CharterVersion>;
+  /** Newest baseline first, or `[]` while nothing has ever been approved. */
+  listCharterVersions(projectId: string, userId: string): Promise<CharterVersion[]>;
+  /** The highest-numbered version: what 后续检查 bind to. `null` before the first approval. */
+  findCharterBaseline(projectId: string, userId: string): Promise<CharterVersion | null>;
+
+  // --- review marks (R03/R06: 影响对象被标记) ---
+  /** One mark per (entity, cause, baseline): raising twice refreshes it instead of stacking duplicates. */
+  raiseReviewMark(input: CreateReviewMarkInput): Promise<ResearchReviewMark>;
+  findReviewMark(id: string, userId: string): Promise<ResearchReviewMark | null>;
+  listReviewMarks(
+    projectId: string,
+    userId: string,
+    options?: ReviewMarkListOptions,
+  ): Promise<ResearchReviewMark[]>;
+  /** 处理完了。The row stays — a cleared mark is history, and deleting warnings is how a project
+   *  ends up looking like it never drifted (开发文档 §14). */
+  clearReviewMark(id: string, userId: string): Promise<ResearchReviewMark>;
 
   // --- research questions ---
   createResearchQuestion(input: CreateResearchQuestionInput): Promise<ResearchQuestion>;

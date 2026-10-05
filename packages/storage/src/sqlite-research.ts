@@ -13,10 +13,15 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import {
+  charterFieldNameSchema,
+  researchCharterSchema,
   type CharterFields,
+  type CharterFieldName,
+  type CharterVersion,
   type Claim,
   type ClaimStatus,
   type ClaimType,
+  type CreateCharterVersionInput,
   type CreateClaimInput,
   type CreateDriftFindingInput,
   type CreateEntityRelationInput,
@@ -26,6 +31,7 @@ import {
   type CreateResearchDecisionInput,
   type CreateResearchProjectInput,
   type CreateResearchQuestionInput,
+  type CreateReviewMarkInput,
   type CreateTimelineEventInput,
   type DriftFinding,
   type DriftFindingStatus,
@@ -45,6 +51,9 @@ import {
   type ResearchQuestion,
   type ResearchQuestionStatus,
   type ResearchRelationType,
+  type ResearchReviewMark,
+  type ReviewMarkRaisedBy,
+  type ReviewMarkStatus,
   type TimelineEvent,
   type TimelineEventType,
   type TimelineSource,
@@ -59,6 +68,7 @@ import type {
   ResearchChangeListOptions,
   ResearchProjectStats,
   ResearchRepository,
+  ReviewMarkListOptions,
   StorageDriverName,
   UpdateClaimPatch,
   UpdateEvidencePatch,
@@ -133,6 +143,12 @@ const FINDING_FIELDS = `id, project_id, user_id, drift_type, severity, descripti
 const TIMELINE_FIELDS = `id, project_id, user_id, event_type, occurred_at, title, summary, source_type,
   source_id, related_entities_json, created_at`;
 
+const CHARTER_VERSION_FIELDS = `id, project_id, user_id, version, previous_version, charter_json,
+  changed_fields_json, revision_reason, decision_id, approved_at`;
+
+const REVIEW_MARK_FIELDS = `id, project_id, user_id, entity_type, entity_id, reason, raised_by,
+  charter_version, status, created_at, updated_at`;
+
 /** The charter is the whole document: an unstated field is a cleared field, not an unchanged one. */
 const CHARTER_COLUMNS = [
   'working_title',
@@ -184,6 +200,55 @@ function toCharter(row: DbRow): ResearchCharter {
     researchBoundary: optText(row.research_boundary),
     claimBoundary: optText(row.claim_boundary),
     currentStage: optText(row.current_stage),
+    createdAt: text(row.created_at),
+    updatedAt: text(row.updated_at),
+  };
+}
+
+/**
+ * A baseline snapshot is a domain record the user approved, so a row that no longer parses is reported
+ * instead of degrading to `{}` — an empty charter would read as 「批准时什么都没写」.
+ */
+function toStoredCharter(value: unknown): ResearchCharter {
+  const parsed = researchCharterSchema.safeParse(json(value));
+  if (!parsed.success) {
+    throw knowledgeError('storage_error', '章程基线快照损坏 / charter baseline snapshot is corrupt');
+  }
+  return parsed.data;
+}
+
+/** A diff list names charter fields; a name this build no longer declares reads as no diff. */
+function toChangedFields(value: unknown): CharterFieldName[] {
+  const parsed = charterFieldNameSchema.array().safeParse(json(value));
+  return parsed.success ? [...parsed.data] : [];
+}
+
+function toCharterVersion(row: DbRow): CharterVersion {
+  return {
+    id: text(row.id),
+    projectId: text(row.project_id),
+    userId: text(row.user_id),
+    version: num(row.version),
+    previousVersion: row.previous_version === null ? null : num(row.previous_version),
+    charter: toStoredCharter(row.charter_json),
+    changedFields: toChangedFields(row.changed_fields_json),
+    revisionReason: text(row.revision_reason),
+    decisionId: optText(row.decision_id),
+    approvedAt: text(row.approved_at),
+  };
+}
+
+function toReviewMark(row: DbRow): ResearchReviewMark {
+  return {
+    id: text(row.id),
+    projectId: text(row.project_id),
+    userId: text(row.user_id),
+    entityType: text(row.entity_type) as ResearchEntityType,
+    entityId: text(row.entity_id),
+    reason: text(row.reason),
+    raisedBy: text(row.raised_by) as ReviewMarkRaisedBy,
+    charterVersion: row.charter_version === null ? null : num(row.charter_version),
+    status: text(row.status) as ReviewMarkStatus,
     createdAt: text(row.created_at),
     updatedAt: text(row.updated_at),
   };
@@ -584,6 +649,162 @@ export class SqliteResearchRepository implements ResearchRepository {
       ],
     );
     return record;
+  }
+
+  // --- approved baselines --------------------------------------------------------------
+
+  async createCharterVersion(input: CreateCharterVersionInput): Promise<CharterVersion> {
+    this.requireProject(input.projectId, input.userId);
+    const clash = this.one('select id from research_charter_versions where project_id = ? and version = ?', [
+      input.projectId,
+      input.version,
+    ]);
+    if (clash !== null) {
+      throw knowledgeError('storage_error', `章程版本 ${input.version} 已存在 / charter version already exists`, {
+        projectId: input.projectId,
+        version: input.version,
+      });
+    }
+    const record: CharterVersion = {
+      id: createId(),
+      projectId: input.projectId,
+      userId: input.userId,
+      version: input.version,
+      previousVersion: input.previousVersion,
+      charter: input.charter,
+      changedFields: [...input.changedFields],
+      revisionReason: input.revisionReason,
+      decisionId: input.decisionId,
+      approvedAt: nowIso(),
+    };
+    this.insert(
+      'research_charter_versions',
+      ['id', 'project_id', 'user_id', 'version', 'previous_version', 'charter_json', 'changed_fields_json',
+        'revision_reason', 'decision_id', 'approved_at'],
+      [
+        record.id,
+        record.projectId,
+        record.userId,
+        record.version,
+        record.previousVersion,
+        JSON.stringify(record.charter),
+        JSON.stringify(record.changedFields),
+        record.revisionReason,
+        record.decisionId,
+        record.approvedAt,
+      ],
+    );
+    return record;
+  }
+
+  async listCharterVersions(projectId: string, userId: string): Promise<CharterVersion[]> {
+    this.requireProject(projectId, userId);
+    return this.many(
+      `select ${CHARTER_VERSION_FIELDS} from research_charter_versions
+       where project_id = ? and user_id = ? order by version desc, rowid desc`,
+      [projectId, userId],
+    ).map(toCharterVersion);
+  }
+
+  /** An unguarded read like `findCharter`: a project the caller cannot see answers `null`, not 「exists」. */
+  async findCharterBaseline(projectId: string, userId: string): Promise<CharterVersion | null> {
+    const row = this.one(
+      `select ${CHARTER_VERSION_FIELDS} from research_charter_versions
+       where project_id = ? and user_id = ? order by version desc limit 1`,
+      [projectId, userId],
+    );
+    return row === null ? null : toCharterVersion(row);
+  }
+
+  // --- review marks --------------------------------------------------------------------
+
+  async raiseReviewMark(input: CreateReviewMarkInput): Promise<ResearchReviewMark> {
+    this.requireProject(input.projectId, input.userId);
+    const charterVersion = input.charterVersion ?? null;
+    const existing = this.one(
+      `select id from research_review_marks
+       where user_id = ? and project_id = ? and entity_type = ? and entity_id = ? and raised_by = ?
+         and coalesce(charter_version, 0) = ?`,
+      [input.userId, input.projectId, input.entityType, input.entityId, input.raisedBy, charterVersion ?? 0],
+    );
+    if (existing !== null) {
+      // One warning per (entity, cause, baseline), refreshed in place — the id and created_at survive.
+      const id = text(existing.id);
+      this.patchRow('research_review_marks', id, [
+        ['reason', input.reason],
+        ['status', 'pending'],
+      ]);
+      return this.reload(REVIEW_MARK_FIELDS, 'research_review_marks', id, input.userId, toReviewMark);
+    }
+    const timestamp = nowIso();
+    const record: ResearchReviewMark = {
+      id: createId(),
+      projectId: input.projectId,
+      userId: input.userId,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      reason: input.reason,
+      raisedBy: input.raisedBy,
+      charterVersion,
+      status: 'pending',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.insert(
+      'research_review_marks',
+      ['id', 'project_id', 'user_id', 'entity_type', 'entity_id', 'reason', 'raised_by', 'charter_version',
+        'status', 'created_at', 'updated_at'],
+      [
+        record.id,
+        record.projectId,
+        record.userId,
+        record.entityType,
+        record.entityId,
+        record.reason,
+        record.raisedBy,
+        record.charterVersion,
+        record.status,
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    return record;
+  }
+
+  async findReviewMark(id: string, userId: string): Promise<ResearchReviewMark | null> {
+    const row = this.one(`select ${REVIEW_MARK_FIELDS} from research_review_marks where id = ? and user_id = ?`, [
+      id,
+      userId,
+    ]);
+    return row === null ? null : toReviewMark(row);
+  }
+
+  async listReviewMarks(
+    projectId: string,
+    userId: string,
+    options: ReviewMarkListOptions = {},
+  ): Promise<ResearchReviewMark[]> {
+    this.requireProject(projectId, userId);
+    const where = whereAll([
+      ['status', options.status],
+      ['entity_type', options.entityType],
+      ['entity_id', options.entityId],
+      ['raised_by', options.raisedBy],
+    ]);
+    return this.many(
+      `select ${REVIEW_MARK_FIELDS} from research_review_marks
+       where project_id = ? and user_id = ?${where.clause}
+       order by created_at asc, rowid asc`,
+      [projectId, userId, ...where.params],
+    ).map(toReviewMark);
+  }
+
+  async clearReviewMark(id: string, userId: string): Promise<ResearchReviewMark> {
+    const existing = this.one('select id from research_review_marks where id = ? and user_id = ?', [id, userId]);
+    if (existing === null) throw knowledgeError('not_found', `ResearchReviewMark ${id} not found`);
+    // A state change, not a delete: the row is the record that this warning was raised and handled.
+    this.patchRow('research_review_marks', id, [['status', 'cleared']]);
+    return this.reload(REVIEW_MARK_FIELDS, 'research_review_marks', id, userId, toReviewMark);
   }
 
   // --- research questions --------------------------------------------------------------

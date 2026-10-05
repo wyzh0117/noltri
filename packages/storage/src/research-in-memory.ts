@@ -1,5 +1,7 @@
 import type {
+  CharterVersion,
   Claim,
+  CreateCharterVersionInput,
   CreateClaimInput,
   CreateDriftFindingInput,
   CreateEntityRelationInput,
@@ -9,6 +11,7 @@ import type {
   CreateResearchDecisionInput,
   CreateResearchProjectInput,
   CreateResearchQuestionInput,
+  CreateReviewMarkInput,
   CreateTimelineEventInput,
   DriftFinding,
   DriftFindingStatus,
@@ -20,6 +23,7 @@ import type {
   ResearchDecision,
   ResearchProject,
   ResearchQuestion,
+  ResearchReviewMark,
   TimelineEvent,
 } from '@noltri/schema';
 import { createId, knowledgeError, nowIso } from '@noltri/shared';
@@ -32,6 +36,7 @@ import type {
   ResearchChangeListOptions,
   ResearchProjectStats,
   ResearchRepository,
+  ReviewMarkListOptions,
   StorageDriverName,
   UpdateClaimPatch,
   UpdateEvidencePatch,
@@ -60,6 +65,8 @@ export class InMemoryResearchRepository implements ResearchRepository {
 
   private readonly projects = new Map<string, ResearchProject>();
   private readonly charters = new Map<string, ResearchCharter>();
+  private readonly charterVersions = new Map<string, CharterVersion>();
+  private readonly reviewMarks = new Map<string, ResearchReviewMark>();
   private readonly questions = new Map<string, ResearchQuestion>();
   private readonly evidence = new Map<string, Evidence>();
   private readonly claims = new Map<string, Claim>();
@@ -180,6 +187,132 @@ export class InMemoryResearchRepository implements ResearchRepository {
     };
     this.charters.set(record.id, record);
     return clone(record);
+  }
+
+  // --- approved baselines ---
+
+  async createCharterVersion(input: CreateCharterVersionInput): Promise<CharterVersion> {
+    this.requireProject(input.projectId, input.userId);
+    const clash = [...this.charterVersions.values()].find(
+      (row) => row.projectId === input.projectId && row.version === input.version,
+    );
+    if (clash !== undefined) {
+      throw knowledgeError('storage_error', `章程版本 ${input.version} 已存在 / charter version already exists`, {
+        projectId: input.projectId,
+        version: input.version,
+      });
+    }
+    const record: CharterVersion = {
+      id: createId(),
+      userId: input.userId,
+      projectId: input.projectId,
+      version: input.version,
+      previousVersion: input.previousVersion,
+      charter: clone(input.charter),
+      changedFields: [...input.changedFields],
+      revisionReason: input.revisionReason,
+      decisionId: input.decisionId,
+      approvedAt: nowIso(),
+    };
+    this.charterVersions.set(record.id, record);
+    return clone(record);
+  }
+
+  async listCharterVersions(projectId: string, userId: string): Promise<CharterVersion[]> {
+    this.requireProject(projectId, userId);
+    return [...this.charterVersions.values()]
+      .filter((row) => row.projectId === projectId && row.userId === userId)
+      .sort((first, second) => second.version - first.version)
+      .map(clone);
+  }
+
+  /**
+   * A plain read, not an ownership-guarded one: like `findCharter`, it answers `null` for a project the
+   * caller cannot see rather than confirming that the id exists.
+   */
+  async findCharterBaseline(projectId: string, userId: string): Promise<CharterVersion | null> {
+    const newest = [...this.charterVersions.values()]
+      .filter((row) => row.projectId === projectId && row.userId === userId)
+      .sort((first, second) => second.version - first.version)[0];
+    return newest === undefined ? null : clone(newest);
+  }
+
+  // --- review marks ---
+
+  async raiseReviewMark(input: CreateReviewMarkInput): Promise<ResearchReviewMark> {
+    this.requireProject(input.projectId, input.userId);
+    const charterVersion = input.charterVersion ?? null;
+    const existing = [...this.reviewMarks.values()].find(
+      (mark) =>
+        mark.projectId === input.projectId &&
+        mark.userId === input.userId &&
+        mark.entityType === input.entityType &&
+        mark.entityId === input.entityId &&
+        mark.raisedBy === input.raisedBy &&
+        mark.charterVersion === charterVersion,
+    );
+    if (existing !== undefined) {
+      // The same cause on the same object is one warning, refreshed — not a pile of duplicates.
+      const raised: ResearchReviewMark = {
+        ...existing,
+        reason: input.reason,
+        status: 'pending',
+        updatedAt: nowIso(),
+      };
+      this.reviewMarks.set(raised.id, raised);
+      return clone(raised);
+    }
+    const timestamp = nowIso();
+    const record: ResearchReviewMark = {
+      id: createId(),
+      projectId: input.projectId,
+      userId: input.userId,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      reason: input.reason,
+      raisedBy: input.raisedBy,
+      charterVersion,
+      status: 'pending',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.reviewMarks.set(record.id, record);
+    return clone(record);
+  }
+
+  async findReviewMark(id: string, userId: string): Promise<ResearchReviewMark | null> {
+    const found = this.reviewMarks.get(id);
+    return found === undefined || found.userId !== userId ? null : clone(found);
+  }
+
+  async listReviewMarks(
+    projectId: string,
+    userId: string,
+    options: ReviewMarkListOptions = {},
+  ): Promise<ResearchReviewMark[]> {
+    this.requireProject(projectId, userId);
+    return [...this.reviewMarks.values()]
+      .filter(
+        (mark) =>
+          mark.projectId === projectId &&
+          mark.userId === userId &&
+          (options.status === undefined || mark.status === options.status) &&
+          (options.entityType === undefined || mark.entityType === options.entityType) &&
+          (options.entityId === undefined || mark.entityId === options.entityId) &&
+          (options.raisedBy === undefined || mark.raisedBy === options.raisedBy),
+      )
+      .sort(byCreatedAt)
+      .map(clone);
+  }
+
+  async clearReviewMark(id: string, userId: string): Promise<ResearchReviewMark> {
+    const found = this.reviewMarks.get(id);
+    if (found === undefined || found.userId !== userId) {
+      throw knowledgeError('not_found', `ResearchReviewMark ${id} not found`);
+    }
+    const cleared: ResearchReviewMark = { ...found, status: 'cleared', updatedAt: nowIso() };
+    this.reviewMarks.set(id, cleared);
+    return clone(cleared);
   }
 
   // --- research questions ---

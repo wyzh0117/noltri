@@ -185,6 +185,198 @@ export function describeResearchRepository(
       });
     }, timeout);
 
+    it('appends approved charter versions and reads the newest one as the baseline', async () => {
+      await scope(async (repository, userId) => {
+        const research = await project(repository, userId);
+        const draft = await repository.upsertCharter({ userId, projectId: research.id, ...charterFields() });
+
+        expect(await repository.findCharterBaseline(research.id, userId)).toBeNull();
+        expect(await repository.listCharterVersions(research.id, userId)).toEqual([]);
+
+        const first = await repository.createCharterVersion({
+          userId,
+          projectId: research.id,
+          version: 1,
+          previousVersion: null,
+          charter: draft,
+          changedFields: [],
+          revisionReason: '开题时批准的基线',
+          decisionId: null,
+        });
+        expect(first.version).toBe(1);
+        expect(first.previousVersion).toBeNull();
+        expect(first.charter.id).toBe(draft.id);
+        expect(first.changedFields).toEqual([]);
+        expect(first.decisionId).toBeNull();
+        expect(new Date(first.approvedAt).toISOString()).toBe(first.approvedAt);
+
+        await pause();
+        const second = await repository.createCharterVersion({
+          userId,
+          projectId: research.id,
+          version: 2,
+          previousVersion: 1,
+          charter: { ...draft, researchMethod: 'ISM + ANP + 稳健性检验', claimBoundary: '扩展到 2015 年后样本' },
+          changedFields: ['researchMethod', 'claimBoundary'],
+          revisionReason: '加入稳健性检验，并把论断范围放宽到 2015 年后',
+          decisionId: 'decision-1',
+        });
+
+        // Ordered by version number, not by the order the rows were written.
+        expect((await repository.listCharterVersions(research.id, userId)).map((row) => row.version)).toEqual([
+          2,
+          1,
+        ]);
+        const baseline = await repository.findCharterBaseline(research.id, userId);
+        expect(baseline?.id).toBe(second.id);
+        expect(baseline?.changedFields).toEqual(['researchMethod', 'claimBoundary']);
+        expect(baseline?.decisionId).toBe('decision-1');
+
+        // The draft moves on; the approved snapshot is the text that was frozen at approval (R06).
+        await repository.upsertCharter({ userId, projectId: research.id, ...charterFields({ workingTitle: '换题了' }) });
+        expect((await repository.findCharter(research.id, userId))?.workingTitle).toBe('换题了');
+        expect((await repository.findCharterBaseline(research.id, userId))?.charter.workingTitle).toBe(
+          '冷链服务质量因素的结构关系研究',
+        );
+        expect((await repository.listCharterVersions(research.id, userId))[1]?.charter.researchMethod).toBe('ISM + ANP');
+      });
+    }, timeout);
+
+    it('refuses a charter version number the project already used', async () => {
+      await scope(async (repository, userId) => {
+        const research = await project(repository, userId);
+        const charter = await repository.upsertCharter({ userId, projectId: research.id, ...charterFields() });
+        const input = {
+          userId,
+          projectId: research.id,
+          previousVersion: null,
+          charter,
+          changedFields: [],
+          revisionReason: '批准',
+          decisionId: null,
+        };
+
+        await repository.createCharterVersion({ ...input, version: 1 });
+        const clash = await rejection(repository.createCharterVersion({ ...input, version: 1 }));
+        expect(clash.code).toBe('storage_error');
+        expect(clash.message).toContain('已存在');
+        // The loser of a numbering race writes nothing: the first row keeps its own reason.
+        const versions = await repository.listCharterVersions(research.id, userId);
+        expect(versions).toHaveLength(1);
+        expect(versions[0]?.revisionReason).toBe('批准');
+
+        const foreign = await rejection(repository.listCharterVersions(research.id, foreignUser()));
+        expect(foreign.code).toBe('not_found');
+        expect(await repository.findCharterBaseline(research.id, foreignUser())).toBeNull();
+        // A project that does not exist yet cannot hold a baseline either.
+        await rejection(
+          repository.createCharterVersion({ ...input, version: 2, projectId: 'absent-project' }),
+        );
+      });
+    }, timeout);
+
+    it('raises one review mark per entity and cause, and clears it without deleting it', async () => {
+      await scope(async (repository, userId) => {
+        const research = await project(repository, userId);
+        const absent = await rejection(repository.clearReviewMark('no-such-mark', userId));
+        expect(absent.code).toBe('not_found');
+        expect(await repository.findReviewMark('no-such-mark', userId)).toBeNull();
+
+        const raised = await repository.raiseReviewMark({
+          userId,
+          projectId: research.id,
+          entityType: 'claim',
+          entityId: 'claim-1',
+          reason: '新基线放宽了论断边界',
+          raisedBy: 'charter_baseline',
+          charterVersion: 2,
+        });
+        expect(raised.status).toBe('pending');
+        expect(raised.charterVersion).toBe(2);
+
+        await pause();
+        const otherKind = await repository.raiseReviewMark({
+          userId,
+          projectId: research.id,
+          entityType: 'claim',
+          entityId: 'claim-1',
+          reason: '引用的节点被归档了',
+          raisedBy: 'source_archived',
+        });
+        expect(otherKind.id).not.toBe(raised.id);
+        expect(otherKind.charterVersion).toBeNull();
+
+        // Same entity, same cause, same baseline: one warning refreshed, not two stacked.
+        await pause();
+        const again = await repository.raiseReviewMark({
+          userId,
+          projectId: research.id,
+          entityType: 'claim',
+          entityId: 'claim-1',
+          reason: '新基线放宽了论断边界（第二次批准）',
+          raisedBy: 'charter_baseline',
+          charterVersion: 2,
+        });
+        expect(again.id).toBe(raised.id);
+        expect(again.reason).toBe('新基线放宽了论断边界（第二次批准）');
+        expect(again.createdAt).toBe(raised.createdAt);
+        expect(again.updatedAt > raised.updatedAt).toBe(true);
+
+        // A different baseline is a different warning, so history shows both revisions.
+        await pause();
+        const third = await repository.raiseReviewMark({
+          userId,
+          projectId: research.id,
+          entityType: 'claim',
+          entityId: 'claim-1',
+          reason: '第三次批准又动了方法',
+          raisedBy: 'charter_baseline',
+          charterVersion: 3,
+        });
+        expect(third.id).not.toBe(raised.id);
+
+        const all = await repository.listReviewMarks(research.id, userId);
+        expect(all.map((mark) => mark.id)).toEqual([raised.id, otherKind.id, third.id]);
+        // 谁标的分开查：R06 的基线标记和 R03 的来源标记各自成组。
+        expect(
+          (await repository.listReviewMarks(research.id, userId, { raisedBy: 'source_archived' })).map((m) => m.id),
+        ).toEqual([otherKind.id]);
+        expect(
+          (await repository.listReviewMarks(research.id, userId, { raisedBy: 'charter_baseline' })).map((m) => m.id),
+        ).toEqual([raised.id, third.id]);
+
+        const cleared = await repository.clearReviewMark(otherKind.id, userId);
+        expect(cleared.status).toBe('cleared');
+        expect(cleared.id).toBe(otherKind.id);
+        expect(await repository.findReviewMark(otherKind.id, userId)).toMatchObject({ status: 'cleared' });
+        // Clearing is a state change, not a deletion: the warning stays readable (开发文档 §14).
+        expect((await repository.listReviewMarks(research.id, userId)).map((mark) => mark.id))
+          .toEqual([raised.id, otherKind.id, third.id]);
+        expect((await repository.listReviewMarks(research.id, userId, { status: 'pending' })).map((mark) => mark.id))
+          .toEqual([raised.id, third.id]);
+        expect(await repository.listReviewMarks(research.id, userId, { entityType: 'research_question' })).toEqual([]);
+        expect((await repository.listReviewMarks(research.id, userId, { entityId: 'claim-1', status: 'cleared' })))
+          .toHaveLength(1);
+
+        expect(await repository.findReviewMark(raised.id, foreignUser())).toBeNull();
+        const foreignClear = await rejection(repository.clearReviewMark(raised.id, foreignUser()));
+        expect(foreignClear.code).toBe('not_found');
+        const foreignList = await rejection(repository.listReviewMarks(research.id, foreignUser()));
+        expect(foreignList.code).toBe('not_found');
+        const foreignRaise = await rejection(
+          repository.raiseReviewMark({
+            userId: foreignUser(),
+            projectId: research.id,
+            entityType: 'claim',
+            entityId: 'claim-1',
+            reason: 'x',
+            raisedBy: 'charter_baseline',
+          }),
+        );
+        expect(foreignRaise.code).toBe('not_found');
+      });
+    }, timeout);
+
     it('creates, reads, lists and patches research questions', async () => {
       await scope(async (repository, userId) => {
         const research = await project(repository, userId);

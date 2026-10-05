@@ -18,7 +18,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 /** Bumped by appending a new entry to MIGRATIONS; stored in `PRAGMA user_version`. */
-export const SQLITE_SCHEMA_VERSION = 3;
+export const SQLITE_SCHEMA_VERSION = 4;
 
 export interface SqliteOpenOptions {
   /** Absolute path to the database file, or `:memory:`. */
@@ -82,6 +82,8 @@ const ENUM_CHECKS = {
   driftFindingStatus: "('open', 'acknowledged', 'resolved', 'dismissed')",
   timelineEventType: "('decision', 'change', 'milestone')",
   timelineSource: "('research_decision', 'research_change', 'manual')",
+  reviewMarkRaisedBy: "('charter_baseline', 'source_archived')",
+  reviewMarkStatus: "('pending', 'cleared')",
 } as const;
 
 const DDL_V1 = `
@@ -479,10 +481,66 @@ create index if not exists research_timeline_events_list_idx
   on research_timeline_events (user_id, project_id, occurred_at);
 `;
 
+/**
+ * Version 4 is P5-C: the approved-charter baseline (R06) and the 需复核 marker it leaves behind (R03/R06).
+ *
+ * Both are separate tables rather than columns on the entities they talk about. A baseline has to be
+ * immutable, and `research_charters` is a mutable draft with one row per project — freezing it in place
+ * would mean the user can no longer edit what they are working on. A review mark has the same problem on
+ * the other side: 论点、证据、章节 all keep their own `status`, and "this binding may be stale" is a
+ * different fact from "this claim is dropped".
+ *
+ * `decision_id` is deliberately *not* a foreign key. The domain already proves the decision belongs to
+ * this project (which an FK could not express), and an `on delete restrict` here would fight the
+ * project-level cascade in `research_decisions` — two tables deleting each other's reasons.
+ */
+const DDL_V4 = `
+create table if not exists research_charter_versions (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  version integer not null constraint research_charter_versions_version_positive_check check (version > 0),
+  previous_version integer constraint research_charter_versions_previous_positive_check
+    check (previous_version is null or previous_version > 0),
+  charter_json text not null,
+  changed_fields_json text not null,
+  revision_reason text not null,
+  decision_id text,
+  approved_at text not null
+);
+create unique index if not exists research_charter_versions_number_uq
+  on research_charter_versions (project_id, version);
+create index if not exists research_charter_versions_list_idx
+  on research_charter_versions (user_id, project_id, version);
+
+create table if not exists research_review_marks (
+  id text primary key,
+  project_id text not null references research_projects (id) on delete cascade,
+  user_id text not null,
+  entity_type text not null constraint research_review_marks_entity_type_enum_check
+    check (entity_type in ${ENUM_CHECKS.researchEntityType}),
+  entity_id text not null,
+  reason text not null,
+  raised_by text not null constraint research_review_marks_raised_by_enum_check
+    check (raised_by in ${ENUM_CHECKS.reviewMarkRaisedBy}),
+  charter_version integer constraint research_review_marks_charter_version_positive_check
+    check (charter_version is null or charter_version > 0),
+  status text not null default 'pending' constraint research_review_marks_status_enum_check
+    check (status in ${ENUM_CHECKS.reviewMarkStatus}),
+  created_at text not null,
+  updated_at text not null
+);
+create unique index if not exists research_review_marks_entity_uq
+  on research_review_marks (user_id, project_id, entity_type, entity_id, raised_by, coalesce(charter_version, 0));
+create index if not exists research_review_marks_list_idx
+  on research_review_marks (user_id, project_id, status, created_at);
+`;
+
 const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => void }> = [
   { version: 1, apply: (db) => db.exec(DDL_V1) },
   { version: 2, apply: (db) => db.exec(DDL_V2) },
   { version: 3, apply: (db) => db.exec(DDL_V3) },
+  { version: 4, apply: (db) => db.exec(DDL_V4) },
 ];
 
 function readString(db: DatabaseSync, sql: string): string {
@@ -570,4 +628,5 @@ export {
   DDL_V1 as SQLITE_DDL_V1,
   DDL_V2 as SQLITE_DDL_V2,
   DDL_V3 as SQLITE_DDL_V3,
+  DDL_V4 as SQLITE_DDL_V4,
 };

@@ -1,6 +1,6 @@
 /**
  * What the shared contract cannot see about the research half: what the file actually contains, whether
- * the version-3 DDL still agrees with the zod enums, and what the constraints refuse.
+ * the research DDL (versions 3 and 4) still agrees with the zod enums, and what the constraints refuse.
  *
  * The enum comparison mirrors `migrations.test.ts` for Postgres, with one difference that matters: the
  * archived Postgres research migrations were deliberately not ported, so `packages/schema/src/research.ts`
@@ -23,10 +23,18 @@ import {
   researchProjectStatusSchema,
   researchQuestionStatusSchema,
   researchRelationTypeSchema,
+  reviewMarkRaisedBySchema,
+  reviewMarkStatusSchema,
   timelineEventTypeSchema,
   timelineSourceSchema,
 } from '@noltri/schema';
-import { SQLITE_DDL_V3, SQLITE_MIGRATIONS, SQLITE_SCHEMA_VERSION, openSqlite } from '../src/sqlite-schema';
+import {
+  SQLITE_DDL_V3,
+  SQLITE_DDL_V4,
+  SQLITE_MIGRATIONS,
+  SQLITE_SCHEMA_VERSION,
+  openSqlite,
+} from '../src/sqlite-schema';
 import { SqliteRepository } from '../src/sqlite';
 import { SqliteResearchRepository } from '../src/sqlite-research';
 import {
@@ -76,9 +84,13 @@ const ENUM_COLUMNS: ReadonlyArray<{ table: string; column: string; schema: EnumL
   { table: 'research_drift_findings', column: 'target_entity_type', schema: researchEntityTypeSchema },
   { table: 'research_timeline_events', column: 'event_type', schema: timelineEventTypeSchema },
   { table: 'research_timeline_events', column: 'source_type', schema: timelineSourceSchema },
+  { table: 'research_review_marks', column: 'entity_type', schema: researchEntityTypeSchema },
+  { table: 'research_review_marks', column: 'raised_by', schema: reviewMarkRaisedBySchema },
+  { table: 'research_review_marks', column: 'status', schema: reviewMarkStatusSchema },
 ];
 
 const RESEARCH_TABLES = [
+  'research_charter_versions',
   'research_charters',
   'research_claims',
   'research_changes',
@@ -89,6 +101,7 @@ const RESEARCH_TABLES = [
   'research_manuscript_sections',
   'research_projects',
   'research_questions',
+  'research_review_marks',
   'research_timeline_events',
 ] as const;
 
@@ -99,16 +112,16 @@ function checkLabels(table: string, column: string): string[] {
       `(?:${column}\\s+is\\s+null\\s+or\\s+)?${column}\\s+in\\s*\\(([^)]*)\\)`,
     'i',
   );
-  const found = pattern.exec(SQLITE_DDL_V3);
+  const found = pattern.exec(`${SQLITE_DDL_V3}${SQLITE_DDL_V4}`);
   const list = found?.[1];
   if (list === undefined) {
-    throw new Error(`${table}.${column} has no ${table}_${column}_enum_check CHECK clause in DDL_V3`);
+    throw new Error(`${table}.${column} has no ${table}_${column}_enum_check CHECK clause in the research DDL`);
   }
   return [...list.matchAll(/'([^']*)'/g)].map((match) => match[1] ?? '').sort();
 }
 
-describe('the version 3 DDL', () => {
-  it('creates the eleven research tables in the file', () => {
+describe('the research DDL', () => {
+  it('creates the thirteen research tables in the file', () => {
     const { db, pragmas } = openSqlite({ file: nextFile() });
     expect(pragmas.schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
     const tables = db
@@ -212,15 +225,233 @@ describe('the version 3 DDL', () => {
     db.prepare(
       `insert into knowledge_nodes (id, user_id, title, created_at, updated_at) values ('n', 'u', '节点', ?, ?)`,
     ).run(STAMP, STAMP);
+    // The version 4 rows hang off the project too: a deleted project takes its approvals and warnings.
+    db.prepare(
+      `insert into research_charter_versions
+        (id, project_id, user_id, version, previous_version, charter_json, changed_fields_json,
+         revision_reason, decision_id, approved_at)
+       values ('v1', 'p', 'u', 1, null, '{}', '[]', '批准', null, ?)`,
+    ).run(STAMP);
+    db.prepare(
+      `insert into research_review_marks
+        (id, project_id, user_id, entity_type, entity_id, reason, raised_by, charter_version, status,
+         created_at, updated_at)
+       values ('m1', 'p', 'u', 'claim', 'k1', '基线动了论断边界', 'charter_baseline', 1, 'pending', ?, ?)`,
+    ).run(STAMP, STAMP);
 
     db.prepare("delete from research_projects where id = 'p'").run();
     expect(db.prepare("select count(*) as n from research_questions where project_id = 'p'").get()).toMatchObject({
       n: 0,
     });
     expect(db.prepare("select count(*) as n from research_timeline_events").get()).toMatchObject({ n: 0 });
+    expect(db.prepare('select count(*) as n from research_charter_versions').get()).toMatchObject({ n: 0 });
+    expect(db.prepare('select count(*) as n from research_review_marks').get()).toMatchObject({ n: 0 });
     // The knowledge half has no such relationship: a research project owns no knowledge rows.
     expect(db.prepare("select count(*) as n from knowledge_nodes").get()).toMatchObject({ n: 1 });
     db.close();
+  });
+});
+
+describe('the version 4 DDL', () => {
+  function seedProject(db: DatabaseSync, id = 'p'): void {
+    db.prepare(
+      `insert into research_projects (id, user_id, name, created_at, updated_at)
+       values (?, 'u', '冷链研究', ?, ?)`,
+    ).run(id, STAMP, STAMP);
+  }
+
+  it('numbers approved baselines per project and refuses a version already used', () => {
+    const { db } = openSqlite({ file: nextFile() });
+    seedProject(db);
+    seedProject(db, 'p2');
+    const insert = db.prepare(
+      `insert into research_charter_versions
+        (id, project_id, user_id, version, previous_version, charter_json, changed_fields_json,
+         revision_reason, decision_id, approved_at)
+       values (?, ?, 'u', ?, null, '{}', '[]', ?, null, ?)`,
+    );
+    insert.run('v1', 'p', 1, '开题批准', STAMP);
+    // The unique index is what turns a lost numbering race into an error instead of a second v1.
+    expect(() => insert.run('v2', 'p', 1, '重号的批准', STAMP)).toThrow(/UNIQUE constraint/i);
+    // Version numbers belong to a project, so another project may open at 1 as well.
+    expect(() => insert.run('v3', 'p2', 1, '另一个项目开题', STAMP)).not.toThrow();
+    expect(() => insert.run('v4', 'p', 0, '第 0 版', STAMP)).toThrow(/CHECK constraint/i);
+    expect(() => insert.run('v5', 'p', 2, '指向第 1 版', STAMP)).not.toThrow();
+    // 前指针要么没有，要么是一个真实存在过的版本号：0 和负数都不是版本。
+    const withPrevious = (id: string, previous: number): (() => void) =>
+      () =>
+        db
+          .prepare(
+            `insert into research_charter_versions
+              (id, project_id, user_id, version, previous_version, charter_json, changed_fields_json,
+               revision_reason, decision_id, approved_at)
+             values (?, 'p', 'u', 9, ?, '{}', '[]', '带前指针的批准', null, ?)`,
+          )
+          .run(id, previous, STAMP);
+    expect(withPrevious('v6', 0)).toThrow(/CHECK constraint/i);
+    expect(withPrevious('v7', -1)).toThrow(/CHECK constraint/i);
+    expect(withPrevious('v8', 1)).not.toThrow();
+    db.close();
+  });
+
+  it('keeps one review mark per entity, cause and baseline, whatever order it is raised in', () => {
+    const { db } = openSqlite({ file: nextFile() });
+    seedProject(db);
+    const insert = db.prepare(
+      `insert into research_review_marks
+        (id, project_id, user_id, entity_type, entity_id, reason, raised_by, charter_version, status,
+         created_at, updated_at)
+       values (?, 'p', 'u', ?, ?, 'x', ?, ?, 'pending', ?, ?)`,
+    );
+    insert.run('m1', 'claim', 'k1', 'charter_baseline', 2, STAMP, STAMP);
+    expect(() => insert.run('m2', 'claim', 'k1', 'charter_baseline', 2, STAMP, STAMP)).toThrow(/UNIQUE constraint/i);
+    // A later approval is a later warning: the same object can be marked again for version 3.
+    expect(() => insert.run('m3', 'claim', 'k1', 'charter_baseline', 3, STAMP, STAMP)).not.toThrow();
+    // A different cause on the same object is a different warning, numbered or not.
+    expect(() => insert.run('m4', 'claim', 'k1', 'source_archived', 2, STAMP, STAMP)).not.toThrow();
+    expect(() => insert.run('m5', 'claim', 'k1', 'source_archived', null, STAMP, STAMP)).not.toThrow();
+    // NULL never equals NULL in an index, so coalesce(charter_version, 0) is what deduplicates the
+    // un-numbered 来源归档 marks.
+    expect(() => insert.run('m6', 'claim', 'k1', 'source_archived', null, STAMP, STAMP)).toThrow(/UNIQUE constraint/i);
+    expect(() => insert.run('m7', 'evidence', 'e1', 'source_archived', null, STAMP, STAMP)).not.toThrow();
+    // A cleared mark still holds its key, so raiseReviewMark refreshes the row instead of inserting one.
+    db.prepare("update research_review_marks set status = 'cleared' where id = 'm1'").run();
+    expect(() => insert.run('m8', 'claim', 'k1', 'charter_baseline', 2, STAMP, STAMP)).toThrow(/UNIQUE constraint/i);
+    db.close();
+  });
+
+  it('refuses a review mark or baseline the domain does not define', () => {
+    const { db } = openSqlite({ file: nextFile() });
+    seedProject(db);
+    expect(() =>
+      db
+        .prepare(
+          `insert into research_review_marks
+            (id, project_id, user_id, entity_type, entity_id, reason, raised_by, status, created_at, updated_at)
+           values ('m', 'p', 'u', 'claim', 'k1', 'x', 'node_deleted', 'pending', ?, ?)`,
+        )
+        .run(STAMP, STAMP),
+    ).toThrow(/CHECK constraint/i);
+    expect(() =>
+      db
+        .prepare(
+          `insert into research_review_marks
+            (id, project_id, user_id, entity_type, entity_id, reason, raised_by, status, created_at, updated_at)
+           values ('m', 'p', 'u', 'chapter', 'k1', 'x', 'charter_baseline', 'pending', ?, ?)`,
+        )
+        .run(STAMP, STAMP),
+    ).toThrow(/CHECK constraint/i);
+    // 「处理完」不是「删掉」：状态只能落在领域声明的两个标签上。
+    expect(() =>
+      db
+        .prepare(
+          `insert into research_review_marks
+            (id, project_id, user_id, entity_type, entity_id, reason, raised_by, status, created_at, updated_at)
+           values ('m', 'p', 'u', 'claim', 'k1', 'x', 'charter_baseline', 'gone', ?, ?)`,
+        )
+        .run(STAMP, STAMP),
+    ).toThrow(/CHECK constraint/i);
+    db.close();
+  });
+
+  it('reads a diff name this build no longer declares as no diff, and reports a broken snapshot', async () => {
+    const file = nextFile('baseline-payload.sqlite');
+    const research = new SqliteResearchRepository({ file });
+    const project = await research.createResearchProject({ userId: 'u', name: '冷链研究' });
+    const draft = await research.upsertCharter({ userId: 'u', projectId: project.id, workingTitle: '基线标题' });
+    await research.createCharterVersion({
+      userId: 'u',
+      projectId: project.id,
+      version: 1,
+      previousVersion: null,
+      charter: draft,
+      changedFields: ['researchMethod'],
+      revisionReason: '开题批准',
+      decisionId: null,
+    });
+    await research.close();
+
+    const rewritten = new DatabaseSync(file);
+    rewritten.prepare(`update research_charter_versions set changed_fields_json = '["goneField"]'`).run();
+    rewritten.close();
+
+    const reread = new SqliteResearchRepository({ file });
+    const [survivor] = await reread.listCharterVersions(project.id, 'u');
+    // A diff list is a summary: an unknown name drops out rather than failing the read.
+    expect(survivor?.changedFields).toEqual([]);
+    expect(survivor?.charter.workingTitle).toBe('基线标题');
+
+    const broken = new DatabaseSync(file);
+    broken.prepare(`update research_charter_versions set charter_json = '{"workingTitle":'`).run();
+    broken.close();
+    // The snapshot is what the user approved, so a corrupt one is an error, not an empty charter.
+    await expect(reread.listCharterVersions(project.id, 'u')).rejects.toThrow(/损坏|corrupt/);
+    await reread.close();
+  });
+});
+
+describe('a version 3 profile upgrades in place', () => {
+  /** What a P5-B install leaves behind: research tables, approved drafts, `user_version = 3`. */
+  function seededV3(file: string): void {
+    const db = new DatabaseSync(file);
+    db.exec('pragma journal_mode = wal');
+    for (const step of SQLITE_MIGRATIONS.filter((entry) => entry.version < 4)) step.apply(db);
+    db.exec('pragma user_version = 3');
+    db.prepare(
+      `insert into research_projects (id, user_id, name, created_at, updated_at)
+       values ('p', 'u', '冷链物流服务质量研究', ?, ?)`,
+    ).run(STAMP, STAMP);
+    db.prepare(
+      `insert into research_charters (id, project_id, user_id, working_title, research_method, created_at, updated_at)
+       values ('c', 'p', 'u', '冷链服务质量因素的结构关系研究', 'ISM + ANP', ?, ?)`,
+    ).run(STAMP, STAMP);
+    db.close();
+  }
+
+  it('keeps the charter it already had and adds the baseline tables', async () => {
+    const file = nextFile('upgrade-v4.sqlite');
+    seededV3(file);
+
+    const research = new SqliteResearchRepository({ file });
+    expect(research.storageStatus().schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
+    // The draft survives the upgrade untouched, and the new tables start empty.
+    expect((await research.findCharter('p', 'u'))?.researchMethod).toBe('ISM + ANP');
+    expect(await research.listCharterVersions('p', 'u')).toEqual([]);
+    expect(await research.findCharterBaseline('p', 'u')).toBeNull();
+    expect(await research.listReviewMarks('p', 'u')).toEqual([]);
+
+    const draft = await research.findCharter('p', 'u');
+    if (draft === null) throw new Error('the upgraded draft disappeared');
+    const first = await research.createCharterVersion({
+      userId: 'u',
+      projectId: 'p',
+      version: 1,
+      previousVersion: null,
+      charter: draft,
+      changedFields: [],
+      revisionReason: '升级后批准的基线',
+      decisionId: null,
+    });
+    expect(await research.findReviewMark('no-such-mark', 'u')).toBeNull();
+    await research.raiseReviewMark({
+      userId: 'u',
+      projectId: 'p',
+      entityType: 'claim',
+      entityId: 'k1',
+      reason: '基线放宽了论断边界',
+      raisedBy: 'charter_baseline',
+      charterVersion: first.version,
+    });
+    await research.close();
+
+    // Reopening must not try to apply version 4 a second time.
+    const again = new SqliteResearchRepository({ file });
+    expect(again.storageStatus().schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
+    expect((await again.listCharterVersions('p', 'u')).map((row) => row.revisionReason)).toEqual([
+      '升级后批准的基线',
+    ]);
+    expect((await again.listReviewMarks('p', 'u')).map((mark) => mark.entityId)).toEqual(['k1']);
+    await again.close();
   });
 });
 
@@ -253,7 +484,7 @@ describe('a version 2 profile upgrades in place', () => {
     await research.close();
     await knowledge.close();
 
-    // Reopening must not try to apply version 3 a second time.
+    // Reopening must not try to apply the research DDL a second time.
     const again = new SqliteResearchRepository({ file });
     const listed = await again.listResearchProjects('u');
     expect(listed.map((row) => row.id)).toEqual([project.id]);
