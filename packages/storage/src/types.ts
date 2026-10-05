@@ -172,6 +172,16 @@ export interface KnowledgeRepository {
   readonly driver: StorageDriverName;
 
   createRawSource(input: CreateRawSourceInput): Promise<RawSource>;
+  /**
+   * The capture's idempotency pair. Returns the source a client already submitted under this key, or null
+   * when nothing was written for it — including when another user or another entry point holds that key,
+   * because the pair is scoped to one owner.
+   */
+  findRawSourceByIdempotencyKey(
+    userId: string,
+    clientId: string,
+    requestId: string,
+  ): Promise<RawSource | null>;
   updateRawSourceProcessing(
     id: string,
     userId: string,

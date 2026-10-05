@@ -127,6 +127,8 @@ function toRawSource(row: DbRow): RawSource {
     metadata: json(row.metadata_json),
     processingStatus: text(row.processing_status) as ProcessingStatus,
     errorReason: optText(row.error_reason),
+    requestId: optText(row.request_id),
+    clientId: optText(row.client_id),
     createdAt: text(row.created_at),
   };
 }
@@ -226,7 +228,8 @@ function toMessage(row: DbRow): ConversationMessage {
 }
 
 const RAW_SOURCE_FIELDS = `id, user_id, raw_text, surrounding_context, source_type, source_platform,
-  source_app, source_title, source_url, captured_at, metadata_json, processing_status, error_reason, created_at`;
+  source_app, source_title, source_url, captured_at, metadata_json, processing_status, error_reason,
+  request_id, client_id, created_at`;
 
 const ITEM_FIELDS = `id, user_id, raw_source_id, normalized_text, summary, confidence, status,
   is_ai_derived, created_at, updated_at`;
@@ -375,12 +378,15 @@ export class SqliteRepository implements KnowledgeRepository {
       metadata: cloneJson(input.metadata ?? {}),
       processingStatus: 'pending',
       errorReason: null,
+      requestId: input.requestId ?? null,
+      clientId: input.clientId ?? null,
       createdAt: nowIso(),
     };
     this.run(
       `insert into raw_sources (id, user_id, raw_text, surrounding_context, source_type, source_platform,
-         source_app, source_title, source_url, captured_at, metadata_json, processing_status, error_reason, created_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         source_app, source_title, source_url, captured_at, metadata_json, processing_status, error_reason,
+         request_id, client_id, created_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         record.id,
         record.userId,
@@ -395,6 +401,8 @@ export class SqliteRepository implements KnowledgeRepository {
         JSON.stringify(record.metadata),
         record.processingStatus,
         record.errorReason,
+        record.requestId,
+        record.clientId,
         record.createdAt,
       ],
     );
@@ -422,6 +430,20 @@ export class SqliteRepository implements KnowledgeRepository {
 
   async findRawSource(id: string, userId: string): Promise<RawSource | null> {
     const row = this.one(`select ${RAW_SOURCE_FIELDS} from raw_sources where id = ? and user_id = ?`, [id, userId]);
+    return row === null ? null : toRawSource(row);
+  }
+
+  /**
+   * The replay lookup. Empty `requestId` never matches: a capture that stated no key is not a key, and
+   * treating an absent one as a wildcard would collapse every unkeyed row of a user into a single replay.
+   */
+  async findRawSourceByIdempotencyKey(userId: string, clientId: string, requestId: string): Promise<RawSource | null> {
+    if (requestId.length === 0) return null;
+    const row = this.one(
+      `select ${RAW_SOURCE_FIELDS} from raw_sources
+        where user_id = ? and client_id = ? and request_id = ? limit 1`,
+      [userId, clientId, requestId],
+    );
     return row === null ? null : toRawSource(row);
   }
 

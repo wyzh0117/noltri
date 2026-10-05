@@ -212,6 +212,21 @@ describe('supabase/migrations', () => {
     expect(sql).toContain('on public.knowledge_nodes (user_id, lower(title))');
   });
 
+  /**
+   * P3 makes重复提交幂等 a database property, not only a pipeline one: the key is stored in columns the
+   * index can see (not inside metadata_json) and stays partial so the many rows written before P3, and any
+   * capture that states no key, are never constrained by it.
+   */
+  it('gives a capture an idempotency key the database can enforce', () => {
+    const sql = lower(CODE);
+    expect(sql).toContain('add column if not exists request_id text');
+    expect(sql).toContain('add column if not exists client_id text');
+    expect(sql).toContain('constraint raw_sources_idempotency_pair_check');
+    expect(sql).toContain('create unique index if not exists raw_sources_idempotency_uq');
+    expect(sql).toContain('on public.raw_sources (user_id, client_id, request_id)');
+    expect(sql).toContain('where request_id is not null');
+  });
+
   it('stamps rows with timestamptz rather than naive timestamps', () => {
     const sql = lower(CODE);
     expect(sql).toContain('timestamptz');

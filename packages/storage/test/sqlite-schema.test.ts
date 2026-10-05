@@ -8,7 +8,13 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isKnowledgeError } from '@noltri/shared';
-import { SQLITE_SCHEMA_VERSION, migrateSqlite, openSqlite, probeFts5 } from '../src/sqlite-schema';
+import {
+  SQLITE_MIGRATIONS,
+  SQLITE_SCHEMA_VERSION,
+  migrateSqlite,
+  openSqlite,
+  probeFts5,
+} from '../src/sqlite-schema';
 import { SqliteRepository } from '../src/sqlite';
 
 const directories: string[] = [];
@@ -308,6 +314,96 @@ describe('consistent backup', () => {
     expect(copy.verify()).toEqual({ ok: true, errors: [] });
     await copy.close();
     await repo.close();
+  });
+});
+
+describe('the capture idempotency migration', () => {
+  const STAMP = '2026-10-05T00:00:00.000Z';
+
+  /** A file written by the previous schema version, exactly as an installed app would leave it. */
+  function seededV1(file: string): void {
+    const db = new DatabaseSync(file);
+    db.exec('pragma journal_mode = wal');
+    SQLITE_MIGRATIONS[0]?.apply(db);
+    db.exec('pragma user_version = 1');
+    db
+      .prepare(
+        `insert into raw_sources (id, user_id, raw_text, source_type, captured_at, created_at, metadata_json)
+         values ('old-1', 'u', '升级前写入的原文', 'manual', ?, ?, '{}')`,
+      )
+      .run(STAMP, STAMP);
+    db.close();
+  }
+
+  function columnsOf(db: DatabaseSync, table: string): string[] {
+    return (db.prepare(`pragma table_info(${table})`).all() as Record<string, unknown>[]).map((row) =>
+      String(row.name),
+    );
+  }
+
+  it('upgrades a version 1 file in place and keeps the rows it already had', async () => {
+    const file = fileInTempDir('upgrade.sqlite');
+    seededV1(file);
+
+    const repo = new SqliteRepository({ file });
+    expect(repo.schemaInfo.schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
+    expect(SQLITE_SCHEMA_VERSION).toBeGreaterThan(1);
+    const before = await repo.findRawSource('old-1', 'u');
+    expect(before?.rawText).toBe('升级前写入的原文');
+    // Rows that predate the key stay readable with a null key rather than being backfilled with a guess.
+    expect(before?.requestId).toBeNull();
+    expect(before?.clientId).toBeNull();
+
+    const keyed = await repo.createRawSource({
+      userId: 'u',
+      rawText: '升级后写入的原文',
+      sourceType: 'manual',
+      capturedAt: STAMP,
+      requestId: 'req-after-upgrade',
+      clientId: 'extension',
+    });
+    expect(keyed.requestId).toBe('req-after-upgrade');
+    await repo.close();
+
+    const probe = openSqlite({ file });
+    expect(columnsOf(probe.db, 'raw_sources')).toEqual(expect.arrayContaining(['request_id', 'client_id']));
+    probe.db.close();
+
+    // Migrating is idempotent: reopening must not try to apply version 2 a second time.
+    const reopened = new SqliteRepository({ file });
+    expect(reopened.schemaInfo.schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
+    expect(await reopened.findRawSource(keyed.id, 'u')).toEqual(keyed);
+    await reopened.close();
+  });
+
+  it('refuses a second row for the same (user, client, request) key', () => {
+    const file = fileInTempDir('unique.sqlite');
+    const { db } = openSqlite({ file });
+    const insert = db.prepare(
+      `insert into raw_sources (id, user_id, raw_text, source_type, captured_at, created_at, request_id, client_id)
+       values (?, ?, ?, 'manual', ?, ?, ?, ?)`,
+    );
+    insert.run('a', 'u', 'first', STAMP, STAMP, 'req-1', 'extension');
+    expect(() => insert.run('b', 'u', 'replay', STAMP, STAMP, 'req-1', 'extension')).toThrow(/UNIQUE/i);
+    // Another entry point or another owner may reuse the same request id without colliding.
+    expect(() => insert.run('c', 'u', 'other client', STAMP, STAMP, 'req-1', 'desktop')).not.toThrow();
+    expect(() => insert.run('d', 'other', 'other user', STAMP, STAMP, 'req-1', 'extension')).not.toThrow();
+    expect(() => insert.run('e', 'u', 'other request', STAMP, STAMP, 'req-2', 'extension')).not.toThrow();
+    db.close();
+  });
+
+  it('leaves unkeyed rows out of the index and refuses a half-stated key', () => {
+    const file = fileInTempDir('half-key.sqlite');
+    const { db } = openSqlite({ file });
+    const insert = db.prepare(
+      `insert into raw_sources (id, user_id, raw_text, source_type, captured_at, created_at, request_id, client_id)
+       values (?, ?, ?, 'manual', ?, ?, ?, ?)`,
+    );
+    // Captures that state no key are the majority of historical rows and must never collide with each other.
+    expect(() => insert.run('a', 'u', 'no key one', STAMP, STAMP, null, null)).not.toThrow();
+    expect(() => insert.run('b', 'u', 'no key two', STAMP, STAMP, null, null)).not.toThrow();
+    expect(() => insert.run('c', 'u', 'half key', STAMP, STAMP, 'req-1', null)).toThrow(/CHECK/i);
+    db.close();
   });
 });
 

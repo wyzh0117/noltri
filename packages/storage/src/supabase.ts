@@ -88,7 +88,8 @@ function hostOf(connectionString: string): string {
 /** Column lists are written out instead of "select *" so a drifted migration is caught here. */
 const RAW_SOURCE_COLUMNS = [
   'id', 'user_id', 'raw_text', 'surrounding_context', 'source_type', 'source_platform', 'source_app',
-  'source_title', 'source_url', 'captured_at', 'metadata_json', 'processing_status', 'error_reason', 'created_at',
+  'source_title', 'source_url', 'captured_at', 'metadata_json', 'processing_status', 'error_reason',
+  'request_id', 'client_id', 'created_at',
 ] as const;
 const RAW_SOURCE_FIELDS = RAW_SOURCE_COLUMNS.join(', ');
 
@@ -289,6 +290,8 @@ function toRawSource(row: DbRow): RawSource {
     metadata: r.json('metadata_json'),
     processingStatus: r.enum('processing_status', processingStatusSchema),
     errorReason: r.stringOrNull('error_reason'),
+    requestId: r.stringOrNull('request_id'),
+    clientId: r.stringOrNull('client_id'),
     createdAt: r.iso('created_at'),
   };
 }
@@ -631,8 +634,9 @@ export class SupabaseRepository implements KnowledgeRepository {
     const row = await this.mustRow(
       `insert into public.raw_sources
          (id, user_id, raw_text, surrounding_context, source_type, source_platform, source_app,
-          source_title, source_url, captured_at, metadata_json, processing_status, error_reason, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, 'pending', null, $12)
+          source_title, source_url, captured_at, metadata_json, processing_status, error_reason,
+          request_id, client_id, created_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, 'pending', null, $12, $13, $14)
        returning ${RAW_SOURCE_FIELDS}`,
       [
         createId(),
@@ -646,6 +650,8 @@ export class SupabaseRepository implements KnowledgeRepository {
         input.sourceUrl ?? null,
         input.capturedAt,
         JSON.stringify(input.metadata ?? {}),
+        input.requestId ?? null,
+        input.clientId ?? null,
         nowIso(),
       ],
       'inserted RawSource is missing',
@@ -674,6 +680,18 @@ export class SupabaseRepository implements KnowledgeRepository {
     const row = await this.oneRow(
       `select ${RAW_SOURCE_FIELDS} from public.raw_sources where id = $1 and user_id = $2`,
       [id, userId],
+    );
+    return row === null ? null : toRawSource(row);
+  }
+
+  /** An empty request id is not a key, so it never replays — see the SQLite driver for the same rule. */
+  async findRawSourceByIdempotencyKey(userId: string, clientId: string, requestId: string): Promise<RawSource | null> {
+    if (requestId.length === 0) return null;
+    const row = await this.oneRow(
+      `select ${RAW_SOURCE_FIELDS} from public.raw_sources
+        where user_id = $1 and client_id = $2 and request_id = $3
+        limit 1`,
+      [userId, clientId, requestId],
     );
     return row === null ? null : toRawSource(row);
   }

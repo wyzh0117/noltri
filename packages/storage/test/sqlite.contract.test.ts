@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { SqliteRepository } from '../src/sqlite';
+import { SQLITE_SCHEMA_VERSION } from '../src/sqlite-schema';
 import { describeKnowledgeRepository } from './repository-contract';
 
 const directories: string[] = [];
@@ -35,7 +36,8 @@ describe('sqlite driver opens the file it was given', () => {
     expect(status.driver).toBe('sqlite');
     expect(status.journalMode).toBe('wal');
     expect(status.synchronous).toBe('full');
-    expect(status.schemaVersion).toBe(1);
+    // Read off the constant rather than re-stated: bumping the schema must not need an edit here.
+    expect(status.schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
     expect(status.fts5).toBe(true);
     expect(status.vectorInventory).toEqual([]);
     await repository.close();

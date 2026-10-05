@@ -135,6 +135,44 @@ export function describeKnowledgeRepository(
       });
     }, timeout);
 
+    it('carries the capture idempotency key and can be looked up by it', async () => {
+      await scope(async (repository, userId) => {
+        const keyed = await repository.createRawSource({
+          ...sourceInput(userId, '带幂等键的原文 keyed capture'),
+          requestId: 'req-contract-0001',
+          clientId: 'extension',
+        });
+        expect(keyed.requestId).toBe('req-contract-0001');
+        expect(keyed.clientId).toBe('extension');
+        expect(await repository.findRawSource(keyed.id, userId)).toEqual(keyed);
+
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', 'req-contract-0001')).toMatchObject({
+          id: keyed.id,
+        });
+        // Another entry point may never read this row, and another owner certainly may not.
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'desktop', 'req-contract-0001')).toBeNull();
+        expect(await repository.findRawSourceByIdempotencyKey(foreignUser(), 'extension', 'req-contract-0001')).toBeNull();
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', 'req-never-used')).toBeNull();
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', '')).toBeNull();
+
+        const other = await repository.createRawSource({
+          ...sourceInput(userId, '同文案不同请求 another keyed capture'),
+          requestId: 'req-contract-0002',
+          clientId: 'extension',
+        });
+        expect(other.id).not.toBe(keyed.id);
+
+        // A capture that states no key keeps both columns null, so the partial unique index stays out of the way.
+        const unkeyed = await repository.createRawSource(sourceInput(userId, '无幂等键的原文'));
+        expect(unkeyed.requestId).toBeNull();
+        expect(unkeyed.clientId).toBeNull();
+        await repository.createRawSource(sourceInput(userId, '第二条无键原文'));
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', 'req-contract-0001')).toMatchObject({
+          id: keyed.id,
+        });
+      });
+    }, timeout);
+
     it('lists raw sources by id in the requested order and skips foreign rows', async () => {
       await scope(async (repository, userId) => {
         const first = await repository.createRawSource(sourceInput(userId, 'first'));

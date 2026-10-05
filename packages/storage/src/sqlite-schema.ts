@@ -13,7 +13,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 /** Bumped by appending a new entry to MIGRATIONS; stored in `PRAGMA user_version`. */
-export const SQLITE_SCHEMA_VERSION = 1;
+export const SQLITE_SCHEMA_VERSION = 2;
 
 export interface SqliteOpenOptions {
   /** Absolute path to the database file, or `:memory:`. */
@@ -227,8 +227,26 @@ create virtual table if not exists keyword_index using fts5(
 );
 `;
 
+/**
+ * Version 2 gives a capture the key the local Core replays on: `(user_id, client_id, request_id)`.
+ *
+ * `ALTER TABLE ADD COLUMN` carries the CHECK because SQLite cannot add a constraint to an existing
+ * table any other way, and the pair rule has to be enforced in the file rather than only in the
+ * pipeline — a half-stated key would silently split one capture across two idempotency rows. A fresh
+ * database reaches the same shape by running version 1 and then this step, so nothing here duplicates
+ * `DDL_V1` except the index names.
+ */
+const DDL_V2 = `
+alter table raw_sources add column request_id text;
+alter table raw_sources add column client_id text
+  constraint raw_sources_idempotency_pair_check check (request_id is null or client_id is not null);
+create unique index if not exists raw_sources_idempotency_uq
+  on raw_sources (user_id, client_id, request_id) where request_id is not null;
+`;
+
 const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => void }> = [
   { version: 1, apply: (db) => db.exec(DDL_V1) },
+  { version: 2, apply: (db) => db.exec(DDL_V2) },
 ];
 
 function readString(db: DatabaseSync, sql: string): string {
@@ -311,4 +329,4 @@ export function openSqlite(options: SqliteOpenOptions): SqliteConnection {
   return { db, pragmas };
 }
 
-export { MIGRATIONS as SQLITE_MIGRATIONS, DDL_V1 as SQLITE_DDL_V1 };
+export { MIGRATIONS as SQLITE_MIGRATIONS, DDL_V1 as SQLITE_DDL_V1, DDL_V2 as SQLITE_DDL_V2 };

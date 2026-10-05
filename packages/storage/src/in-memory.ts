@@ -76,9 +76,25 @@ export class InMemoryRepository implements KnowledgeRepository {
       processingStatus: 'pending',
       errorReason: null,
       createdAt: nowIso(),
+      requestId: input.requestId ?? null,
+      clientId: input.clientId ?? null,
     };
     this.rawSources.set(record.id, record);
     return clone(record);
+  }
+
+  async findRawSourceByIdempotencyKey(userId: string, clientId: string, requestId: string): Promise<RawSource | null> {
+    if (requestId.length === 0) return null;
+    for (const record of this.rawSources.values()) {
+      if (
+        record.userId === userId &&
+        record.clientId === clientId &&
+        record.requestId === requestId
+      ) {
+        return clone(record);
+      }
+    }
+    return null;
   }
 
   async updateRawSourceProcessing(
