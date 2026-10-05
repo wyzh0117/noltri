@@ -100,7 +100,10 @@ export interface ConnectionProbeOut {
   readonly configEntryPresent: boolean;
   readonly configEntryDetail: string | null;
   readonly writeSupported: boolean;
+  readonly supportState: string;
   readonly installedApps: string[];
+  readonly appPath: string | null;
+  readonly appVersion: string | null;
   readonly networkFrom: string;
 }
 
@@ -111,10 +114,15 @@ export interface TargetFacts {
   readonly configPath: string | null;
   readonly configPathExists: boolean;
   readonly writeSupported: boolean;
-  readonly officialSettingsUrl: string;
-  readonly docsUrl: string;
+  /** `writable` | `guided` | `unverified`, straight from the registry. Never derived in the UI. */
+  readonly supportState: string;
+  readonly officialSettingsUrl: string | null;
+  readonly docsUrl: string | null;
   readonly guidance: string;
   readonly installedApps: string[];
+  readonly appPath: string | null;
+  /** The version the bundle's own Info.plist reports; null means 「版本未知」, not 「未安装」. */
+  readonly appVersion: string | null;
   readonly endpoint: string;
   readonly coreBaseUrl: string;
   readonly tokenConfigured: boolean;

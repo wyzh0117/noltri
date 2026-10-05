@@ -13,6 +13,7 @@ import type { ReactElement } from 'react';
 import { commands } from './lib/tauri';
 import type { CaptureStateOut, ConnectionProbeOut, SettingsShape, TargetFacts } from './lib/types';
 import { buildServerEntry, mergeServerEntry, parseExistingConfig, serializeDocument, summarizeMerge } from './lib/mcp-config';
+import { agentRows, canWriteConfig, hasOfficialEntry, supportLabel } from './lib/agent-matrix';
 import { runConnectionProbe, type ConnectionPhase, type ProbeResult } from './lib/connection-status';
 
 const CONNECTION_TARGETS: { key: string; hint: string }[] = [
@@ -20,6 +21,8 @@ const CONNECTION_TARGETS: { key: string; hint: string }[] = [
   { key: 'claude_code', hint: 'Claude Code 的 ~/.claude.json 可由本应用代写' },
   { key: 'cursor', hint: 'Cursor 只引导，不代写' },
   { key: 'chatgpt_codex', hint: 'Codex 使用 TOML 配置，只展示条目' },
+  { key: 'hermes', hint: 'Hermes：本轮未核实其 MCP 注册方式，只做检测与人工引导' },
+  { key: 'qoder', hint: 'Qoder：本轮未核实其 MCP 注册方式，只做检测与人工引导' },
   { key: 'other_mcp_client', hint: '任何支持 Streamable HTTP 的客户端' },
 ];
 
@@ -288,6 +291,7 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
   }
 
   const entry = facts === null ? null : buildServerEntry(facts.endpoint, token);
+  const writable = facts !== null && canWriteConfig(facts);
 
   async function writeToConfig(): Promise<void> {
     if (facts === null || entry === null || facts.configPath === null) return;
@@ -312,6 +316,7 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
     <article className="connection-card">
       <h3>
         {facts?.label ?? targetKey}
+        {facts !== null && <span className="pill-support">{supportLabel(facts.supportState)}</span>}
         {local !== null && local.installedApps.length > 0 && (
           <span className="pill-installed">检测到已安装：{local.installedApps.join('、')}</span>
         )}
@@ -326,6 +331,16 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
             ? '｜配置文件中还没有知序条目'
             : ''}
       </p>
+      {facts !== null && (
+        <dl className="agent-matrix">
+          {agentRows(facts).map((row) => (
+            <div key={row.term} className="agent-row">
+              <dt>{row.term}</dt>
+              <dd>{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
       <div className="row">
         <button type="button" onClick={() => void test()}>
           测试连接
@@ -340,19 +355,23 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
             {copied ? '已复制' : '复制 MCP 条目'}
           </button>
         )}
-        {facts?.writeSupported === true && facts.configPath !== null && (
+        {writable && facts?.configPath != null && (
           <button type="button" onClick={() => void writeToConfig()}>
             写入 {facts.configPath}
           </button>
         )}
-        {facts !== null && (
+        {facts !== null && hasOfficialEntry(facts) && (
           <>
-            <button type="button" onClick={() => void commands.openConnectionUrl(facts.target)}>
-              打开官方设置
-            </button>
-            <button type="button" onClick={() => void commands.openDocumentation(facts.target)}>
-              官方文档
-            </button>
+            {facts.officialSettingsUrl !== null && (
+              <button type="button" onClick={() => void commands.openConnectionUrl(facts.target)}>
+                打开官方设置
+              </button>
+            )}
+            {facts.docsUrl !== null && (
+              <button type="button" onClick={() => void commands.openDocumentation(facts.target)}>
+                官方文档
+              </button>
+            )}
           </>
         )}
       </div>

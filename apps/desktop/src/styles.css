@@ -118,6 +118,36 @@ input:not([type]) {
   color: #0a7d33;
 }
 
+/* 支持状态是显式三态，未验证不能长得像已连接。 */
+.pill-support {
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 12px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: #6b5310;
+}
+
+.agent-matrix {
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.agent-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 8px;
+}
+
+.agent-matrix dt {
+  color: #666;
+}
+
+.agent-matrix dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .setup-footer {
   text-align: center;
 }

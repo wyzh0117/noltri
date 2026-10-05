@@ -27,6 +27,7 @@ export const commands = {
   clearIncompatibleApp: (app: string) => invoke<unknown[]>('clear_incompatible_app', { app }),
   testConnection: (target: string) => invoke<import('./types').ConnectionProbeOut>('test_connection', { target }),
   mcpConfigFor: (target: string) => invoke<import('./types').TargetFacts>('mcp_config_for', { target }),
+  listAgents: () => invoke<import('./types').TargetFacts[]>('list_agents'),
   readConfigFile: (path: string) => invoke<string | null>('read_config_file', { path }),
   writeMcpConfig: (target: string, path: string, contents: string) =>
     invoke<string>('write_mcp_config', { target, path, contents }),
