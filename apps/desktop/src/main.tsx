@@ -24,13 +24,20 @@ import {
   summarizeMerge,
 } from './lib/mcp-config';
 import {
-  AGENT_SCOPES,
+  AGENT_PRIVACY_NOTE,
+  MAX_GRANTED_PROJECTS,
   credentialFromMint,
   currentGrant,
   describeGrant,
   grantClientFor,
   grantLabelFor,
+  grantOptionConflict,
+  nodeSelectionFor,
+  projectOptions,
+  scopesFor,
   supersededGrants,
+  toggleProject,
+  type ProjectOption,
 } from './lib/grants';
 import { agentRows, canWriteConfig, hasOfficialEntry, supportLabel } from './lib/agent-matrix';
 import {
@@ -309,6 +316,9 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
   const [ownProbe, setOwnProbe] = useState<ProbeVerdict | null>(null);
   const [agentProbe, setAgentProbe] = useState<ProbeCheck | null>(null);
   const [probeBusy, setProbeBusy] = useState(false);
+  const [captureOnly, setCaptureOnly] = useState(false);
+  const [nodeIds, setNodeIds] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[] | null>(null);
 
   async function loadFacts(): Promise<TargetFacts> {
     const resolved = await commands.mcpConfigFor(targetKey);
@@ -347,9 +357,25 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
 
   const entry = facts === null ? null : buildServerEntry(facts.endpoint, token);
   const writable = facts !== null && canWriteConfig(facts);
+  const conflict = grantOptionConflict({ captureOnly, nodeIds });
+
+  /** 限制项目 needs the real tree; loading it on mount for seven cards would be a request storm. */
+  async function loadProjects(): Promise<void> {
+    if (facts === null) return;
+    try {
+      setProjects(projectOptions((await grantClientFor(facts, token).tree()).nodes));
+    } catch (error) {
+      setProjects(null);
+      setDetail(`读取项目列表失败：${reasonOf(error)}`);
+    }
+  }
 
   async function writeToConfig(): Promise<void> {
     if (facts === null || facts.configPath === null) return;
+    if (conflict !== null) {
+      setDetail(`未写入：${conflict}`);
+      return;
+    }
     const label = grantLabelFor(facts);
 
     // Read and parse first: a file we cannot even parse should not cost a credential.
@@ -366,13 +392,16 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
     // §431: the credential in that file lives in an application this project does not control, so the
     // write mints a per-client grant with the smallest scopes instead of shipping the device key. Only
     // a deployment that never turned on 客户端授权 keeps using the old credential, and it says so.
+    const options = { captureOnly, nodeIds };
+    const selected = nodeSelectionFor(options);
     let minted: IssueGrantResponse | null = null;
     let mintError: unknown = null;
     try {
       minted = await grantClientFor(facts, token).issueGrant({
         label,
         client: facts.target,
-        scopes: [...AGENT_SCOPES],
+        scopes: scopesFor(options),
+        ...(selected === undefined ? {} : { nodeIds: selected }),
       });
     } catch (error) {
       mintError = error;
@@ -616,6 +645,41 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
           )}
           <span className="muted">「复制 MCP 条目」仍沿用设备凭据，需要可撤销的授权请走「写入配置」。</span>
         </p>
+      )}
+      {facts !== null && (
+        <div className="grant-options">
+          <p className="privacy-note">{AGENT_PRIVACY_NOTE}</p>
+          <label className="option">
+            <input type="checkbox" checked={captureOnly} onChange={(event) => setCaptureOnly(event.target.checked)} />
+            只写采集：允许这个客户端保存，但不允许读取或检索知识库
+          </label>
+          <div className="row">
+            <button type="button" onClick={() => void loadProjects()}>载入项目列表以限制范围</button>
+            {nodeIds.length > 0 && (
+              <button type="button" onClick={() => setNodeIds([])}>放开到全部项目</button>
+            )}
+          </div>
+          {projects === null ? (
+            <p className="muted">
+              未载入时不限制项目。一份授权最多带 {String(MAX_GRANTED_PROJECTS)} 个项目，超出后复选框会停住。
+            </p>
+          ) : (
+            <div className="project-list">
+              {projects.map((option) => (
+                <label key={option.id} className="option">
+                  <input
+                    type="checkbox"
+                    checked={nodeIds.includes(option.id)}
+                    disabled={!nodeIds.includes(option.id) && nodeIds.length >= MAX_GRANTED_PROJECTS}
+                    onChange={() => setNodeIds((current) => toggleProject(current, option.id))}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          )}
+          {conflict !== null && <p className="status-bad">{conflict}</p>}
+        </div>
       )}
       {facts !== null && (
         <div className="probe">

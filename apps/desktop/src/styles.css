@@ -202,6 +202,37 @@ input:not([type]) {
   font-size: 13px;
 }
 
+/* 授权选项：§435 要求授权界面自己说清边界，并把收窄的开关摆在人面前。 */
+.grant-options {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e4e6ea;
+  font-size: 13px;
+}
+
+.privacy-note {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-left: 3px solid #d8b4b4;
+  background: #fbf6f6;
+  font-size: 12px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-list {
+  max-height: 180px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #e4e6ea;
+  border-radius: 4px;
+  overflow: auto;
+}
+
 .setup-footer {
   text-align: center;
 }

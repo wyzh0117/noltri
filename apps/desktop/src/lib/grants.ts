@@ -11,6 +11,7 @@
  */
 import { ApiClient, ApiClientError, type IssueGrantResponse, type PublicGrant } from '@noltri/api-client';
 import type { GrantScope } from '@noltri/api-client';
+import type { TreeNode } from '@noltri/schema';
 import type { TargetFacts } from './types';
 
 /**
@@ -24,6 +25,65 @@ export const SCOPE_LABELS: Readonly<Record<GrantScope, string>> = {
   read: '读取',
   mutate: '修改',
 };
+
+/** §435: the authorization screen has to say this, because it is true and the user cannot infer it. */
+export const AGENT_PRIVACY_NOTE =
+  'MCP 通信在本机，并不保证 Agent 的推理也在本机。若该客户端调用云端模型，工具返回的知识可能随上下文一起离开这台电脑。' +
+  '不确定就收窄下面的授权。';
+
+/** `issueGrantRequestSchema` refuses more than this; the panel stops the user before the request does. */
+export const MAX_GRANTED_PROJECTS = 100;
+
+export interface GrantOptions {
+  readonly captureOnly: boolean;
+  readonly nodeIds: readonly string[];
+}
+
+export const DEFAULT_GRANT_OPTIONS: GrantOptions = { captureOnly: false, nodeIds: [] };
+
+/**
+ * 只写采集 lets an Agent save what it finds without reading the library back. `mutate` is never offered:
+ * §431 keeps destructive actions with a person.
+ */
+export function scopesFor(options: GrantOptions): GrantScope[] {
+  return options.captureOnly ? ['capture'] : [...AGENT_SCOPES];
+}
+
+export function nodeSelectionFor(options: GrantOptions): string[] | undefined {
+  return options.nodeIds.length === 0 ? undefined : [...options.nodeIds];
+}
+
+/**
+ * The combinations Core will refuse at request time, named before the write instead of after. A
+ * node-scoped grant cannot capture because auto-classification is what chooses the node (§431).
+ */
+export function grantOptionConflict(options: GrantOptions): string | null {
+  if (options.nodeIds.length === 0) return null;
+  if (options.captureOnly) {
+    return '「只写采集」与「限制项目」同时勾选时，这个客户端既读不到内容，也写不进被限制的项目。请只保留一项。';
+  }
+  return (
+    '限制项目的授权不能用于自动采集：归类会自行挑选项目，被限制的客户端只能读取与检索。' +
+    '要让它也能保存，请放开到全部项目，或在收件箱人工归档它采集的内容。'
+  );
+}
+
+export interface ProjectOption {
+  readonly id: string;
+  readonly label: string;
+}
+
+/** A flat, path-labelled list of every node — the 限制项目 picker, without a tree widget. */
+export function projectOptions(nodes: readonly TreeNode[], trail: readonly string[] = []): ProjectOption[] {
+  return nodes.flatMap((node) => {
+    const label = [...trail, node.title].join(' / ');
+    return [{ id: node.id, label }, ...projectOptions(node.children ?? [], [...trail, node.title])];
+  });
+}
+
+export function toggleProject(ids: readonly string[], id: string): string[] {
+  return ids.includes(id) ? ids.filter((entry) => entry !== id) : [...ids, id];
+}
 
 /** The panel and the store meet on this string: it is how a connection is recognised again next time. */
 export function grantLabelFor(facts: TargetFacts): string {

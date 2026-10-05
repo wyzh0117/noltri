@@ -5,16 +5,24 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ApiClientError, type IssueGrantResponse, type PublicGrant } from '@noltri/api-client';
+import type { TreeNode } from '@noltri/schema';
 import type { TargetFacts } from '../src/lib/types';
 import {
+  AGENT_PRIVACY_NOTE,
   AGENT_SCOPES,
+  MAX_GRANTED_PROJECTS,
   classifyMintFailure,
   credentialFromMint,
   currentGrant,
   describeGrant,
   grantClientOptions,
   grantLabelFor,
+  grantOptionConflict,
+  nodeSelectionFor,
+  projectOptions,
+  scopesFor,
   supersededGrants,
+  toggleProject,
 } from '../src/lib/grants';
 
 function facts(patch: Partial<TargetFacts> = {}): TargetFacts {
@@ -54,6 +62,21 @@ function grantOf(patch: Partial<PublicGrant> = {}): PublicGrant {
 
 function refused(status: number, message: string, details?: unknown): ApiClientError {
   return new ApiClientError(status, 'unauthorized', message, details);
+}
+
+function node(id: string, title: string, children: TreeNode[] = []): TreeNode {
+  return {
+    id,
+    title,
+    nodeType: 'concept',
+    status: 'active',
+    confidence: 0.8,
+    summary: null,
+    itemCount: children.length,
+    childCount: children.length,
+    descendantItemCount: children.length,
+    ...(children.length === 0 ? {} : { children }),
+  };
 }
 
 describe('grant identity (M02 幂等的键)', () => {
@@ -169,5 +192,50 @@ describe('credentialFromMint — 什么凭据可以离开这台机器', () => {
     if (credential.ok) throw new Error('unreachable');
     expect(credential.detail).toContain('没有写入任何配置');
     expect(credential.detail).not.toContain('device-token');
+  });
+});
+
+describe('授权选项 (§435)', () => {
+  it('offers 只写采集 without ever offering 修改', () => {
+    expect(scopesFor({ captureOnly: true, nodeIds: [] })).toEqual(['capture']);
+    expect(scopesFor({ captureOnly: false, nodeIds: [] })).toEqual(['capture', 'read']);
+    expect(scopesFor({ captureOnly: false, nodeIds: ['node-a'] }).includes('mutate')).toBe(false);
+  });
+
+  it('leaves nodeIds absent rather than sending an empty restriction', () => {
+    expect(nodeSelectionFor({ captureOnly: false, nodeIds: [] })).toBeUndefined();
+    expect(nodeSelectionFor({ captureOnly: false, nodeIds: ['node-a'] })).toEqual(['node-a']);
+  });
+
+  it('names the combination Core would refuse before any credential is minted', () => {
+    expect(grantOptionConflict({ captureOnly: false, nodeIds: [] })).toBeNull();
+    expect(grantOptionConflict({ captureOnly: true, nodeIds: [] })).toBeNull();
+    expect(grantOptionConflict({ captureOnly: false, nodeIds: ['node-a'] })).toContain('不能用于自动采集');
+    expect(grantOptionConflict({ captureOnly: true, nodeIds: ['node-a'] })).toContain('请只保留一项');
+  });
+
+  it('flattens the tree into path labels a person can actually recognise', () => {
+    const options = projectOptions([
+      node('domain-python', 'Python', [node('topic-structures', '数据结构', [node('concept-tuple', 'Tuple 元组')])]),
+      node('domain-english', '英语'),
+    ]);
+    expect(options.map((option) => option.label)).toEqual([
+      'Python',
+      'Python / 数据结构',
+      'Python / 数据结构 / Tuple 元组',
+      '英语',
+    ]);
+  });
+
+  it('toggles a project on and off without duplicating it', () => {
+    expect(toggleProject([], 'a')).toEqual(['a']);
+    expect(toggleProject(['a', 'b'], 'a')).toEqual(['b']);
+    expect(toggleProject(['a'], 'a')).toEqual([]);
+  });
+
+  it('states the boundary the user cannot infer: a local transport is not local reasoning', () => {
+    expect(AGENT_PRIVACY_NOTE).toContain('并不保证 Agent 的推理也在本机');
+    expect(MAX_GRANTED_PROJECTS).toBe(100);
+    expect([...AGENT_SCOPES]).toEqual(['capture', 'read']);
   });
 });
