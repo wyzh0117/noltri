@@ -15,6 +15,7 @@ import { TOAST_SUCCESS_HEADLINE, toastContentFromOutcome } from '../src/overlay/
 const SETTINGS = { ...DEFAULT_SETTINGS, apiBaseUrl: 'http://localhost:8787', accessToken: 'device-token' };
 
 const REQUEST: CaptureRequest = {
+  requestId: 'req-extension-test-0001',
   text: '元组是不可变序列，因此可以作为字典的键。',
   source: { type: 'web', platform: 'docs.example.com', title: 'Python Tuple', url: 'https://docs.example.com/tuple' },
   capture: { capturedAt: '2026-10-03T09:30:00.000Z', client: 'extension', deviceId: 'device-01' },
@@ -22,6 +23,9 @@ const REQUEST: CaptureRequest = {
 
 const RESULT = {
   rawSourceId: 'rs-1',
+  requestId: 'req-extension-test-0001',
+  stage: 'completed',
+  duplicate: false,
   items: [
     {
       knowledgeItemId: 'ki-1',
@@ -106,7 +110,7 @@ describe('capture through the shared ApiClient', () => {
     const outcome = await captureIntent(
       SETTINGS,
       REQUEST,
-      { fetchImpl: stubFetch(() => json({ error: { code: 'provider_error', message: 'upstream exploded' } }, 502), []) },
+      { fetchImpl: stubFetch(() => json({ error: { code: 'provider_error', message: 'upstream exploded', retryable: true } }, 502), []) },
     );
     expect(outcome.ok ? '' : outcome.message).toBe('AI 服务暂时不可用，原始内容已保存');
   });
@@ -132,6 +136,9 @@ describe('connection state for the popup', () => {
   it('reports connected with the Core identity', async () => {
     const health = {
       status: 'ok',
+      productId: 'noltri-knowledge-core',
+      instanceId: 'instance-abc',
+      protocolVersion: '1',
       version: '0.1.0',
       storageDriver: 'supabase',
       storage: { driver: 'supabase', ok: true, detail: { host: 'db.example.supabase.co', embeddingDim: 1536 } },

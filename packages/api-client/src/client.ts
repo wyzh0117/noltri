@@ -15,6 +15,7 @@ import {
   nodeContextSchema,
   nodeDetailSchema,
   rawSourceSchema,
+  RETRYABLE_ERROR_CODES,
   searchResponseSchema,
   treeResponseSchema,
   type AssignSourceRequest,
@@ -40,7 +41,7 @@ import {
   type TreeQuery,
   type TreeResponse,
 } from '@noltri/schema';
-import { nowIso } from '@noltri/shared';
+import { createId, nowIso } from '@noltri/shared';
 
 export const apiRoutes = {
   health: '/api/health',
@@ -63,14 +64,36 @@ export class ApiClientError extends Error {
   readonly status: number;
   readonly code: string;
   readonly details?: unknown;
+  /**
+   * Whether resending can help. Read from the server envelope when it states one, otherwise derived from
+   * the same shared table the server uses, so a queue and a Core never disagree about what may be resent —
+   * including for a transport failure that never reached one.
+   */
+  readonly retryable: boolean;
+  /** Correlates this failure with the line the server logged; undefined when no trace was returned. */
+  readonly traceId?: string;
 
-  constructor(status: number, code: string, message: string, details?: unknown) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    details?: unknown,
+    envelope: { retryable?: boolean; traceId?: string } = {},
+  ) {
     super(message);
     this.name = 'ApiClientError';
     this.status = status;
     this.code = code;
     this.details = details;
+    this.retryable = envelope.retryable ?? isRetryableCode(code);
+    this.traceId = envelope.traceId;
   }
+}
+
+/** Codes the shared table marks as worth resending; a code the client does not know is not retryable. */
+function isRetryableCode(code: string): boolean {
+  const retryable: ReadonlySet<string> = RETRYABLE_ERROR_CODES;
+  return retryable.has(code);
 }
 
 export interface ApiClientOptions {
@@ -93,10 +116,16 @@ export interface BuildCaptureRequestInput {
   client: CaptureRequest['capture']['client'];
   deviceId?: string;
   capturedAt?: string;
+  /**
+   * The idempotency key. A caller that has none — a button press — gets a generated one; a caller that is
+   * resending from a queue MUST pass the key it stored, or the resend becomes a second capture.
+   */
+  requestId?: string;
 }
 
 export function buildCaptureRequest(input: BuildCaptureRequestInput): CaptureRequest {
   return {
+    requestId: input.requestId ?? createId(),
     text: input.text,
     ...(input.surroundingContext ? { surroundingContext: input.surroundingContext } : {}),
     source: input.source,
@@ -251,7 +280,13 @@ export class ApiClient {
     if (!response.ok) {
       const parsed = apiErrorSchema.safeParse(payload);
       if (parsed.success) {
-        throw new ApiClientError(response.status, parsed.data.error.code, parsed.data.error.message, parsed.data.error.details);
+        throw new ApiClientError(
+          response.status,
+          parsed.data.error.code,
+          parsed.data.error.message,
+          parsed.data.error.details,
+          { retryable: parsed.data.error.retryable, traceId: parsed.data.error.traceId },
+        );
       }
       throw new ApiClientError(response.status, 'internal_error', `Request failed with status ${response.status}`, payload);
     }

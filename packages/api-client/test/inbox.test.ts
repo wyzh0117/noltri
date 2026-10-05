@@ -54,11 +54,13 @@ const RAW_SOURCE = {
   sourceApp: null,
   sourceTitle: '网页粘贴收录',
   sourceUrl: null,
-  capturedAt: '2026-03-01T08:00:00.000Z',
+  capturedAt: '2026-10-05T08:00:00.000Z',
   metadata: {},
   processingStatus: 'pending',
   errorReason: null,
-  createdAt: '2026-03-01T08:00:00.000Z',
+  requestId: 'req-inbox-test-0001',
+  clientId: 'desktop',
+  createdAt: '2026-10-05T08:00:00.000Z',
 } as const;
 
 const ITEM = {
@@ -133,6 +135,9 @@ describe('ApiClient inbox calls', () => {
       status: 200,
       payload: {
         rawSourceId: 'src-1',
+        requestId: 'req-inbox-test-0001',
+        stage: 'completed',
+        duplicate: false,
         processingStatus: 'done',
         items: [
           {
@@ -160,13 +165,18 @@ describe('ApiClient inbox calls', () => {
   });
 
   it('maps a server error envelope onto ApiClientError', async () => {
-    const { fetchImpl } = stub({ status: 404, payload: { error: { code: 'not_found', message: '原文不存在' } } });
+    const { fetchImpl } = stub({
+      status: 404,
+      payload: { error: { code: 'not_found', message: '原文不存在', retryable: false, traceId: 'trace-42' } },
+    });
     const error = await clientFor(fetchImpl)
       .rawSource('absent')
       .catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(ApiClientError);
     expect((error as ApiClientError).code).toBe('not_found');
     expect((error as ApiClientError).message).toBe('原文不存在');
+    expect((error as ApiClientError).retryable).toBe(false);
+    expect((error as ApiClientError).traceId).toBe('trace-42');
   });
 });
 

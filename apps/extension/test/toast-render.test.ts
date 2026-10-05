@@ -14,6 +14,9 @@ import { OFFLINE_MESSAGE } from '../src/api/client';
 function result(overrides: Partial<CaptureResult> = {}): CaptureResult {
   return {
     rawSourceId: 'rs-1',
+    requestId: 'req-toast-test-000001',
+    stage: 'completed',
+    duplicate: false,
     items: [
       {
         knowledgeItemId: 'ki-1',

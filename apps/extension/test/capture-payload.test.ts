@@ -25,8 +25,12 @@ describe('one capture pipeline for both entry points', () => {
     expect(captureRequestSchema.safeParse(menu).success).toBe(true);
   });
 
-  it('the two entry points produce the identical request', () => {
-    expect(menu).toEqual(pill);
+  it('the two entry points produce the identical request, each with its own key', () => {
+    // Every submission carries a fresh idempotency key, so the two paths differ by that one field only —
+    // the shared-shape assertion pins the rest, and the keys themselves must never be a constant.
+    expect({ ...menu, requestId: pill.requestId }).toEqual(pill);
+    expect(pill.requestId).not.toBe(menu.requestId);
+    expect(pill.requestId.length).toBeGreaterThanOrEqual(8);
   });
 
   it('capture.client is "extension" for both paths', () => {
@@ -36,11 +40,22 @@ describe('one capture pipeline for both entry points', () => {
 
   it('carries the contract fields the Knowledge Core pipeline expects', () => {
     expect(pill).toEqual({
+      requestId: pill.requestId,
       text: TEXT,
       surroundingContext: CONTEXT,
       source: { type: 'web', platform: 'docs.example.com', title: TITLE, url: HREF },
       capture: { capturedAt: CAPTURED_AT, client: 'extension', deviceId: META.deviceId },
     });
+  });
+
+  it('a queue hands its stored key back so a resend stays one capture', () => {
+    const first = buildExtensionCaptureRequest({ text: TEXT, source: buildSource({ href: HREF, title: TITLE }) }, META);
+    const resent = buildExtensionCaptureRequest(
+      { text: TEXT, source: buildSource({ href: HREF, title: TITLE }) },
+      { ...META, requestId: first.requestId },
+    );
+    expect(resent.requestId).toBe(first.requestId);
+    expect(captureRequestSchema.parse(resent)).toEqual(first);
   });
 
   it('omits surroundingContext instead of sending an empty string', () => {
