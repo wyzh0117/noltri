@@ -11,10 +11,13 @@ export interface ToolbarGateInput {
   readonly siteDisabled: boolean;
   readonly minimumLength: number;
   readonly autoShowEnabled?: boolean;
+  /** A page Chrome forbids (browser UI, store, PDF viewer) never gets a pill, whatever the selection is. */
+  readonly pageRestricted?: boolean;
 }
 
 export type ToolbarGateReason =
   | 'show'
+  | 'restricted_page'
   | 'empty'
   | 'whitespace_only'
   | 'below_minimum_length'
@@ -31,6 +34,9 @@ export function effectiveMinimumLength(configured: number): number {
 }
 
 export function toolbarGateReason(input: ToolbarGateInput): ToolbarGateReason {
+  // First, because on a forbidden page every other reason is noise: no pill will ever work here, and
+  // 「选中文字太短」 would send the user looking for a bug that does not exist.
+  if (input.pageRestricted === true) return 'restricted_page';
   const trimmed = input.text.trim();
   if (trimmed.length === 0) return input.text.length === 0 ? 'empty' : 'whitespace_only';
   if (trimmed.length < effectiveMinimumLength(input.minimumLength)) return 'below_minimum_length';

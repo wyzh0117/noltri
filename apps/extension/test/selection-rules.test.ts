@@ -38,6 +38,8 @@ const GATE_CASES: readonly GateCase[] = [
   { name: 'dragging suppresses the button', input: { ...BASE, isDragging: true }, expected: false, reason: 'dragging' },
   { name: 'selection inside our own shadow UI', input: { ...BASE, isInsideOwnUi: true }, expected: false, reason: 'inside_own_ui' },
   { name: 'domain disabled by the user', input: { ...BASE, siteDisabled: true }, expected: false, reason: 'site_disabled' },
+  { name: 'a page Chrome forbids never gets a pill', input: { ...BASE, pageRestricted: true }, expected: false, reason: 'restricted_page' },
+  { name: 'a restricted page reports itself before the selection length', input: { ...BASE, text: '', pageRestricted: true }, expected: false, reason: 'restricted_page' },
   { name: 'auto-show turned off in settings', input: { ...BASE, autoShowEnabled: false }, expected: false, reason: 'auto_show_disabled' },
   { name: 'gate order: dragging wins over a disabled domain', input: { ...BASE, isDragging: true, siteDisabled: true }, expected: false, reason: 'dragging' },
   { name: 'gate order: length wins over dragging', input: { ...BASE, text: '短', isDragging: true }, expected: false, reason: 'below_minimum_length' },

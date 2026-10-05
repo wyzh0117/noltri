@@ -1,6 +1,7 @@
 import { readSelectionIntent, type SelectionIntent } from '../source/extract';
 import { isInsideOwnUi, ownUiHosts } from '../overlay/shadow-host';
 import { hostnameFromHref, shouldShowToolbarButton } from './selection-rules';
+import { restrictedReasonForHref } from './restricted';
 import { computePillPosition, isRectVisible, PILL_SIZE, type PillPosition, type ViewRect, type ViewportSize } from './geometry';
 
 export interface ObserverRules {
@@ -57,6 +58,9 @@ export function createSelectionObserver(handlers: ObserverHandlers, initialRules
       siteDisabled: rules.isDomainDisabled(hostnameFromHref(location.href)),
       minimumLength: rules.minimumLength,
       autoShowEnabled: rules.autoShow,
+      // Chrome forbids content scripts on its own pages, the store and the PDF viewer; measuring a
+      // selection there is pointless, and a pill that silently never appears reads as a broken product.
+      pageRestricted: restrictedReasonForHref(location.href) !== undefined,
     });
 
     if (!allowed || !rect || !isRectVisible(rect, viewport())) {
