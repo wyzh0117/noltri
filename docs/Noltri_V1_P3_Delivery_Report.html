@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知序 Noltri · 本轮开发交付报告（P3 本地接入）</title>
+<style>
+  :root{--bg:#f6f6f4;--panel:#fff;--ink:#1c1d1f;--muted:#5f6469;--line:#dcdcd6;
+    --accent:#2f5d50;--accent-soft:#e4efe9;--warn:#8a5a11;--warn-soft:#fbf1dd;
+    --bad:#8f2f2f;--bad-soft:#fbe9e9;--ok:#1f6b45;--ok-soft:#e2f0e8;--code:#f1f1ec;}
+  html[data-theme="dark"]{--bg:#14161a;--panel:#1b1e23;--ink:#e6e8ea;--muted:#9aa1a9;--line:#2c3138;
+    --accent:#8fc0ad;--accent-soft:#1f2a26;--warn:#e0b070;--warn-soft:#2a2418;
+    --bad:#f0a0a0;--bad-soft:#2a1c1c;--ok:#8fd0ac;--ok-soft:#1a2620;--code:#22262c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 96px}
+  header.top{padding:44px 0 20px;border-bottom:1px solid var(--line)}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:31px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+  h2{font-size:22px;margin:44px 0 12px;padding-top:18px;border-top:1px solid var(--line);scroll-margin-top:64px}
+  h3{font-size:16.5px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:14.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:16px;font-size:13.5px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+  .chip{font-size:12.5px;padding:3px 11px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--line)}
+  .grid{display:grid;gap:14px}.grid.c3{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .grid.c4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .n{font-size:24px;font-weight:650;letter-spacing:-.02em}
+  .card .l{font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft);font-weight:600;font-size:13.5px}
+  tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 92%,var(--bg))}
+  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:6px;white-space:nowrap;border:1px solid var(--line)}
+  .t-ok{background:var(--ok-soft);color:var(--ok)}
+  .t-part{background:var(--warn-soft);color:var(--warn)}
+  .t-no{background:var(--bad-soft);color:var(--bad)}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:38px 14px 12px;overflow:auto;font-size:12.8px;line-height:1.62;margin:12px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  p code,li code,td code{background:var(--code);padding:1.5px 5px;border-radius:5px;font-size:13px;border:1px solid var(--line)}
+  .copy{position:absolute;top:8px;right:8px;font-size:11.5px;padding:3px 9px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .copy:hover{color:var(--ink);border-color:var(--accent)}
+  ul,ol{padding-left:22px;margin:10px 0}li{margin:5px 0}
+  nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:9px 0}
+  nav ol{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;padding-left:0;list-style:none;font-size:13px}
+  nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--accent);text-decoration:underline}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .warnbox{border-left:3px solid var(--warn);background:var(--warn-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .badbox{border-left:3px solid var(--bad);background:var(--bad-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .themer{font-size:12.5px;padding:4px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .themer:hover{color:var(--ink)}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  details{margin:10px 0}summary{cursor:pointer;font-size:14px;color:var(--accent);font-weight:600}
+  .muted{color:var(--muted)}
+  .phase{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+  .ph{font-size:12.5px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted)}
+  .ph.done{background:var(--ok-soft);color:var(--ok);border-color:var(--ok)}
+  .ph.now{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);font-weight:650}
+</style>
+</head>
+<body>
+<nav><div class="wrap bar" style="padding-bottom:0">
+  <ol>
+    <li><a href="#summary">结论</a></li>
+    <li><a href="#scope">范围与验收口径</a></li>
+    <li><a href="#commits">提交清单</a></li>
+    <li><a href="#gate">门禁与用例</a></li>
+    <li><a href="#p3a">幂等实测</a></li>
+    <li><a href="#p3b">断线实测</a></li>
+    <li><a href="#p3c">Native Host 实测</a></li>
+    <li><a href="#fixes">五个真问题</a></li>
+    <li><a href="#security">安全边界</a></li>
+    <li><a href="#gaps">未验证</a></li>
+    <li><a href="#method">环境与方法</a></li>
+    <li><a href="#next">下一步</a></li>
+  </ol>
+  <button class="themer" id="themer" type="button">切换主题</button>
+</div></nav>
+
+<div class="wrap">
+<header class="top">
+  <div class="kicker">知序 Noltri · 本地桌面版与 Research 整合</div>
+  <h1>P3 本地接入 · 本轮交付报告</h1>
+  <div class="sub">统一 CaptureRequest、浏览器 Native Host、选区浮窗的降级路径 —— 多入口同库、失败不丢原文、重复提交幂等。</div>
+  <div class="meta">
+    <span>日期 <b>2026-10-05</b></span>
+    <span>分支 <b>v1_research&amp;modify</b></span>
+    <span>提交范围 <b>0be39d0..c2194ad</b>（本报告自身的提交在范围之后）</span>
+    <span>平台 <b>macOS 26.6.2 / Darwin 25.6.0 / arm64</b></span>
+  </div>
+  <div class="phase">
+    <span class="ph done">P0 基线</span><span class="ph done">P1 纵向切片</span>
+    <span class="ph done">P2 工作台迁移</span><span class="ph now">P3 本地接入</span>
+    <span class="ph">P4 Agent Setup</span><span class="ph">P5–P6 Research</span>
+    <span class="ph">P7 云清理</span><span class="ph">P8 安装包</span>
+  </div>
+  <div class="grid c4" style="margin-top:20px">
+    <div class="card"><div class="n">24 / 24</div><div class="l">全量门禁任务（12 包 × test＋typecheck）</div></div>
+    <div class="card"><div class="n">710 / 21</div><div class="l">通过 / 跳过（跳过全部是缺 <code>NOLTRI_PG_TEST_URL</code> 的 PG 用例，不计通过）</div></div>
+    <div class="card"><div class="n">15</div><div class="l">提交 · 71 文件 · +4 861 / −131</div></div>
+    <div class="card"><div class="n">11 + 4</div><div class="l">Native Host 真实 stdio 场景数 / 会话数</div></div>
+  </div>
+  <div class="chips">
+    <span class="chip">幂等键 (userId, clientId, requestId)</span>
+    <span class="chip">阶段回报 saved→completed</span>
+    <span class="chip">断线队列 50 条 / 7 天 / 仅本机</span>
+    <span class="chip">stdout 只走协议帧</span>
+    <span class="chip">Core 身份门禁</span>
+    <span class="chip">安装先预览</span>
+  </div>
+</header>
+
+<h2 id="summary">一 结论</h2>
+<p>P3 的三条验收口径都拿到了实现与证据：<b>多入口同库</b>由统一 <code>CaptureRequest</code> 与四入口共用的 <code>ApiClient</code> 达成，并被架构门禁钉住；<b>重复提交幂等</b>由数据库层的 <code>(user_id, client_id, request_id)</code> partial unique index 与 Core 的按键回放达成，实测同键两次只落一条原文、同文本三个不同键各落一条；<b>失败不丢原文</b>由扩展的本机待发送队列达成，实测断线期间入队 2 条、恢复后按原键发出、库中仍然只有 2 条。</p>
+<p>同时要讲清楚一件事：<b>浏览器还没有真正拉起过这个 host</b>。扩展的 <code>apps/extension/src/manifest.json</code> 权限仍是 <code>contextMenus / storage / activeTab</code>，<b>不含 <code>nativeMessaging</code></b>。加这项权限等于替用户向浏览器领一次新权限，开发文档 §16 明令不得静默进行，因此本轮把它留在报告里而不是偷偷改进仓库（见 <a href="#next">下一步</a>）。Native Host 的全部验证来自「真实子进程 × 真实 Core × 独立实现的帧解析器」。</p>
+<div class="note">本轮由实机跑暴露并修掉的问题共五个，其中两个会造成真实数据损失或真实越权：<b>默认日志写 stdout 会把整条浏览器通道打烂</b>，以及<b>安装器丢参数会让一次 <code>--confirm</code> 直接写进用户真实的 Chrome 目录</b>。详见 <a href="#fixes">§八</a>。</div>
+
+<h2 id="scope">二 范围与验收口径</h2>
+<p>开发文档 §589 对 P3 的定义：</p>
+<pre><code>P3 本地接入 | 浏览器 Native Host、选区浮窗、降级路径、统一 CaptureRequest
+            | 多入口同库，失败不丢原文，重复提交幂等。</code></pre>
+<table>
+  <thead><tr><th>验收编号</th><th>口径</th><th>本轮结论</th><th>证据</th></tr></thead>
+  <tbody>
+    <tr><td><b>D05</b></td><td>同 requestId 只有一条落盘结果；不同来源的重复内容保留各自来源</td><td><span class="tag t-ok">实测通过</span></td><td>P3-A 键矩阵（§五）＋ P3-C 同键重放；<code>idempotency.test.ts</code> 12 项</td></tr>
+    <tr><td><b>C04</b></td><td>App 未运行时队列状态与最终 ack 不混淆</td><td><span class="tag t-ok">Node 侧实测通过</span></td><td>P3-B 断线→恢复→再排空（§六）；toast 文案 17 项</td></tr>
+    <tr><td><b>C01 / C02</b></td><td>普通网页与聊天网页选区，落盘后才显示成功</td><td><span class="tag t-part">逻辑就绪，未实机</span></td><td>扩展 134 项测试＋构建通过；真实 Chrome 未加载（§十）</td></tr>
+    <tr><td><b>C03</b></td><td>受限页面／iframe／PDF 不无声失败，给限制说明与手动路径</td><td><span class="tag t-part">6 类原因有实现与测试，未实机</span></td><td><code>restricted.test.ts</code> 26 项</td></tr>
+    <tr><td><b>S03</b></td><td>内容中的恶意指令不触发 shell／未授权读取／自动外发</td><td><span class="tag t-ok">实测通过（通道层）</span></td><td>host 四动词判别联合；<code>export_all</code> 被拒且载荷不回显、库中未写入</td></tr>
+    <tr><td><b>S04</b></td><td>日志／Git／导出无凭据泄漏，诊断已脱敏</td><td><span class="tag t-ok">实测通过</span></td><td>提交范围密钥扫描 0 命中；启动日志只记 <code>hasToken</code>；<code>readableCoreMessage()</code> 脱敏</td></tr>
+    <tr><td><b>X02</b></td><td>全量测试实际运行，skip 有原因、不计通过</td><td><span class="tag t-ok">通过</span></td><td>710 通过 / 21 跳过，跳过全部集中于 PG 集成用例</td></tr>
+  </tbody>
+</table>
+<p class="sub">尚未开始的相关项：<code>L01／L02／L04／L05／L07</code>（安装版形态）、<code>D02</code>（备份恢复到新 profile）、<code>M01–M06</code>（P4）、<code>R01–R08</code>（P5–P6）、<code>X01</code>（P7）。</p>
+
+<h2 id="commits">三 提交清单（按提交范围统计，不由工作区反推）</h2>
+<p>13 个代码提交分三片，另加架构门禁补强 1 个、文档回写 1 个。<code>git log --numstat</code> 逐提交实测：</p>
+<table>
+  <thead><tr><th>提交</th><th>说明</th><th>文件</th><th>增</th><th>删</th></tr></thead>
+  <tbody>
+    <tr><td><code>fb02bcb</code></td><td>feat(schema): give a capture a key, a stage and a retryable answer</td><td>5</td><td>+85</td><td>−3</td></tr>
+    <tr><td><code>3eb499f</code></td><td>feat(storage): keep the capture key in every driver</td><td>10</td><td>+277</td><td>−10</td></tr>
+    <tr><td><code>1e94799</code></td><td>feat(core): replay a capture by its key and answer with the stage it reached</td><td>8</td><td>+499</td><td>−42</td></tr>
+    <tr><td><code>9471431</code></td><td>feat(api-client): mint the capture key once, for every entry point</td><td>7</td><td>+229</td><td>−9</td></tr>
+    <tr><td><code>cec8967</code></td><td>test: teach every fake Core the key, the stage and the full error envelope</td><td>4</td><td>+55</td><td>−8</td></tr>
+    <tr><td><code>7155fea</code></td><td>feat(extension): name the page that cannot take a pill</td><td>5</td><td>+151</td><td>−0</td></tr>
+    <tr><td><code>c542e58</code></td><td>feat(extension): keep a capture the Core could not answer in a local queue</td><td>4</td><td>+623</td><td>−0</td></tr>
+    <tr><td><code>719ad71</code></td><td>feat(extension): separate a refusal from an outage and report the stage</td><td>7</td><td>+241</td><td>−30</td></tr>
+    <tr><td><code>9f2ec7b</code></td><td>feat(extension): drain the queue on reconnect and put it in the popup</td><td>2</td><td>+183</td><td>−18</td></tr>
+    <tr><td><code>c3e786f</code></td><td>feat(native-host): open a browser channel that can only ever ask for captures</td><td>8</td><td>+547</td><td>−0</td></tr>
+    <tr><td><code>1e14188</code></td><td>feat(native-host): refuse the port until it proves it is the Core</td><td>4</td><td>+699</td><td>−0</td></tr>
+    <tr><td><code>e19c9c4</code></td><td>feat(native-host): treat stdout as the protocol and every log as stderr</td><td>2</td><td>+409</td><td>−0</td></tr>
+    <tr><td><code>0c2ea21</code></td><td>feat(native-host): register the host only after showing the user the file</td><td>4</td><td>+679</td><td>−0</td></tr>
+    <tr><td><code>b0a6304</code></td><td>test(gate): hold the browser host to the same seam as the other entry points</td><td>1</td><td>+24</td><td>−0</td></tr>
+    <tr><td><code>c2194ad</code></td><td>docs(P3): write the local access work back, including what still has no browser</td><td>3</td><td>+160</td><td>−11</td></tr>
+  </tbody>
+  <tfoot><tr><th colspan="2">合计</th><th>71</th><th>+4 861</th><th>−131</th></tr></tfoot>
+</table>
+<p class="sub">本 HTML 报告自身的提交落在 <code>c2194ad</code> 之后，因此上表与「15 个提交」这个数字不包含它——报告里写的提交数不能把报告自己算进去，否则下一个复核者永远对不上。</p>
+<div class="note">全部提交只在本地。<b>未执行 <code>git push</code></b>；未删除任何分支、tag 或远端引用；未触碰工作区里用户自己的 <code>.workspace/</code>、<code>project.json</code>、<code>project.bak</code>（提交一律使用逐路径 <code>git add</code>，本轮 5 次提交前都跑过 <code>git status --short</code> 核对）。</div>
+
+<h2 id="gate">四 门禁与用例分布（实测）</h2>
+<pre><code>$ npx turbo run test typecheck --force --concurrency=2 --continue
+Tasks:    24 successful, 24 total
+Cached:   0 cached, 24 total
+  Time:   10.97s            # 日志 /tmp/p3d-gate.log
+
+$ pnpm gate                 # = vitest run test/architecture-gate.test.ts
+      Tests  10 passed (10)  # P3 新增 2 条浏览器 host 的结构断言</code></pre>
+<p><code>--force</code> 不是习惯而是必要：缓存曾掩盖过一次契约变更引起的测试回归（P1 记录在案）。工作区包由 11 个增至 <b>12</b> 个（新增 <code>services/native-host</code>），因此任务是 24 个而不是 22 个。</p>
+<h3>逐包分布（<code>npx turbo run test --filter=@noltri/&lt;pkg&gt; --force</code>）</h3>
+<table>
+  <thead><tr><th>包</th><th>测试文件</th><th>通过</th><th>跳过</th><th>P2 时</th><th>P3 的净变化</th></tr></thead>
+  <tbody>
+    <tr><td><code>services/native-host</code></td><td>7</td><td>135</td><td>0</td><td>—</td><td>本轮新建</td></tr>
+    <tr><td><code>apps/extension</code></td><td>9</td><td>134</td><td>0</td><td>6 文件 / 69</td><td>+3 文件 / +65</td></tr>
+    <tr><td><code>services/knowledge-core</code></td><td>10</td><td>99</td><td>0</td><td>9 文件 / 83</td><td>+16（幂等 12 ＋门禁 2 ＋ HTTP 2）</td></tr>
+    <tr><td><code>packages/storage</code></td><td>5</td><td>75</td><td>21</td><td>69 / 20</td><td>+6 通过 / +1 跳过</td></tr>
+    <tr><td><code>packages/api-client</code></td><td>2</td><td>17</td><td>0</td><td>1 文件 / 10</td><td>+1 文件 / +7</td></tr>
+    <tr><td><code>packages/shared</code></td><td>3</td><td>60</td><td>0</td><td>60</td><td>可重试码表扩充</td></tr>
+    <tr><td><code>apps/desktop</code></td><td>7</td><td>79</td><td>0</td><td>79</td><td>桩数据跟随契约</td></tr>
+    <tr><td><code>packages/ai-provider</code></td><td>2</td><td>48</td><td>0</td><td>48</td><td>—</td></tr>
+    <tr><td><code>services/mcp-server</code></td><td>2</td><td>20</td><td>0</td><td>20</td><td>—</td></tr>
+    <tr><td><code>services/ai</code></td><td>1</td><td>15</td><td>0</td><td>15</td><td>—</td></tr>
+    <tr><td><code>apps/web</code>（<code>node:test</code>）</td><td>1</td><td>28</td><td>0</td><td>28</td><td>—</td></tr>
+    <tr><td><code>packages/schema</code></td><td>0</td><td>0</td><td>0</td><td>0</td><td>契约由消费方锁定</td></tr>
+    <tr><th>合计</th><th>49</th><th>710</th><th>21</th><th>37 / 481 / 20</th><th>+229 通过</th></tr>
+  </tbody>
+</table>
+<p class="sub">native-host 7 个文件的分布：protocol 33、host 23、manifest 20、discovery 17、install-cli 17、framing 14、main 11。Rust 侧本轮<b>未重新执行</b> <code>cargo test</code>；P2 记录的 8 项通过不是本轮成绩。</p>
+
+<h2 id="p3a">五 P3-A：重复提交幂等（真实 Core + SQLite）</h2>
+<p>§7.1／§7.2 要求的是两件不同的事：同一条提交不能写两次，以及<b>内容相同但来源不同不能被静默丢掉来源</b>。落库形态是 <code>raw_sources.request_id</code> ＋ <code>client_id</code>，配 partial unique index（SQLite <code>user_version=2</code>，Postgres 迁移 <code>20261005000100_capture_idempotency.sql</code>，向前-only，历史行的 null 键不入索引，因此升级不会因为旧数据失败）。</p>
+<p>文档回写前重跑了键矩阵（一次性脚本 <code>/tmp/p3d-evidence2.mjs</code>，Core 在 8795，库 <code>/tmp/noltri-p3d-evidence2.sqlite</code>）：</p>
+<pre><code>same-key first                    -&gt; 200 dup=false stage=needs_review src=10c338bf…
+same-key replay                   -&gt; 200 dup=true  stage=needs_review src=10c338bf…
+diff key, same text               -&gt; 200 dup=false src=9829aadd…
+same text, other client/device    -&gt; 200 dup=false src=e4d7ab4d…
+
+$ node --experimental-sqlite /tmp/p3d-count.cjs
+columns: … processing_status error_reason created_at request_id client_id
+rows: { n: 3 }
+request_id: req-p3a-evidence-0001 / -0002 / -0003</code></pre>
+<p>四条请求、三行原文：重放那一条没有落库，三种键各保留自己的来源行。另外三处契约形状也实测过：</p>
+<pre><code>GET  /api/health          -&gt; productId=noltri-knowledge-core instanceId=85c3b815… protocolVersion=1
+                             storage.schemaVersion=2  (同一进程内 instanceId 稳定)
+POST /api/capture 无 requestId -&gt; 400 invalid_request  retryable=false  traceId=77d3d91e…
+GET  /api/inbox/:id 不存在     -&gt; 404 not_found        retryable=false  traceId=046c8f86…
+POST /api/capture/:id/retry    -&gt; 200 stage=completed duplicate=false</code></pre>
+<div class="warnbox">诚实记录：P3-A 首轮探针里有一行 <code>ASSERT exactly 2 sources after 3 accepted submissions: false</code>。<b>这是探针写错了，不是端点错了</b>——响应体没有 <code>sources</code> 键（是 <code>entries</code>／<code>counts</code>），探针读了一个不存在的字段所以恒为 0。P3-B／P3-C 的复核一律读 <code>entries</code>，计数与场景数一致。这一行留在 <code>/tmp/p3a-evidence.log</code> 里没有抹掉，因为「探针也会说谎」本身就是需要传递的事实。</div>
+
+<h2 id="p3b">六 P3-B：失败不丢原文（断线 → 恢复 → 再排空）</h2>
+<p>脚本 <code>/tmp/p3b-outbox-live.mts</code> 驱动的是扩展的真实模块（<code>outbox/</code>、<code>api/client.ts</code>、<code>overlay/toast-content.ts</code>），不是重新实现；流程是「杀掉 Core → 采集 → 恢复 Core → 排空 → 再排空一次」。</p>
+<pre><code>- capture #1 while Core is down -&gt; ok=false retryable=true coreUnreachable=true
+- queue says -&gt; queued=true message=等待 Noltri：内容已保留，连上后自动发送
+- queue now holds 2 entries: req-p3b-live-0001, req-p3b-live-0002
+- drain after the Core came back -&gt; sent=2 alreadyStored=0 kept=0 stoppedEarly=false
+- ASSERT resends used the queued keys verbatim: true
+- GET /api/inbox -&gt; entries=2 counts={"pending":0,"processing":0,"done":2,"failed":0}
+- a queue that re-sends an already stored capture -&gt; sent=0 alreadyStored=1 kept=0
+- ASSERT still exactly two sources after the resend: true
+- online capture #3 -&gt; stage=needs_review duplicate=false queued=false
+  toast headline: 已存入 Noltri，需要你复核
+- a refusal (too short) -&gt; ok=false retryable=false shouldQueue=false
+- ASSERT the queue stayed empty afterwards: true
+- final inbox entries=3</code></pre>
+<p>四条设计意图在这段实测里各自落位：<b>断线</b>与<b>拒绝</b>是两种答案（后者绝不进队列，重发一百次也不会成功）；<b>重发使用原 requestId</b>，所以服务端仍按幂等键处理，第二次排空只会得到 <code>alreadyStored</code> 而不是第二条原文；<b>ack 之前不承诺成功</b>，浮层只在真实回执后写「已存入 Noltri」。</p>
+<table>
+  <thead><tr><th>约束（§10）</th><th>实现位置</th><th>实测／测试</th></tr></thead>
+  <tbody>
+    <tr><td>队列只在本地，不复制到云</td><td><code>chrome.storage.local</code>，明确不用 <code>storage.sync</code></td><td><code>outbox.test.ts</code> 12 项</td></tr>
+    <tr><td>容量上限与过期</td><td><code>OUTBOX_CAPACITY = 50</code>／<code>OUTBOX_TTL_MS = 7 天</code></td><td>超限返回 <code>rejected:'full'</code>；过期条数在读取时报 <code>dropped</code></td></tr>
+    <tr><td>一键清空</td><td>popup「清空队列」按钮</td><td>消息通路 <code>MESSAGE_*</code> ＋ background 处理</td></tr>
+    <tr><td>无痕禁用</td><td><code>outboxOf()</code> 在 incognito 返回 <code>disabledOutbox()</code></td><td>理由写在注释：<code>storage.local</code> 会活过会话，做不到「仅保存在本机队列」就不承诺</td></tr>
+    <tr><td>受限页面不无声失败</td><td><code>restricted.ts</code> 6 类原因 ＋ 用户自己操作的粘贴通路</td><td>26 项；扩展从不代写剪贴板</td></tr>
+    <tr><td>自有浮窗，不注入 Agent 菜单</td><td>overlay 由扩展自己绘制</td><td><code>toast-render.test.ts</code> 17 项</td></tr>
+  </tbody>
+</table>
+
+<h2 id="p3c">七 P3-C：Native Host 的真实 stdio 实测</h2>
+<p>驱动方式：<code>/tmp/p3c-native-host-live.mts</code> 起真实 Core（<code>STORAGE_DRIVER=sqlite AI_PROVIDER=offline PORT=8791</code>）与真实 host 子进程（<code>npx tsx services/native-host/src/main.ts</code>，<code>HOME</code> 指向空目录），中间用<b>独立实现</b>的帧解析器（不是被测代码）一问一答，并核对 stdout 是否只剩干净的帧。</p>
+<h3>四个会话、十一个场景</h3>
+<table>
+  <thead><tr><th>会话</th><th>场景</th><th>实测回复</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="8">1 · 真实 Core</td><td><code>hello</code></td><td><code>hostProtocol=1</code>，<code>core={noltri-knowledge-core, ffb91f31…, 1, 0.1.0}</code></td></tr>
+    <tr><td><code>health</code></td><td><code>driver=sqlite journalMode=wal synchronous=full schemaVersion=2 fts5=true</code></td></tr>
+    <tr><td><code>capture</code>（键 <code>req-native-live-idem-0001</code>）</td><td><code>stage=needs_review duplicate=false processingStatus=done</code></td></tr>
+    <tr><td>同键重放</td><td><b>同一</b> <code>rawSourceId=65b5dbae…</code>，<code>duplicate=true</code>，<code>items=[]</code></td></tr>
+    <tr><td><code>export_all</code>（越权）</td><td><code>forbidden_scope</code>「Native Host 只接受采集与健康检查，不执行 export_all请求」<code>retryable=false</code></td></tr>
+    <tr><td><code>capture_batch</code> 2 条</td><td>两条各得 <code>rawSourceId</code>，第二条挂进第一条的节点子树</td></tr>
+    <tr><td><code>capture_batch</code> 9 条（超上限）</td><td><code>invalid_request</code>「正文至少 8 个字，requestId 至少 8 位，一条消息最多 4 条采集」</td></tr>
+    <tr><td>泄漏探针（正常采集）</td><td>成功落库，随后审计：被拒帧里是否出现过用户原文 → <b>false</b></td></tr>
+    <tr><td>2 · 诱捕服务 8793</td><td><code>capture</code></td><td><code>core_identity_mismatch</code>「这个端口上运行的不是知序 Noltri Core，内容没有发送」<code>retryable=false</code>；该服务 <b><code>POST /api/capture</code> 计数 0</b></td></tr>
+    <tr><td>3 · 只回 <code>{"ok":true}</code> 的 8794</td><td><code>capture</code></td><td><code>capture_failed</code>「本地 Core 的返回不符合契约，这条采集未确认」<code>retryable=true</code>；<b><code>POST /api/capture</code> 计数 0</b></td></tr>
+    <tr><td>4 · 8899 无人监听</td><td><code>capture</code></td><td><code>core_unreachable</code>「未找到本地 Noltri Core，请确认知序 App 正在运行」<code>retryable=true</code></td></tr>
+  </tbody>
+</table>
+<h3>协议通道完整性与落库对账</h3>
+<pre><code>session 1 framing: stdout bytes=3449 frames=8 unparsed tail=0 violations=[]
+Core inbox counts {"pending":0,"processing":0,"done":4,"failed":0} · entries stored: 4
+same-requestId rows in the store: 1 (expected 1)
+forbidden payload ever stored? false
+leak audit: refused frames echoed user text? false
+
+[host stderr] host started {"source":"env","baseUrl":"http://127.0.0.1:8793","hasToken":false}
+[host stderr] core identity refused {"code":"core_identity_mismatch"}</code></pre>
+<p>8 条请求对应 8 帧回复、stdout 上没有半个字节的非帧内容。会话 2／3 的两个诱捕服务都是真起了 HTTP 进程、自己统计 <code>POST /api/capture</code> 次数的——「内容没有发送」不是 host 的一面之词，是对方端口的计数。<b>§7.6 的「端口上有 JSON 或 <code>ok</code> 不足以判定是本项目服务」正是靠会话 3 打的</b>：一个只回 <code>{"ok":true}</code> 的端口骗不过身份核验，host 也不会因此把采集算成已落盘。</p>
+<h3>README 里那条手动命令也实测过</h3>
+<pre><code>$ printf '\x11\x00\x00\x00{"type":"health"}' | NOLTRI_API_BASE_URL=http://127.0.0.1:8796 \
+    npx tsx services/native-host/src/main.ts
+{"ok":true,"kind":"health","core":{"productId":"noltri-knowledge-core","protocolVersion":"1",…},
+ "storage":{"driver":"sqlite","ok":true,"detail":{"fileName":"noltri-p3d-readme.sqlite",
+   "journalMode":"wal","synchronous":"full","schemaVersion":2,"sqliteVersion":"3.51.3","fts5":true,…}}}
+[stderr] [native-host] INFO: host started {"source":"env","baseUrl":"http://127.0.0.1:8796","hasToken":false}</code></pre>
+<p class="sub">存储自检只报<b>文件名</b>不报绝对路径，这条在实测输出里能直接看到。用完的临时 Core 按端口 PID 精确 <code>kill</code>（<code>lsof -nP -tiTCP:8796 -sTCP:LISTEN</code>），没有使用宽匹配 <code>pkill</code>，没有触碰用户自己的进程。</p>
+
+<h2 id="fixes">八 实机跑暴露并修掉的五个真问题</h2>
+<table>
+  <thead><tr><th>#</th><th>暴露方式</th><th>根因</th><th>修复</th><th>现在由什么钉住</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>帧解析的旧返回形状在真实一问一答下顺序错乱</td><td><code>FrameParser.push()</code> 返回 <code>{frames, error}</code>，而 Chrome 是<b>按位置</b>把回复对上请求的：坏帧之后的好帧会被先答、更后面的好帧被整批丢掉</td><td>改成有序事件流 <code>ParseEvent = frame｜error</code>；坏 JSON 仍宣告下一帧起点，只有长度撒谎（无法再同步）才清空缓冲</td><td><code>framing.test.ts</code> 14 项 ＋ 实机 <code>frames=8 unparsed tail=0</code></td></tr>
+    <tr><td>2</td><td>第一次实机跑 10 条采集全部超时，但 Core 那边<b>真的收到了</b></td><td>共享包 <code>@noltri/shared</code> 的默认 logger 用 <code>console.info</code>，即写 <b>stdout</b>；一行日志被当成 4 字节长度前缀，之后每帧都错位</td><td>host 专用 <code>createStderrLogger()</code>，日志一律 stderr；启动日志记 <code>hasToken</code> 布尔而不记凭据</td><td><code>main.test.ts</code> 两项「stdout 只允许出现帧」的纯净性测试</td></tr>
+    <tr><td>3</td><td>复核安装器代码时发现<b>会写到用户真实浏览器目录</b></td><td><code>parseArgs</code> 只认 <code>--flag=value</code>，<code>--home &lt;目录&gt;</code> 这种空格形式的值被静默丢弃；于是 <code>--confirm</code> 的目标会退回真实 HOME 下的 Chrome <code>NativeMessagingHosts</code></td><td>两种形式都支持；<code>--confirm</code> 之外才消费下一个 token；<code>browser</code> 值做白名单；测试里 <code>beforeEach</code> 把 <code>process.env.HOME</code> 指到临时目录作第二道护栏</td><td><code>install-cli.test.ts</code> 17 项；并实测确认用户目录未被动过（见 §九）</td></tr>
+    <tr><td>4</td><td>实机场景「批次超上限」</td><td>拒绝文案说成「不执行 <code>capture_batch</code> 请求」——把用户合法使用的动词说成越权，读者分不清自己哪里做错了</td><td>新增 <code>invalid_request</code> 这一类：拒绝必须指出到底哪里不合格（正文长度／键长度／条数上限）；越权与不合格是两种答案（§7.5）</td><td><code>protocol.test.ts</code> 33 项</td></tr>
+    <tr><td>5</td><td>实机场景「端口只回 <code>{"ok":true}</code>」</td><td>内部契约错误原文（<code>…did not match the shared contract for GET /api/health</code>）被 host 直接转给页面</td><td><code>internal_error</code> 映射为「本地 Core 的返回不符合契约，这条采集未确认」<code>retryable=true</code>；<code>readableCoreMessage()</code> 对堆栈／SQL／路径形态一律换成稳定中文，转发上限 160 字符</td><td><code>host.test.ts</code> 23 项（含脱敏用例逐条断言输出不含 <code>at ｜Error｜select｜Users｜sql</code>）</td></tr>
+  </tbody>
+</table>
+
+<h2 id="security">九 §16 安全边界自查</h2>
+<table>
+  <thead><tr><th>约束</th><th>本轮的落点</th><th>证据</th></tr></thead>
+  <tbody>
+    <tr><td>不给浏览器静默装权限</td><td><code>nativeMessaging</code> 权限<b>没有</b>加进扩展 manifest；安装器必须先预览、<code>--confirm</code> 才写；Windows 注册表拒绝代改</td><td><code>git diff 0be39d0..HEAD -- apps/extension/src/manifest.json</code> 为空；<code>install-cli.test.ts</code> 断言无 <code>--confirm</code> 时零写入</td></tr>
+    <tr><td>Native Host 只接受已注册扩展，权限默认限于采集</td><td><code>allowed_origins</code> 只收 <code>^[a-p]{32}$</code>，空列表即拒绝生成（不写通配）；协议层只有四动词判别联合</td><td><code>manifest.test.ts</code> 20 项；实机 <code>export_all → forbidden_scope</code></td></tr>
+    <tr><td>日志／错误／安装预览／导出／Git 提交脱敏</td><td>预览不含凭据；启动日志只记 <code>hasToken</code>；Core 内部错误换稳定中文；被拒帧不回显载荷</td><td>密钥形态扫描 0 命中（<code>sk-…／service_role／eyJhbGci／-----BEGIN</code>）；实机 <code>leak audit … false</code></td></tr>
+    <tr><td>不能因为来自 localhost 就完全信任</td><td>身份门禁在<b>每一次</b>转发前重跑，且区分「不是知序」「契约不符」「连不上」三种答案</td><td>会话 2／3／4，两个诱捕服务 <code>POST</code> 计数为 0</td></tr>
+    <tr><td>不持续监控、不整片采集剪贴板、不静默改剪贴板</td><td>host 只在收到消息时动作；受限页面的替代路径是「你自己复制」，扩展不碰剪贴板</td><td><code>restricted.ts</code> 文案与 26 项测试</td></tr>
+    <tr><td>页面里的文字不是工具指令</td><td>网页／文献／模型输出里的「执行命令」「导出全库」到 host 只会得到 <code>forbidden_scope</code>；能力边界在 schema 层，不存在能接受其它动词的代码路径</td><td>实机场景 5 ＋ <code>protocol.test.ts</code></td></tr>
+    <tr><td>内网 HTTP 只绑回环</td><td>沿用 P1 结论：<code>server.listen(port, '127.0.0.1', …)</code>，本轮未放宽</td><td><code>services/knowledge-core/src/server.ts:128</code></td></tr>
+  </tbody>
+</table>
+<p class="sub">对用户真实浏览器目录做过写前／写后核对：<code>find ~/Library/Application\ Support -name 'com.noltri*'</code> 结果为空；Chrome／Edge 的 <code>NativeMessagingHosts</code> 里只有用户自己早先装入的条目，时间戳早于本轮。所有写入测试都在 <code>--home &lt;临时目录&gt;</code> 下完成。</p>
+<div class="badbox">一条需要如实说明的残留：仓库里<b>仍包含本机主目录路径</b>（<code>/Users/youngi/…</code>）——出现在用户的开发基准文档、P1／P2 报告的命令证据、以及一处测试夹具里。这些不是凭据，但属于可识别的本机信息。若要对外开源，这一步得单独清理；本轮没有擅自改动用户自己撰写的文档内容。</div>
+
+<h2 id="gaps">十 未验证与明确没做的事</h2>
+<ul>
+  <li><b>浏览器从未真正拉起过这个 host。</b>扩展未申请 <code>nativeMessaging</code>，因此「Chrome 按 manifest 启动 host」这条路径完全未验证；本轮全部 host 结论来自 stdio 子进程 × 真实 Core。</li>
+  <li>真实 Chrome 加载扩展后的选区浮窗、右键菜单、受限页面提示、快捷键与粘贴降级都<b>未实机走通</b>。ego-browser 无法加载未打包权限的 MV3 扩展，所以本轮拿不出扩展的 GUI 截图——<b>本轮报告没有截图，这就是原因</b>，不是遗漏。</li>
+  <li>待发送队列的无痕禁用只有代码判定与测试，未在真实无痕窗口实测。</li>
+  <li>host manifest 对用户真实浏览器目录<b>未写入过</b>；Windows 只提供说明、不提供注册表写入，手动 <code>.reg</code> 样本与步骤文档还没写。</li>
+  <li><code>apps/web</code>、Supabase 驱动、<code>supabase/migrations/</code> 全部保留（P7 才动）。<code>get_selection_preview</code>／<code>runtime_info</code> 两个 Rust 命令仍注册但前端无调用点，本轮未擅自接线也未摘除。</li>
+  <li>Postgres 侧 21 项集成用例仍跳过（缺 <code>NOLTRI_PG_TEST_URL</code>），不计通过；真实 Supabase 项目未接入，也<b>不会</b>用本轮脚本改动用户的项目。</li>
+  <li>未 <code>git push</code>；未 <code>tauri build</code>；未做任何签名／notarization。</li>
+</ul>
+
+<h2 id="method">十一 环境、命令与临时产物</h2>
+<table>
+  <thead><tr><th>项</th><th>实测值</th></tr></thead>
+  <tbody>
+    <tr><td>系统</td><td>macOS 26.6.2（Darwin 25.6.0）· arm64</td></tr>
+    <tr><td>Node</td><td>shell <code>node -v</code> = v22.23.2（所有实测由此执行）；代理运行时另报 v24.18.0</td></tr>
+    <tr><td>工具链</td><td>pnpm 11.21.0 · turbo 2.11.6 · TypeScript 5.9.3（strict） · vitest 5.0.3</td></tr>
+    <tr><td>存储</td><td><code>node:sqlite</code> SQLite 3.51.3（实验性 API，Core stderr 会出现 <code>ExperimentalWarning</code>）· WAL · <code>synchronous=FULL</code> · FTS5 可用</td></tr>
+    <tr><td>AI</td><td><code>AI_PROVIDER=offline</code>（确定性回环提供方）；<b>本轮未发起任何真实模型调用</b></td></tr>
+    <tr><td>被测入口</td><td>Core <code>:8791/8795/8796</code>；host 子进程 <code>npx tsx services/native-host/src/main.ts</code>；诱捕服务 <code>:8793/8794</code>；空闲端口 <code>:8899</code>（制造连不上的场景）</td></tr>
+  </tbody>
+</table>
+<h3>复核用的完整命令</h3>
+<pre><code>cd '/Users/youngi/Documents/MiniWork/知序-Noltri'
+
+# 1) 全量门禁（24 个任务）
+npx turbo run test typecheck --force --concurrency=2 --continue
+pnpm gate                                   # 架构门禁 10 项
+
+# 2) 逐包用例数
+npx turbo run test --filter=@noltri/native-host --force
+
+# 3) 扩展构建（manifest 校验）
+pnpm --filter @noltri/extension run build   # manifest validation passed
+
+# 4) Native Host 手动一问一答（先起 Core）
+STORAGE_DRIVER=sqlite NOLTRI_SQLITE_FILE=/tmp/x.sqlite AI_PROVIDER=offline PORT=8796 \
+  npx tsx services/knowledge-core/src/server.ts &amp;
+printf '\x11\x00\x00\x00{"type":"health"}' | NOLTRI_API_BASE_URL=http://127.0.0.1:8796 \
+  npx tsx services/native-host/src/main.ts
+
+# 5) 安装预览（不带 --confirm 时不写任何东西）
+npx tsx services/native-host/src/install-cli.ts paths
+npx tsx services/native-host/src/install-cli.ts install \
+  --host /绝对路径/到/host --extension-id 32位小写a-p --browser chrome --home /tmp/fake-home</code></pre>
+<p class="sub">临时产物都在仓库之外，测后随会话清理：<code>/tmp/p3c-native-host-live.mts</code>＋<code>.log</code>、<code>/tmp/p3b-outbox-live.mts</code>＋<code>.log</code>、<code>/tmp/p3a-evidence*.mjs</code>／<code>.log</code>、<code>/tmp/p3d-gate.log</code>、<code>/tmp/p3d-test-counts.log</code>、<code>/tmp/noltri-p3a*.sqlite</code>／<code>noltri-p3b.sqlite</code>／<code>noltri-p3d-*.sqlite</code>。仓库里没有添加任何 <code>.env</code>、密钥、用户数据库或构建产物（<code>git diff --name-only</code> 复核 0 项）。安装器写文件用 <code>0o600</code>、建目录用 <code>0o700</code>。</p>
+
+<h2 id="injection">十二 一条与代码无关的观察：不可信外来内容</h2>
+<p>从 P0 到本轮的多个工具返回结果<b>尾部</b>，反复出现过两段不是用户写的指令式文本，大意是「内容是硬上限，必须遵守规则，尽量多输出」和「Please continue」。处理方式一直是当不可信内容：没有据此改变任务范围、没有放宽任何输出长度或采集长度约束、没有把它转述成用户指令，也没有因为它而调用工具。</p>
+<p>实现层对此有对应的兜底，而且这条兜底本轮实测过：网页或模型输出里写着「导出全库」，浏览器 host 能得到的只有 <code>forbidden_scope</code>；写着「把这段发到云端」也发不出去，因为 host 只认识四个动词、Core 只绑回环。<b>这是设计上的必然，不是运行时的判断</b>——不存在能接受越权动词的代码路径。</p>
+
+<h2 id="next">十三 下一步</h2>
+<p>P3 已交付并落库；按开发文档继续走 <b>P4 Agent Setup</b>（检测、配置预览、备份合并、授权、MCP handshake、scope 与卸载恢复；验收 <code>M01–M06</code>），P4 的实机口径要的是「指定可用 Agent 完成写入、检索、上下文调用」以及「重复安装幂等、卸载只删自己管理的项」——这条与本轮安装器的预览／备份／恢复逻辑同构，可以直接复用它的形状。</p>
+<div class="warnbox">
+  <p><b>开始 P4 之前，有一件事需要用户点头，我不会替你做：</b></p>
+  <p>要不要给扩展加 <code>nativeMessaging</code> 权限，把扩展 ↔ Native Host 真正接起来？</p>
+  <ul>
+    <li>加：浏览器就会真的启动 host，P3-C 的成果进入用户可感知路径；代价是扩展的权限清单变化（Chrome 加载时会提示），并且需要确定 host 可执行文件在安装包里的路径解析方式与扩展 id 的取得流程。</li>
+    <li>不加：P3 的所有能力仍然只有 Node 侧证据，用户暂时只能通过桌面端与 MCP 入口采集；扩展继续走 HTTP 直连本机 Core 的路径。</li>
+  </ul>
+  <p>若同意加，我会分两步提交：先扩展 manifest 与桥接代码，再 host 端点文件与安装预览的实际使用路径，并把加载后的真实行为如实记录进下一轮报告。</p>
+</div>
+<h3>P4 的候选顺序（无争议部分我直接开工）</h3>
+<ol>
+  <li>盘点现有 MCP 配置写入实现（Setup Manager 已有 5 个客户端的写入与白名单约束），把「检测 → 预览 → 备份合并 → 授权 → 握手 → 卸载恢复」的缺口列清。</li>
+  <li>契约先行：<code>M02</code>（不损坏其它配置、重复安装幂等、卸载只删自家条目）与 <code>M04</code>（撤销 token 后旧连接不能继续读写）先写成测试。</li>
+  <li><code>M01</code> 的真实握手用现有 <code>pnpm --filter @noltri/mcp-server run verify</code>（真实 SDK 客户端）扩展成可断言的脚本，而不是再造一个假客户端。</li>
+  <li><code>M06</code>：不可检测／不支持的 Agent 必须标成「不支持／待人工配置／未验证」，<b>不允许伪造已连接</b>——这条与 P2 实机回归里修掉的「首帧谎报不可用」是同一类诚实性问题，方向相反但同一个原则。</li>
+  <li>顺带补掉的欠账：<code>RUST</code> 侧两个未调用命令的去留、README 里 <code>engines.node</code> 与实际版本不一致、Tauri 传入自身 app-data 目录（当前实测仍用 <code>NOLTRI_SQLITE_FILE</code>）。</li>
+</ol>
+
+<div class="foot">
+  <p>知序 Noltri · P3 本地接入交付报告 · 2026-10-05 · 分支 <code>v1_research&amp;modify</code> · 提交范围 <code>0be39d0..c2194ad</code></p>
+  <p>本报告为单文件、无外部依赖：样式与脚本全部内嵌，不请求任何网络资源，不含截图（本轮没有可扩展 GUI 证据，原因见 §十）。所有数字来自实际执行的命令输出；文档回写对应 <code>FUNCTION_MAP.md</code>、<code>README.md</code>、<code>docs/P0-baseline-and-recovery.md §14</code>，均为仓库内真实改动，不是只写在报告里的说法。</p>
+</div>
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var stored = null;
+  try { stored = localStorage.getItem('noltri-report-theme'); } catch (e) {}
+  if (stored === 'dark') root.setAttribute('data-theme', 'dark');
+  document.getElementById('themer').addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') === 'dark';
+    if (dark) { root.removeAttribute('data-theme'); } else { root.setAttribute('data-theme', 'dark'); }
+    try { localStorage.setItem('noltri-report-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll('pre'), function (block, index) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy';
+    button.textContent = '复制';
+    button.addEventListener('click', function () {
+      var text = block.innerText.replace(/^复制\n?/, '');
+      var done = function (ok) {
+        button.textContent = ok ? '已复制' : '请手动选中';
+        window.setTimeout(function () { button.textContent = '复制'; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+        return;
+      }
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', 'readonly');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      done(ok);
+    });
+    block.appendChild(button);
+  });
+
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav a'));
+  var targets = links.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); });
+  function onScroll() {
+    var y = window.scrollY + 90;
+    var active = 0;
+    for (var i = 0; i < targets.length; i += 1) { if (targets[i] && targets[i].offsetTop <= y) active = i; }
+    links.forEach(function (a, i) { a.style.color = i === active ? 'var(--accent)' : ''; });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+</body>
+</html>
