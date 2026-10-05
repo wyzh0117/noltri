@@ -62,6 +62,16 @@ export interface EvidenceListOptions {
   type?: EvidenceType;
 }
 
+/**
+ * The typed provenance a 来源对象 leaves behind in 证据 (R03). Cross-project on purpose: archiving one
+ * node can touch every 研究项目 that cites it, and a caller that has to ask project by project would have
+ * to know which projects exist to prove a deletion is safe.
+ */
+export interface EvidenceSourceFilter {
+  nodeId?: string;
+  rawSourceId?: string;
+}
+
 export interface ClaimListOptions {
   status?: ClaimStatus;
   claimType?: ClaimType;
@@ -101,7 +111,15 @@ export type UpdateResearchQuestionPatch = Partial<
 export type UpdateEvidencePatch = Partial<
   Pick<
     Evidence,
-    'type' | 'title' | 'description' | 'sourceReference' | 'sourceLocation' | 'reliabilityNote'
+    | 'type'
+    | 'title'
+    | 'description'
+    | 'sourceReference'
+    | 'sourceLocation'
+    | 'rawSourceId'
+    | 'nodeId'
+    | 'locationOrigin'
+    | 'reliabilityNote'
   >
 >;
 export type UpdateClaimPatch = Partial<
@@ -168,6 +186,12 @@ export interface ResearchRepository {
   createEvidence(input: CreateEvidenceInput): Promise<Evidence>;
   findEvidence(id: string, userId: string): Promise<Evidence | null>;
   listEvidence(projectId: string, userId: string, options?: EvidenceListOptions): Promise<Evidence[]>;
+  /**
+   * Every one of the caller's evidence rows that points at this node or this capture, across all their
+   * projects. An unfiltered call answers `[]` rather than "everything": a lookup that quietly becomes a
+   * full scan is how a missing `nodeId` turns into marks on 证据 the user never referenced.
+   */
+  listEvidenceBySource(userId: string, filter: EvidenceSourceFilter): Promise<Evidence[]>;
   updateEvidence(id: string, userId: string, patch: UpdateEvidencePatch): Promise<Evidence>;
 
   // --- claims ---

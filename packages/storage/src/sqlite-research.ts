@@ -38,6 +38,7 @@ import {
   type DriftType,
   type EntityRelation,
   type Evidence,
+  type EvidenceLocationOrigin,
   type EvidenceType,
   type JsonValue,
   type ManuscriptSection,
@@ -64,6 +65,7 @@ import type {
   ClaimListOptions,
   DriftFindingListOptions,
   EvidenceListOptions,
+  EvidenceSourceFilter,
   RelationFilter,
   ResearchChangeListOptions,
   ResearchProjectStats,
@@ -120,7 +122,7 @@ const QUESTION_FIELDS = `id, project_id, user_id, question_code, question_text, 
   related_method, created_at, updated_at`;
 
 const EVIDENCE_FIELDS = `id, project_id, user_id, type, title, description, source_reference,
-  source_location, reliability_note, created_at, updated_at`;
+  source_location, raw_source_id, node_id, location_origin, reliability_note, created_at, updated_at`;
 
 const CLAIM_FIELDS = `id, project_id, user_id, claim_code, claim_text, claim_type, status,
   confidence, boundary, created_at, updated_at`;
@@ -279,6 +281,9 @@ function toEvidence(row: DbRow): Evidence {
     description: optText(row.description),
     sourceReference: optText(row.source_reference),
     sourceLocation: optText(row.source_location),
+    rawSourceId: optText(row.raw_source_id),
+    nodeId: optText(row.node_id),
+    locationOrigin: row.location_origin === null ? null : (text(row.location_origin) as EvidenceLocationOrigin),
     reliabilityNote: optText(row.reliability_note),
     createdAt: text(row.created_at),
     updatedAt: text(row.updated_at),
@@ -882,6 +887,9 @@ export class SqliteResearchRepository implements ResearchRepository {
       description: input.description ?? null,
       sourceReference: input.sourceReference ?? null,
       sourceLocation: input.sourceLocation ?? null,
+      rawSourceId: input.rawSourceId ?? null,
+      nodeId: input.nodeId ?? null,
+      locationOrigin: input.locationOrigin ?? null,
       reliabilityNote: input.reliabilityNote ?? null,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -889,9 +897,11 @@ export class SqliteResearchRepository implements ResearchRepository {
     this.insert(
       'research_evidence',
       ['id', 'project_id', 'user_id', 'type', 'title', 'description', 'source_reference',
-        'source_location', 'reliability_note', 'created_at', 'updated_at'],
+        'source_location', 'raw_source_id', 'node_id', 'location_origin', 'reliability_note',
+        'created_at', 'updated_at'],
       [record.id, record.projectId, record.userId, record.type, record.title, record.description,
-        record.sourceReference, record.sourceLocation, record.reliabilityNote, record.createdAt,
+        record.sourceReference, record.sourceLocation, record.rawSourceId, record.nodeId,
+        record.locationOrigin, record.reliabilityNote, record.createdAt,
         record.updatedAt],
     );
     return record;
@@ -924,9 +934,33 @@ export class SqliteResearchRepository implements ResearchRepository {
     if (patch.description !== undefined) sets.push(['description', patch.description]);
     if (patch.sourceReference !== undefined) sets.push(['source_reference', patch.sourceReference]);
     if (patch.sourceLocation !== undefined) sets.push(['source_location', patch.sourceLocation]);
+    if (patch.rawSourceId !== undefined) sets.push(['raw_source_id', patch.rawSourceId]);
+    if (patch.nodeId !== undefined) sets.push(['node_id', patch.nodeId]);
+    if (patch.locationOrigin !== undefined) sets.push(['location_origin', patch.locationOrigin]);
     if (patch.reliabilityNote !== undefined) sets.push(['reliability_note', patch.reliabilityNote]);
     if (sets.length > 0) this.patchRow('research_evidence', id, sets);
     return this.reload(EVIDENCE_FIELDS, 'research_evidence', id, userId, toEvidence);
+  }
+
+  async listEvidenceBySource(userId: string, filter: EvidenceSourceFilter): Promise<Evidence[]> {
+    const { nodeId, rawSourceId } = filter;
+    if (nodeId === undefined && rawSourceId === undefined) return [];
+    const or: string[] = [];
+    const params: Bind[] = [];
+    if (nodeId !== undefined) {
+      or.push('node_id = ?');
+      params.push(nodeId);
+    }
+    if (rawSourceId !== undefined) {
+      or.push('raw_source_id = ?');
+      params.push(rawSourceId);
+    }
+    return this.many(
+      `select ${EVIDENCE_FIELDS} from research_evidence
+       where user_id = ? and (${or.join(' or ')})
+       order by created_at asc, rowid asc`,
+      [userId, ...params],
+    ).map(toEvidence);
   }
 
   // --- claims --------------------------------------------------------------------------

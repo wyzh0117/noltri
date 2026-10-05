@@ -18,7 +18,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 /** Bumped by appending a new entry to MIGRATIONS; stored in `PRAGMA user_version`. */
-export const SQLITE_SCHEMA_VERSION = 4;
+export const SQLITE_SCHEMA_VERSION = 5;
 
 export interface SqliteOpenOptions {
   /** Absolute path to the database file, or `:memory:`. */
@@ -84,6 +84,7 @@ const ENUM_CHECKS = {
   timelineSource: "('research_decision', 'research_change', 'manual')",
   reviewMarkRaisedBy: "('charter_baseline', 'source_archived')",
   reviewMarkStatus: "('pending', 'cleared')",
+  evidenceLocationOrigin: "('manual', 'captured')",
 } as const;
 
 const DDL_V1 = `
@@ -536,11 +537,34 @@ create index if not exists research_review_marks_list_idx
   on research_review_marks (user_id, project_id, status, created_at);
 `;
 
+/**
+ * V5 (P5-C3, R03) — typed provenance on 证据.
+ *
+ * `research_evidence` grows three nullable columns rather than a side table: a 证据 row already owns its
+ * 出处 text, and the ids are two more facts about the same row. Nullable is the point — every evidence row
+ * written before this phase keeps working, and an id with no row behind it is a pointer to something the
+ * user typed or imported, not a broken foreign key.
+ *
+ * They are deliberately *not* foreign keys. The knowledge objects they name live in the common layer and
+ * are archived, never deleted; an `on delete restrict` would promise a deletion this product does not
+ * perform, and a cascade would erase the 证据 that R03 exists to protect. The archive check reads these
+ * columns by hand and raises a 复核标记 instead of touching either row.
+ */
+const DDL_V5 = `
+alter table research_evidence add column raw_source_id text;
+alter table research_evidence add column node_id text;
+alter table research_evidence add column location_origin text
+  constraint research_evidence_location_origin_enum_check check (location_origin in ${ENUM_CHECKS.evidenceLocationOrigin});
+create index if not exists research_evidence_source_node_idx on research_evidence (user_id, node_id);
+create index if not exists research_evidence_source_raw_idx on research_evidence (user_id, raw_source_id);
+`;
+
 const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => void }> = [
   { version: 1, apply: (db) => db.exec(DDL_V1) },
   { version: 2, apply: (db) => db.exec(DDL_V2) },
   { version: 3, apply: (db) => db.exec(DDL_V3) },
   { version: 4, apply: (db) => db.exec(DDL_V4) },
+  { version: 5, apply: (db) => db.exec(DDL_V5) },
 ];
 
 function readString(db: DatabaseSync, sql: string): string {
@@ -629,4 +653,5 @@ export {
   DDL_V2 as SQLITE_DDL_V2,
   DDL_V3 as SQLITE_DDL_V3,
   DDL_V4 as SQLITE_DDL_V4,
+  DDL_V5 as SQLITE_DDL_V5,
 };

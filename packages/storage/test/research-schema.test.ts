@@ -1,6 +1,6 @@
 /**
  * What the shared contract cannot see about the research half: what the file actually contains, whether
- * the research DDL (versions 3 and 4) still agrees with the zod enums, and what the constraints refuse.
+ * the research DDL (versions 3 to 5) still agrees with the zod enums, and what the constraints refuse.
  *
  * The enum comparison mirrors `migrations.test.ts` for Postgres, with one difference that matters: the
  * archived Postgres research migrations were deliberately not ported, so `packages/schema/src/research.ts`
@@ -17,6 +17,7 @@ import {
   driftFindingStatusSchema,
   driftSeveritySchema,
   driftTypeSchema,
+  evidenceLocationOriginSchema,
   evidenceTypeSchema,
   researchChangeTypeSchema,
   researchEntityTypeSchema,
@@ -31,6 +32,7 @@ import {
 import {
   SQLITE_DDL_V3,
   SQLITE_DDL_V4,
+  SQLITE_DDL_V5,
   SQLITE_MIGRATIONS,
   SQLITE_SCHEMA_VERSION,
   openSqlite,
@@ -71,6 +73,7 @@ const ENUM_COLUMNS: ReadonlyArray<{ table: string; column: string; schema: EnumL
   { table: 'research_projects', column: 'status', schema: researchProjectStatusSchema },
   { table: 'research_questions', column: 'status', schema: researchQuestionStatusSchema },
   { table: 'research_evidence', column: 'type', schema: evidenceTypeSchema },
+  { table: 'research_evidence', column: 'location_origin', schema: evidenceLocationOriginSchema },
   { table: 'research_claims', column: 'claim_type', schema: claimTypeSchema },
   { table: 'research_claims', column: 'status', schema: claimStatusSchema },
   { table: 'research_entity_relations', column: 'source_type', schema: researchEntityTypeSchema },
@@ -112,7 +115,7 @@ function checkLabels(table: string, column: string): string[] {
       `(?:${column}\\s+is\\s+null\\s+or\\s+)?${column}\\s+in\\s*\\(([^)]*)\\)`,
     'i',
   );
-  const found = pattern.exec(`${SQLITE_DDL_V3}${SQLITE_DDL_V4}`);
+  const found = pattern.exec(`${SQLITE_DDL_V3}${SQLITE_DDL_V4}${SQLITE_DDL_V5}`);
   const list = found?.[1];
   if (list === undefined) {
     throw new Error(`${table}.${column} has no ${table}_${column}_enum_check CHECK clause in the research DDL`);
@@ -452,6 +455,92 @@ describe('a version 3 profile upgrades in place', () => {
     ]);
     expect((await again.listReviewMarks('p', 'u')).map((mark) => mark.entityId)).toEqual(['k1']);
     await again.close();
+  });
+});
+
+/**
+ * V5 (R03) gives 证据 the machine-readable pointers it never had. Two properties are worth pinning at the
+ * file level rather than only in the contract: the columns must not break a row written before they existed,
+ * and they must not become foreign keys — 归档 keeps the pointer, and an id that names nothing is a fact
+ * about the source, not a constraint violation.
+ */
+describe('the version 5 DDL', () => {
+  function seedProject(db: DatabaseSync): void {
+    db.prepare(
+      `insert into research_projects (id, user_id, name, created_at, updated_at)
+       values ('p', 'u', '冷链研究', ?, ?)`,
+    ).run(STAMP, STAMP);
+  }
+
+  it('adds the provenance columns without touching a row written before them', () => {
+    const { db } = openSqlite({ file: nextFile('provenance.sqlite') });
+    seedProject(db);
+    db.prepare(
+      `insert into research_evidence (id, project_id, user_id, type, title, created_at, updated_at)
+       values ('e1', 'p', 'u', 'literature', '没有出处的旧证据', ?, ?)`,
+    ).run(STAMP, STAMP);
+
+    const columns = db
+      .prepare('select name, "notnull" as required from pragma_table_info(\'research_evidence\')')
+      .all()
+      .map((row) => ({ name: String(row.name), required: Number(row.required) }));
+    expect(columns).toContainEqual({ name: 'raw_source_id', required: 0 });
+    expect(columns).toContainEqual({ name: 'node_id', required: 0 });
+    expect(columns).toContainEqual({ name: 'location_origin', required: 0 });
+
+    const row = db.prepare("select * from research_evidence where id = 'e1'").get() as Record<string, unknown>;
+    expect(row.node_id).toBeNull();
+    expect(row.raw_source_id).toBeNull();
+    expect(row.location_origin).toBeNull();
+    db.close();
+  });
+
+  it('indexes the two pointers the archive lookup filters on', () => {
+    const { db } = openSqlite({ file: nextFile('provenance-index.sqlite') });
+    const indexes = db
+      .prepare("select name from sqlite_master where type = 'index' and name like 'research_evidence_source%'")
+      .all()
+      .map((row) => String(row.name))
+      .sort();
+    expect(indexes).toEqual(['research_evidence_source_node_idx', 'research_evidence_source_raw_idx']);
+    db.close();
+  });
+
+  it('refuses a 定位来源 the domain does not define, and accepts the two it does', () => {
+    const { db } = openSqlite({ file: nextFile('provenance-enum.sqlite') });
+    seedProject(db);
+    const insert = db.prepare(
+      `insert into research_evidence (id, project_id, user_id, type, title, location_origin, created_at, updated_at)
+       values (?, 'p', 'u', 'note', 'x', ?, ?, ?)`,
+    );
+    expect(() => insert.run('e1', 'guessed', STAMP, STAMP)).toThrow(/CHECK constraint/i);
+    expect(() => insert.run('e2', 'manual', STAMP, STAMP)).not.toThrow();
+    expect(() => insert.run('e3', 'captured', STAMP, STAMP)).not.toThrow();
+    db.close();
+  });
+
+  it('keeps a pointer to an object that is not there, because provenance is not a foreign key', async () => {
+    const file = nextFile('provenance-dangling.sqlite');
+    const research = new SqliteResearchRepository({ file });
+    const project = await research.createResearchProject({ userId: 'u', name: '冷链研究' });
+    const evidence = await research.createEvidence({
+      userId: 'u',
+      projectId: project.id,
+      type: 'literature',
+      title: '归档后仍在的出处',
+      nodeId: 'node-that-will-be-archived',
+      rawSourceId: 'raw-1',
+      locationOrigin: 'captured',
+    });
+    expect(evidence.nodeId).toBe('node-that-will-be-archived');
+    expect(evidence.locationOrigin).toBe('captured');
+
+    // 归档 is a status change in the knowledge half, so the row it names may never even exist here.
+    expect(await research.listEvidenceBySource('u', { nodeId: 'node-that-will-be-archived' })).toHaveLength(1);
+    expect(await research.listEvidenceBySource('other-user', { nodeId: 'node-that-will-be-archived' })).toEqual([]);
+    expect(await research.listEvidenceBySource('u', { rawSourceId: 'raw-1' })).toHaveLength(1);
+    expect(await research.listEvidenceBySource('u', {})).toEqual([]);
+    await research.close();
   });
 });
 

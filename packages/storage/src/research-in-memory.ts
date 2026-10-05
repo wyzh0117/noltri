@@ -32,6 +32,7 @@ import type {
   ClaimListOptions,
   DriftFindingListOptions,
   EvidenceListOptions,
+  EvidenceSourceFilter,
   RelationFilter,
   ResearchChangeListOptions,
   ResearchProjectStats,
@@ -385,6 +386,9 @@ export class InMemoryResearchRepository implements ResearchRepository {
       description: input.description ?? null,
       sourceReference: input.sourceReference ?? null,
       sourceLocation: input.sourceLocation ?? null,
+      rawSourceId: input.rawSourceId ?? null,
+      nodeId: input.nodeId ?? null,
+      locationOrigin: input.locationOrigin ?? null,
       reliabilityNote: input.reliabilityNote ?? null,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -407,6 +411,20 @@ export class InMemoryResearchRepository implements ResearchRepository {
       .map(clone);
   }
 
+  async listEvidenceBySource(userId: string, filter: EvidenceSourceFilter): Promise<Evidence[]> {
+    const { nodeId, rawSourceId } = filter;
+    if (nodeId === undefined && rawSourceId === undefined) return [];
+    return [...this.evidence.values()]
+      .filter((row) => row.userId === userId)
+      .filter(
+        (row) =>
+          (nodeId !== undefined && row.nodeId === nodeId) ||
+          (rawSourceId !== undefined && row.rawSourceId === rawSourceId),
+      )
+      .sort(byCreatedAt)
+      .map(clone);
+  }
+
   async updateEvidence(id: string, userId: string, patch: UpdateEvidencePatch): Promise<Evidence> {
     const existing = this.evidence.get(id);
     if (!existing || existing.userId !== userId) {
@@ -419,6 +437,9 @@ export class InMemoryResearchRepository implements ResearchRepository {
       ...(patch.description !== undefined ? { description: patch.description } : {}),
       ...(patch.sourceReference !== undefined ? { sourceReference: patch.sourceReference } : {}),
       ...(patch.sourceLocation !== undefined ? { sourceLocation: patch.sourceLocation } : {}),
+      ...(patch.rawSourceId !== undefined ? { rawSourceId: patch.rawSourceId } : {}),
+      ...(patch.nodeId !== undefined ? { nodeId: patch.nodeId } : {}),
+      ...(patch.locationOrigin !== undefined ? { locationOrigin: patch.locationOrigin } : {}),
       ...(patch.reliabilityNote !== undefined ? { reliabilityNote: patch.reliabilityNote } : {}),
       updatedAt: nowIso(),
     };

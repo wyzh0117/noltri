@@ -488,6 +488,85 @@ export function describeResearchRepository(
       });
     }, timeout);
 
+    it('carries typed provenance and finds every 证据 that cites a source, across projects', async () => {
+      await scope(async (repository, userId) => {
+        const first = await project(repository, userId);
+        const second = await project(repository, userId, '第二个研究项目');
+
+        const captured = await repository.createEvidence({
+          userId,
+          projectId: first.id,
+          type: 'external_source',
+          title: '行业年报摘录',
+          sourceReference: '2024 年年报 p.17',
+          sourceLocation: '第三节',
+          rawSourceId: 'raw-9',
+          nodeId: 'node-7',
+          locationOrigin: 'captured',
+        });
+        expect(captured.nodeId).toBe('node-7');
+        expect(captured.rawSourceId).toBe('raw-9');
+        expect(captured.locationOrigin).toBe('captured');
+
+        // 手打的卡片没有指针：它引用的是文字，不是一个会被归档的对象。
+        const handWritten = await repository.createEvidence({
+          userId,
+          projectId: second.id,
+          type: 'note',
+          title: '读书卡片',
+          sourceLocation: '纸质笔记本 P32',
+        });
+        expect(handWritten.nodeId).toBeNull();
+        expect(handWritten.locationOrigin).toBeNull();
+
+        await pause();
+        const again = await repository.createEvidence({
+          userId,
+          projectId: second.id,
+          type: 'literature',
+          title: '同一个节点的第二次引用',
+          nodeId: 'node-7',
+        });
+        // 按来源查而不是按项目查，所以两个项目里的引用都要出现。
+        expect((await repository.listEvidenceBySource(userId, { nodeId: 'node-7' })).map((row) => row.id))
+          .toEqual([captured.id, again.id]);
+        expect((await repository.listEvidenceBySource(userId, { rawSourceId: 'raw-9' })).map((row) => row.id))
+          .toEqual([captured.id]);
+
+        await pause();
+        const viaRaw = await repository.createEvidence({
+          userId,
+          projectId: first.id,
+          type: 'document',
+          title: '只引用原始采集的证据',
+          rawSourceId: 'raw-77',
+        });
+        // 两个都给 = 并集。一次归档可能同时带走原文和它归类后的节点。
+        expect(
+          (await repository.listEvidenceBySource(userId, { nodeId: 'node-7', rawSourceId: 'raw-77' }))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual([captured.id, again.id, viaRaw.id].sort());
+
+        // 不给条件就返回空表：一个丢了的 nodeId 不能变成「把所有证据都标上」。
+        expect(await repository.listEvidenceBySource(userId, {})).toEqual([]);
+        expect(await repository.listEvidenceBySource(foreignUser(), { nodeId: 'node-7' })).toEqual([]);
+
+        // 指针可以事后补，也可以显式清空，但用户写的定位文字不动。
+        const patched = await repository.updateEvidence(handWritten.id, userId, {
+          nodeId: 'node-8',
+          locationOrigin: 'manual',
+        });
+        expect(patched.nodeId).toBe('node-8');
+        expect(patched.sourceLocation).toBe('纸质笔记本 P32');
+        expect((await repository.listEvidenceBySource(userId, { nodeId: 'node-8' })).map((row) => row.id))
+          .toEqual([handWritten.id]);
+        const cleared = await repository.updateEvidence(handWritten.id, userId, { nodeId: null });
+        expect(cleared.nodeId).toBeNull();
+        expect(await repository.listEvidenceBySource(userId, { nodeId: 'node-8' })).toEqual([]);
+      });
+    }, timeout);
+
     it('creates, reads, lists and filters claims', async () => {
       await scope(async (repository, userId) => {
         const research = await project(repository, userId);
