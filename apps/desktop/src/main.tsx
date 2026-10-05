@@ -26,6 +26,8 @@ import {
 import {
   AGENT_PRIVACY_NOTE,
   MAX_GRANTED_PROJECTS,
+  MAX_SNIPPET_CHARS,
+  MIN_SNIPPET_CHARS,
   credentialFromMint,
   currentGrant,
   describeGrant,
@@ -35,6 +37,8 @@ import {
   nodeSelectionFor,
   projectOptions,
   scopesFor,
+  snippetCharsFor,
+  snippetSetting,
   supersededGrants,
   toggleProject,
   type ProjectOption,
@@ -318,6 +322,7 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
   const [probeBusy, setProbeBusy] = useState(false);
   const [captureOnly, setCaptureOnly] = useState(false);
   const [nodeIds, setNodeIds] = useState<string[]>([]);
+  const [snippet, setSnippet] = useState('');
   const [projects, setProjects] = useState<ProjectOption[] | null>(null);
 
   async function loadFacts(): Promise<TargetFacts> {
@@ -357,7 +362,9 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
 
   const entry = facts === null ? null : buildServerEntry(facts.endpoint, token);
   const writable = facts !== null && canWriteConfig(facts);
-  const conflict = grantOptionConflict({ captureOnly, nodeIds });
+  const snippetChoice = snippetSetting(snippet);
+  const conflict = grantOptionConflict({ captureOnly, nodeIds, snippetChars: snippetChoice.snippetChars });
+  const blocked = conflict ?? snippetChoice.error;
 
   /** 限制项目 needs the real tree; loading it on mount for seven cards would be a request storm. */
   async function loadProjects(): Promise<void> {
@@ -372,8 +379,8 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
 
   async function writeToConfig(): Promise<void> {
     if (facts === null || facts.configPath === null) return;
-    if (conflict !== null) {
-      setDetail(`未写入：${conflict}`);
+    if (blocked !== null) {
+      setDetail(`未写入：${blocked}`);
       return;
     }
     const label = grantLabelFor(facts);
@@ -392,8 +399,9 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
     // §431: the credential in that file lives in an application this project does not control, so the
     // write mints a per-client grant with the smallest scopes instead of shipping the device key. Only
     // a deployment that never turned on 客户端授权 keeps using the old credential, and it says so.
-    const options = { captureOnly, nodeIds };
+    const options = { captureOnly, nodeIds, snippetChars: snippetChoice.snippetChars };
     const selected = nodeSelectionFor(options);
+    const capped = snippetCharsFor(options);
     let minted: IssueGrantResponse | null = null;
     let mintError: unknown = null;
     try {
@@ -402,6 +410,7 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
         client: facts.target,
         scopes: scopesFor(options),
         ...(selected === undefined ? {} : { nodeIds: selected }),
+        ...(capped === undefined ? {} : { snippetChars: capped }),
       });
     } catch (error) {
       mintError = error;
@@ -653,6 +662,19 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
             <input type="checkbox" checked={captureOnly} onChange={(event) => setCaptureOnly(event.target.checked)} />
             只写采集：允许这个客户端保存，但不允许读取或检索知识库
           </label>
+          <label className="option">
+            <input
+              type="number"
+              value={snippet}
+              min={String(MIN_SNIPPET_CHARS)}
+              max={String(MAX_SNIPPET_CHARS)}
+              step="10"
+              placeholder="不限制"
+              onChange={(event) => setSnippet(event.target.value)}
+            />
+            <span>限制返回片段：这个客户端每次读回的正文最多这么多字（检索、上下文、节点与原文都受它约束）。</span>
+          </label>
+          {snippetChoice.error !== null && <p className="status-bad">{snippetChoice.error}</p>}
           <div className="row">
             <button type="button" onClick={() => void loadProjects()}>载入项目列表以限制范围</button>
             {nodeIds.length > 0 && (
@@ -679,6 +701,7 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
             </div>
           )}
           {conflict !== null && <p className="status-bad">{conflict}</p>}
+          {snippetChoice.error !== null && <p className="status-bad">{snippetChoice.error}</p>}
         </div>
       )}
       {facts !== null && (

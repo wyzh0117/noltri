@@ -11,6 +11,8 @@ import {
   AGENT_PRIVACY_NOTE,
   AGENT_SCOPES,
   MAX_GRANTED_PROJECTS,
+  MAX_SNIPPET_CHARS,
+  MIN_SNIPPET_CHARS,
   classifyMintFailure,
   credentialFromMint,
   currentGrant,
@@ -21,8 +23,11 @@ import {
   nodeSelectionFor,
   projectOptions,
   scopesFor,
+  snippetCharsFor,
+  snippetSetting,
   supersededGrants,
   toggleProject,
+  type GrantOptions,
 } from '../src/lib/grants';
 
 function facts(patch: Partial<TargetFacts> = {}): TargetFacts {
@@ -54,6 +59,7 @@ function grantOf(patch: Partial<PublicGrant> = {}): PublicGrant {
     client: 'claude_desktop',
     scopes: ['capture', 'read'],
     nodeIds: null,
+    snippetChars: null,
     createdAt: '2026-10-05T08:00:00.000Z',
     revokedAt: null,
     ...patch,
@@ -125,13 +131,14 @@ describe('currentGrant / supersededGrants', () => {
 });
 
 describe('describeGrant', () => {
-  it('reads as scopes · project reach · liveness, in Chinese labels', () => {
-    expect(describeGrant(grantOf())).toBe('采集 + 读取 · 全部项目 · 生效中');
+  it('reads as scopes · project reach · snippet reach · liveness, in Chinese labels', () => {
+    expect(describeGrant(grantOf())).toBe('采集 + 读取 · 全部项目 · 不限制片段 · 生效中');
+    expect(describeGrant(grantOf({ snippetChars: 200 }))).toContain('单次返回不超过 200 字');
   });
 
   it('counts the projects a limited grant may see and marks a revoked one', () => {
     expect(describeGrant(grantOf({ nodeIds: ['node-a', 'node-b'], revokedAt: '2026-05-01T00:00:00.000Z' }))).toBe(
-      '采集 + 读取 · 2 个项目 · 已撤销',
+      '采集 + 读取 · 2 个项目 · 不限制片段 · 已撤销',
     );
   });
 });
@@ -196,22 +203,41 @@ describe('credentialFromMint — 什么凭据可以离开这台机器', () => {
 });
 
 describe('授权选项 (§435)', () => {
+  function optionsOf(patch: Partial<GrantOptions> = {}): GrantOptions {
+    return { captureOnly: false, nodeIds: [], snippetChars: null, ...patch };
+  }
+
   it('offers 只写采集 without ever offering 修改', () => {
-    expect(scopesFor({ captureOnly: true, nodeIds: [] })).toEqual(['capture']);
-    expect(scopesFor({ captureOnly: false, nodeIds: [] })).toEqual(['capture', 'read']);
-    expect(scopesFor({ captureOnly: false, nodeIds: ['node-a'] }).includes('mutate')).toBe(false);
+    expect(scopesFor(optionsOf({ captureOnly: true }))).toEqual(['capture']);
+    expect(scopesFor(optionsOf())).toEqual(['capture', 'read']);
+    expect(scopesFor(optionsOf({ nodeIds: ['node-a'] })).includes('mutate')).toBe(false);
   });
 
   it('leaves nodeIds absent rather than sending an empty restriction', () => {
-    expect(nodeSelectionFor({ captureOnly: false, nodeIds: [] })).toBeUndefined();
-    expect(nodeSelectionFor({ captureOnly: false, nodeIds: ['node-a'] })).toEqual(['node-a']);
+    expect(nodeSelectionFor(optionsOf())).toBeUndefined();
+    expect(nodeSelectionFor(optionsOf({ nodeIds: ['node-a'] }))).toEqual(['node-a']);
+  });
+
+  it('leaves 限制返回片段 absent rather than sending a zero', () => {
+    expect(snippetCharsFor(optionsOf())).toBeUndefined();
+    expect(snippetCharsFor(optionsOf({ snippetChars: 200 }))).toBe(200);
+    // An empty box is 「不限制」, and a wrong one is said out loud instead of being quietly dropped.
+    expect(snippetSetting('')).toEqual({ snippetChars: null, error: null });
+    expect(snippetSetting('  ')).toEqual({ snippetChars: null, error: null });
+    expect(snippetSetting('200')).toEqual({ snippetChars: 200, error: null });
+    expect(snippetSetting('12.5').error).toContain('整数');
+    expect(snippetSetting('abc').error).toContain('整数');
+    expect(snippetSetting(String(MIN_SNIPPET_CHARS - 1)).error).not.toBeNull();
+    expect(snippetSetting(String(MAX_SNIPPET_CHARS + 1)).error).not.toBeNull();
+    expect(snippetSetting(String(MIN_SNIPPET_CHARS))).toEqual({ snippetChars: MIN_SNIPPET_CHARS, error: null });
+    expect(snippetSetting(String(MAX_SNIPPET_CHARS))).toEqual({ snippetChars: MAX_SNIPPET_CHARS, error: null });
   });
 
   it('names the combination Core would refuse before any credential is minted', () => {
-    expect(grantOptionConflict({ captureOnly: false, nodeIds: [] })).toBeNull();
-    expect(grantOptionConflict({ captureOnly: true, nodeIds: [] })).toBeNull();
-    expect(grantOptionConflict({ captureOnly: false, nodeIds: ['node-a'] })).toContain('不能用于自动采集');
-    expect(grantOptionConflict({ captureOnly: true, nodeIds: ['node-a'] })).toContain('请只保留一项');
+    expect(grantOptionConflict(optionsOf())).toBeNull();
+    expect(grantOptionConflict(optionsOf({ captureOnly: true }))).toBeNull();
+    expect(grantOptionConflict(optionsOf({ nodeIds: ['node-a'] }))).toContain('不能用于自动采集');
+    expect(grantOptionConflict(optionsOf({ captureOnly: true, nodeIds: ['node-a'] }))).toContain('请只保留一项');
   });
 
   it('flattens the tree into path labels a person can actually recognise', () => {

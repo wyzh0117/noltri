@@ -9,7 +9,14 @@
  * Everything that decides is pure, because the alternative is a button whose security behaviour can
  * only be reviewed by clicking it.
  */
-import { ApiClient, ApiClientError, type IssueGrantResponse, type PublicGrant } from '@noltri/api-client';
+import {
+  ApiClient,
+  ApiClientError,
+  MAX_SNIPPET_CHARS,
+  MIN_SNIPPET_CHARS,
+  type IssueGrantResponse,
+  type PublicGrant,
+} from '@noltri/api-client';
 import type { GrantScope } from '@noltri/api-client';
 import type { TreeNode } from '@noltri/schema';
 import type { TargetFacts } from './types';
@@ -34,12 +41,43 @@ export const AGENT_PRIVACY_NOTE =
 /** `issueGrantRequestSchema` refuses more than this; the panel stops the user before the request does. */
 export const MAX_GRANTED_PROJECTS = 100;
 
+/** Re-exported so the input's `min`/`max` are the same numbers the Core will check. */
+export { MAX_SNIPPET_CHARS, MIN_SNIPPET_CHARS };
+
 export interface GrantOptions {
   readonly captureOnly: boolean;
   readonly nodeIds: readonly string[];
+  /** §435 限制返回片段. `null` = 不限制; a number caps every piece of text that connection reads back. */
+  readonly snippetChars: number | null;
 }
 
-export const DEFAULT_GRANT_OPTIONS: GrantOptions = { captureOnly: false, nodeIds: [] };
+export const DEFAULT_GRANT_OPTIONS: GrantOptions = { captureOnly: false, nodeIds: [], snippetChars: null };
+
+/**
+ * The 限制返回片段 input parsed before anything is minted. Blank means 不限制; anything the Core would
+ * refuse is reported here instead of turning a 「已连接」 panel into a silent no-cap grant.
+ */
+export interface SnippetSetting {
+  readonly snippetChars: number | null;
+  readonly error: string | null;
+}
+
+export function snippetSetting(raw: string): SnippetSetting {
+  const text = raw.trim();
+  if (text === '') return { snippetChars: null, error: null };
+  const value = Number(text);
+  if (!Number.isInteger(value) || value < MIN_SNIPPET_CHARS || value > MAX_SNIPPET_CHARS) {
+    return {
+      snippetChars: null,
+      error: `限制返回片段需要 ${String(MIN_SNIPPET_CHARS)}–${String(MAX_SNIPPET_CHARS)} 之间的整数，当前输入不会生效。`,
+    };
+  }
+  return { snippetChars: value, error: null };
+}
+
+export function snippetCharsFor(options: GrantOptions): number | undefined {
+  return options.snippetChars === null ? undefined : options.snippetChars;
+}
 
 /**
  * 只写采集 lets an Agent save what it finds without reading the library back. `mutate` is never offered:
@@ -122,7 +160,8 @@ export function supersededGrants(grants: readonly PublicGrant[], label: string, 
 export function describeGrant(grant: PublicGrant): string {
   const scopes = grant.scopes.map((scope) => SCOPE_LABELS[scope]).join(' + ');
   const projects = grant.nodeIds === null ? '全部项目' : `${String(grant.nodeIds.length)} 个项目`;
-  return `${scopes} · ${projects} · ${grant.revokedAt === null ? '生效中' : '已撤销'}`;
+  const snippet = grant.snippetChars === null ? '不限制片段' : `单次返回不超过 ${String(grant.snippetChars)} 字`;
+  return `${scopes} · ${projects} · ${snippet} · ${grant.revokedAt === null ? '生效中' : '已撤销'}`;
 }
 
 export type MintFailure = 'not-configured' | 'no-device-credential' | 'unreachable' | 'refused';

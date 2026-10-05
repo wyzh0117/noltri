@@ -224,6 +224,11 @@ input:not([type]) {
   gap: 6px;
 }
 
+/* 限制返回片段 is a number box, and its default width is wide enough to push the label off the card. */
+.option input[type='number'] {
+  width: 88px;
+}
+
 .project-list {
   max-height: 180px;
   margin-top: 4px;
