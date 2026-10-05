@@ -378,6 +378,96 @@ export const upsertCharterInputSchema = charterFieldsSchema.extend({
 });
 export type UpsertCharterInput = z.infer<typeof upsertCharterInputSchema>;
 
+// --- approved charter baselines and review marks (R06 / R03) ----------------
+
+/**
+ * The field names a baseline can record, read off the draft's own shape so a new charter field cannot
+ * be added without also becoming a name the diff may report.
+ */
+export const CHARTER_FIELD_NAMES = Object.keys(charterFieldsSchema.shape).sort() as (keyof CharterFields)[];
+export const charterFieldNameSchema = z.enum(CHARTER_FIELD_NAMES as [string, ...string[]]);
+export type CharterFieldName = z.infer<typeof charterFieldNameSchema>;
+
+/** One end of a relation to something the user says a revision touched. */
+export const researchEntityRefSchema = z.object({
+  entityType: researchEntityTypeSchema,
+  entityId: z.string().min(1),
+});
+export type ResearchEntityRef = z.infer<typeof researchEntityRefSchema>;
+
+/**
+ * R06（开发文档 §13「不可变批准版本＋当前草稿」）：一次批准 = 当时草稿的整份快照 + 相对上一基线变了哪些字段。
+ * `previousVersion === null` 说的是「没有可对比的上一版」，不是「什么都没变」—— 第一版基线的
+ * `changedFields` 因此是空表，而不是「14 个字段全改了」。
+ */
+export const charterVersionSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  version: z.number().int().positive(),
+  previousVersion: z.number().int().positive().nullable(),
+  charter: researchCharterSchema,
+  changedFields: z.array(charterFieldNameSchema),
+  revisionReason: z.string(),
+  decisionId: z.string().nullable(),
+  approvedAt: z.string(),
+});
+export type CharterVersion = z.infer<typeof charterVersionSchema>;
+
+/**
+ * 什么把一条对象标成「需要复核」。`charter_baseline` 是新批准的章程基线（R06）；
+ * `source_archived` 是它引用的知识对象被归档／移走了（R03）。两条都是「别装作这条绑定还有效」。
+ */
+export const reviewMarkRaisedBySchema = z.enum(['charter_baseline', 'source_archived']);
+export type ReviewMarkRaisedBy = z.infer<typeof reviewMarkRaisedBySchema>;
+
+export const reviewMarkStatusSchema = z.enum(['pending', 'cleared']);
+export type ReviewMarkStatus = z.infer<typeof reviewMarkStatusSchema>;
+
+/**
+ * R03／R06 的「影响对象被标记」。单独一张表，而不是在 question／evidence／claim／section 各加两列：
+ * 同一批对象会被不同的原因标记，而「处理完」的记录必须留着（开发文档 §14：批准新章程后保留旧结果与
+ * 时间线，不能删除旧警告制造「从未偏移」的假象）。
+ */
+export const researchReviewMarkSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  userId: z.string(),
+  entityType: researchEntityTypeSchema,
+  entityId: z.string(),
+  reason: z.string(),
+  raisedBy: reviewMarkRaisedBySchema,
+  charterVersion: z.number().int().positive().nullable(),
+  status: reviewMarkStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ResearchReviewMark = z.infer<typeof researchReviewMarkSchema>;
+
+export const createCharterVersionInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  version: z.number().int().positive(),
+  previousVersion: z.number().int().positive().nullable(),
+  charter: researchCharterSchema,
+  changedFields: z.array(charterFieldNameSchema),
+  revisionReason: z.string().min(1).max(2000),
+  decisionId: z.string().nullable(),
+});
+export type CreateCharterVersionInput = z.infer<typeof createCharterVersionInputSchema>;
+
+export const createReviewMarkInputSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  entityType: researchEntityTypeSchema,
+  entityId: z.string().min(1),
+  reason: z.string().min(1).max(2000),
+  raisedBy: reviewMarkRaisedBySchema,
+  charterVersion: z.number().int().positive().nullable().optional(),
+});
+export type CreateReviewMarkInput = z.infer<typeof createReviewMarkInputSchema>;
+
+
 export const createResearchQuestionInputSchema = z.object({
   userId: z.string(),
   projectId: z.string(),

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { jsonValueSchema } from './knowledge';
 import {
   charterFieldsSchema,
+  charterVersionSchema,
   claimSchema,
   claimStatusSchema,
   claimTypeSchema,
@@ -17,10 +18,13 @@ import {
   researchChangeTypeSchema,
   researchCharterSchema,
   researchDecisionSchema,
+  researchEntityRefSchema,
   researchProjectSchema,
   researchQuestionSchema,
   researchRelationTypeSchema,
   researchEntityTypeSchema,
+  researchReviewMarkSchema,
+  reviewMarkStatusSchema,
   timelineEventSchema,
 } from './research';
 
@@ -60,6 +64,41 @@ export const charterResponseSchema = z.object({
   charter: researchCharterSchema.nullable(),
 });
 export type CharterResponse = z.infer<typeof charterResponseSchema>;
+
+// --- approved baselines and review marks (R06 / R03) ---------------------------------
+
+export const approveCharterRequestSchema = z.object({
+  revisionReason: z.string().min(1).max(2000),
+  decisionId: z.string().nullable().optional(),
+  /**
+   * 这次修订动到了哪些对象。批准必须带上理由，而「动到了什么」由调用方点名 —— domain 逐个证明它
+   * 属于本项目，不替用户猜哪些论点受影响（猜出来的范围会变成一个没人同意的偏移规则）。
+   */
+  affectedEntities: z.array(researchEntityRefSchema).max(200).optional(),
+});
+export type ApproveCharterRequest = z.infer<typeof approveCharterRequestSchema>;
+
+export const charterVersionListResponseSchema = z.object({
+  versions: z.array(charterVersionSchema),
+});
+export type CharterVersionListResponse = z.infer<typeof charterVersionListResponseSchema>;
+
+export const charterBaselineResponseSchema = z.object({
+  baseline: charterVersionSchema.nullable(),
+});
+export type CharterBaselineResponse = z.infer<typeof charterBaselineResponseSchema>;
+
+export const reviewMarkListQuerySchema = z.object({
+  status: reviewMarkStatusSchema.optional(),
+  entityType: researchEntityTypeSchema.optional(),
+  entityId: z.string().min(1).optional(),
+});
+export type ReviewMarkListQuery = z.infer<typeof reviewMarkListQuerySchema>;
+
+export const reviewMarkListResponseSchema = z.object({
+  marks: z.array(researchReviewMarkSchema),
+});
+export type ReviewMarkListResponse = z.infer<typeof reviewMarkListResponseSchema>;
 
 // --- questions -------------------------------------------------------------
 
