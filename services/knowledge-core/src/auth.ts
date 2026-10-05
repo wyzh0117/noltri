@@ -3,7 +3,10 @@
  *
  * Identity comes from the credential on the request and never from a body or query field: a client
  * that could name its own userId could read another user's library, so `userId` is only ever produced
- * here. Three modes, in order of trust:
+ * here. Four modes, in order of trust:
+ *   0. NOLTRI_GRANT_FILE configured -> a bearer that matches a live 本地客户端授权 grant resolves to
+ *      that grant's identity and carries the grant along, which is what makes per-client scopes and
+ *      revocation checkable on every request (see `authorization.ts`). Anything else falls through.
  *   1. SUPABASE_URL configured  -> verify the bearer JWT against `${SUPABASE_URL}/auth/v1/user`,
  *                                 cached per token for ~60s so one turn does not become N calls.
  *   2. NOLTRI_DEV_REQUIRE_TOKEN -> require the NOLTRI_DEV_TOKEN bearer (single-user local/dev).
@@ -12,15 +15,24 @@
  */
 import { knowledgeError, type Logger } from '@noltri/shared';
 import type { CoreConfig } from './config';
+import type { ClientGrant } from './authorization';
 
-export type IdentityVia = 'supabase' | 'dev-token' | 'dev-open';
+export type IdentityVia = 'supabase' | 'dev-token' | 'dev-open' | 'grant';
 
 export interface Identity {
   readonly userId: string;
   /** Written into VersionRecord.actor. */
   readonly actor: string;
   readonly via: IdentityVia;
+  /**
+   * Set only when the bearer resolved through a grant. Scope enforcement reads it and nothing else,
+   * so a legacy single-credential request is unaffected rather than silently denied.
+   */
+  readonly grant?: ClientGrant;
 }
+
+/** The seam `RouterDeps` accepts, so `authorization.ts` and `resolveIdentity` are interchangeable. */
+export type IdentityResolver = (request: Request, config: CoreConfig, logger?: Logger) => Promise<Identity>;
 
 interface CacheEntry {
   readonly userId: string;

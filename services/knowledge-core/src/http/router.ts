@@ -28,8 +28,8 @@ import {
 } from '@noltri/schema';
 import { asKnowledgeError, createId, errorResponseBody, knowledgeError, type Logger } from '@noltri/shared';
 import type { CoreConfig } from '../config';
-import type { Identity } from '../auth';
-import { resolveIdentity as defaultResolveIdentity } from '../auth';
+import { resolveIdentity as defaultResolveIdentity, type IdentityResolver } from '../auth';
+import { requireNodeAccess, requireScope } from '../authorization';
 import type { KnowledgeCore } from '../core';
 
 export type RequestHandler = (request: Request) => Promise<Response>;
@@ -39,7 +39,7 @@ export interface RouterDeps {
   config: CoreConfig;
   logger?: Logger;
   /** Injectable so a host with its own auth can swap the strategy; identity still never comes from the body. */
-  identityResolver?: (request: Request, config: CoreConfig, logger?: Logger) => Promise<Identity>;
+  identityResolver?: IdentityResolver;
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
@@ -154,6 +154,7 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
       const payload = await dispatch({
         route: route.segments,
         segments,
+        method,
         url,
         request,
         core,
@@ -188,16 +189,18 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
 interface DispatchArgs {
   route: readonly string[];
   segments: readonly string[];
+  /** Uppercased HTTP verb, already matched against ROUTES; scope checks key on method + path. */
+  method: string;
   url: URL;
   request: Request;
   core: KnowledgeCore;
   config: CoreConfig;
-  resolve: (request: Request, config: CoreConfig, logger?: Logger) => Promise<Identity>;
+  resolve: IdentityResolver;
   cors: Record<string, string>;
 }
 
 async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
-  const { route, segments, url, request, core, config, resolve, cors } = args;
+  const { route, segments, method, url, request, core, config, resolve, cors } = args;
   const path = route.join('/');
 
   // Health is the one public endpoint: platforms probe it before any credential exists.
@@ -206,23 +209,32 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
   }
 
   const identity = await resolve(request, config);
+  const grant = identity.grant;
+  // Cheap rejection before any body is read: the credential decides what this client may do at all.
+  requireScope(grant, method, path);
   const actor = { userId: identity.userId, actor: identity.actor };
 
   switch (path) {
     case 'api/capture': {
+      // 自动归类 picks the node, so a client limited to specific projects cannot capture: it would write
+      // wherever the classifier decided. It files through the inbox or gets a 全部项目 grant instead.
+      requireNodeAccess(grant, null, '自动归类写入');
       const payload = parseWith(captureRequestSchema, await readJsonBody(request), 'capture');
       return json(200, await core.capture(payload satisfies CaptureRequest, actor), cors);
     }
     case 'api/tree': {
       const query = parseWith(treeQuerySchema, Object.fromEntries(url.searchParams), 'tree query');
+      requireNodeAccess(grant, query.rootId ?? null, '整棵知识树');
       return json(200, await core.getTree(query satisfies TreeQuery, actor), cors);
     }
     case 'api/inbox': {
       const query = parseWith(inboxQuerySchema, Object.fromEntries(url.searchParams), 'inbox query');
+      requireNodeAccess(grant, null, '收件箱列表');
       return json(200, await core.listInbox(query satisfies InboxQuery, actor), cors);
     }
     case 'api/inbox/:id': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      requireNodeAccess(grant, null, '收件箱原文');
       const source = await core.readRawSource(id, actor);
       if (source === null) throw knowledgeError('not_found', `原文 ${id} 不存在 / raw source not found`);
       return json(200, source, cors);
@@ -230,10 +242,12 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
     case 'api/inbox/:id/assign': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
       const body = parseWith(assignSourceRequestSchema, await readJsonBody(request), 'assign source');
+      requireNodeAccess(grant, body.nodeId, '归档目标项目');
       return json(200, await core.assignSource(id, body satisfies AssignSourceRequest, actor), cors);
     }
     case 'api/nodes/:id': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      requireNodeAccess(grant, id, '节点');
       if (request.method.toUpperCase() === 'GET') {
         return json(200, await core.getNodeDetail(id, actor), cors);
       }
@@ -243,30 +257,42 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
     case 'api/nodes/:id/move': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
       const body = parseWith(moveNodeRequestSchema, await readJsonBody(request), 'move node');
+      requireNodeAccess(grant, id, '被移动的节点');
+      // Both ends of a move have to be inside the grant: reparenting out of an authorised project is a
+      // write to the project it lands in.
+      requireNodeAccess(grant, body.targetParentId, '移动目标项目');
       return json(200, await core.moveNode(id, body satisfies MoveNodeRequest, actor), cors);
     }
     case 'api/search': {
       const body = parseWith(searchRequestSchema, await readJsonBody(request), 'search');
+      requireNodeAccess(grant, body.scopeNodeId ?? null, '全库检索');
       return json(200, await core.search(body satisfies SearchRequest, actor), cors);
     }
     case 'api/node-context': {
       const body = parseWith(nodeContextRequestSchema, await readJsonBody(request), 'node context');
+      requireNodeAccess(grant, body.nodeId, '上下文范围');
       return json(200, await core.buildNodeContext(body satisfies NodeContextRequest, actor), cors);
     }
     case 'api/chat': {
       const body = parseWith(nodeChatRequestSchema, await readJsonBody(request), 'chat');
+      requireNodeAccess(grant, body.nodeId, '对话节点');
       return json(200, await core.chat(body satisfies NodeChatRequest, actor), cors);
     }
     case 'api/conversations': {
       const nodeId = url.searchParams.get('nodeId') ?? undefined;
+      requireNodeAccess(grant, nodeId ?? null, '会话列表');
       return json(200, { conversations: await core.listConversations(actor, nodeId) }, cors);
     }
     case 'api/conversations/:id/messages': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
-      return json(200, { messages: await core.listConversationMessages(id, actor) }, cors);
+      const messages = await core.listConversationMessages(id, actor);
+      // A conversation is not addressable by project in its URL, so the rows themselves decide.
+      for (const message of messages) requireNodeAccess(grant, message.contextNodeId, '会话记录');
+      return json(200, { messages }, cors);
     }
     case 'api/capture/:id/retry': {
       const rawSourceId = decodeURIComponent(paramAt(route, segments, 'id'));
+      requireNodeAccess(grant, null, '重跑采集归类');
       return json(200, await core.retryCapture(rawSourceId, actor), cors);
     }
     default:

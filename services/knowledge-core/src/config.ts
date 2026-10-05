@@ -45,6 +45,8 @@ export const CORE_DEFAULTS = {
   /** Relative file names are always resolved against this, never against the current directory. */
   dataDirname: '.noltri',
   sqliteFilename: 'noltri.sqlite',
+  /** Default home of the 本地客户端授权 store, under the same data directory as the profile database. */
+  grantFilename: 'grants.json',
 } as const;
 
 /**
@@ -65,6 +67,19 @@ export function resolveSqliteFile(env: EnvSource = currentEnv()): string {
     'data',
     CORE_DEFAULTS.sqliteFilename,
   );
+}
+
+/**
+ * The 本地客户端授权 store path: an explicit file, then `NOLTRI_DATA_DIR/grants.json` so a desktop profile
+ * finds its grants beside its database, then empty = the feature stays off for hosts that never opted in.
+ */
+export function resolveGrantFile(env: EnvSource = currentEnv()): string {
+  const absolute = (value: string): string => (path.isAbsolute(value) ? value : path.resolve(value));
+  const direct = envString(env, 'NOLTRI_GRANT_FILE');
+  if (direct.length > 0) return absolute(direct);
+  const dataDir = envString(env, 'NOLTRI_DATA_DIR');
+  if (dataDir.length > 0) return path.join(absolute(dataDir), CORE_DEFAULTS.grantFilename);
+  return '';
 }
 
 export interface CoreConfig {
@@ -93,6 +108,11 @@ export interface CoreConfig {
   readonly supabaseAnonKey: string;
   /** Absolute path of the local profile database, whichever driver is configured. */
   readonly sqliteFile: string;
+  /**
+   * Where 本地客户端授权 grants live (`NOLTRI_GRANT_FILE`). Empty keeps today's single-credential
+   * behaviour: grants are opt-in per deployment, so no existing host is locked out by this change.
+   */
+  readonly grantFile: string;
 }
 
 const positive = (value: number, fallback: number): number =>
@@ -137,5 +157,6 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
     supabaseUrl: envString(env, 'SUPABASE_URL'),
     supabaseAnonKey: envString(env, 'SUPABASE_ANON_KEY'),
     sqliteFile: storage.sqliteFile ?? '',
+    grantFile: resolveGrantFile(env),
   };
 }
