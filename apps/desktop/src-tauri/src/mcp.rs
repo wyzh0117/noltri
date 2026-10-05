@@ -342,6 +342,9 @@ pub fn read_text(path: &str, max_bytes: usize) -> Result<Option<String>, String>
 
 /// Atomic write (temp + rename) after the allowlist check. The caller in the UI has already shown
 /// the absolute path and asked for confirmation; nothing here can invent a destination.
+///
+/// The old file is copied to a timestamped backup *before* the rename, and a backup that cannot be
+/// made aborts the write: an undo that silently failed is not an undo (M01 requires 修改前备份).
 pub fn write_text_atomically(path: &str, contents: &str) -> Result<PathBuf, String> {
     let candidate = Path::new(path);
     let file_name = candidate
@@ -363,13 +366,107 @@ pub fn write_text_atomically(path: &str, contents: &str) -> Result<PathBuf, Stri
     }
     let tmp = parent.join(format!(".{}.noltri.tmp", file_name));
     fs::write(&tmp, contents).map_err(|error| format!("临时文件写入失败：{error}"))?;
-    // Backup once, so a bad merge is always undoable by hand.
     if candidate.is_file() {
-        let backup = parent.join(format!("{file_name}.noltri-backup"));
-        let _ = fs::copy(candidate, backup);
+        if let Err(error) = backup_existing(candidate) {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("备份失败，已取消写入：{error}"));
+        }
     }
     fs::rename(&tmp, candidate).map_err(|error| format!("替换配置文件失败：{error}"))?;
     Ok(candidate.to_path_buf())
+}
+
+/// Copy the file that is about to be replaced to a fresh, never-used backup name.
+///
+/// The stamp is millisecond-resolution and the name is only returned once it is free: two writes in
+/// quick succession must not destroy the first backup, because the UI offers both as undo points.
+fn backup_existing(candidate: &Path) -> Result<PathBuf, String> {
+    let file_name = candidate
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无法解析文件名".to_string())?;
+    let parent = candidate.parent().ok_or("缺少父目录".to_string())?;
+    let mut stamp = timestamp();
+    loop {
+        let candidate_backup = parent.join(format!("{file_name}.noltri-backup.{stamp}"));
+        if !candidate_backup.exists() {
+            fs::copy(candidate, &candidate_backup)
+                .map_err(|error| format!("{error}（{candidate:?} → {candidate_backup:?}）"))?;
+            return Ok(candidate_backup);
+        }
+        stamp += 1;
+    }
+}
+
+/// Milliseconds since the epoch: coarse enough for a human reading a list of undo points, fine
+/// enough that successive writes never share a name.
+fn timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Backups this app made for `path`, newest first. Only ever lists this app's own suffix, so a user's
+/// hand-made `*.bak` files are not offered as if we owned them.
+pub fn list_backups(path: &str) -> Result<Vec<Backup>, String> {
+    let candidate = Path::new(path);
+    let file_name = candidate
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无法解析文件名".to_string())?;
+    let parent = candidate.parent().ok_or("缺少父目录".to_string())?;
+    if !parent.is_dir() {
+        return Ok(Vec::new());
+    }
+    let prefix = format!("{file_name}.noltri-backup.");
+    let mut found: Vec<Backup> = Vec::new();
+    let entries = fs::read_dir(parent).map_err(|error| error.to_string())?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(stamp) = name.strip_prefix(prefix.as_str()) else { continue };
+        let Ok(made_at) = stamp.parse::<u64>() else { continue };
+        found.push(Backup {
+            file: parent.join(name).to_string_lossy().to_string(),
+            made_at,
+            bytes: entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+        });
+    }
+    found.sort_by(|left, right| right.made_at.cmp(&left.made_at));
+    Ok(found)
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Backup {
+    pub file: String,
+    pub made_at: u64,
+    pub bytes: u64,
+}
+
+/// Put one backup's bytes back where they came from. The current file is still backed up first, so a
+/// mistaken restore is itself undoable.
+///
+/// Two refusals keep this from becoming a general file-copy command: the source must be a backup this
+/// app created (`list_backups` only ever returns those), and it must sit next to the file it restores.
+pub fn restore_backup(target_path: &str, backup_file: &str) -> Result<PathBuf, String> {
+    let target = Path::new(target_path);
+    let source = Path::new(backup_file);
+    if !source.is_file() {
+        return Err("备份文件不存在".to_string());
+    }
+    let source_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("无法解析备份文件名".to_string())?;
+    if !source_name.contains(".noltri-backup.") {
+        return Err("只恢复由本应用创建的备份".to_string());
+    }
+    if source.parent() != target.parent() {
+        return Err("备份文件必须与要恢复的配置文件在同一目录".to_string());
+    }
+    let contents = fs::read_to_string(source).map_err(|error| format!("读取备份失败：{error}"))?;
+    write_text_atomically(target_path, &contents)
 }
 
 /// Open a URL / file with the system default handler. `open` is the official macOS entry point;
@@ -392,6 +489,8 @@ pub fn open_with_system(url: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     fn fake_finder(name: &'static str) -> impl Fn(Target) -> Vec<PathBuf> {
@@ -503,5 +602,114 @@ mod tests {
             assert_eq!(Target::from_key(target.key()), Some(target), "{}", target.key());
         }
         assert_eq!(Target::ALL.len(), 7);
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("noltri-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// M01: the bytes that are about to be replaced are on disk in a restorable copy first.
+    #[test]
+    fn a_write_backs_up_the_old_bytes_before_replacing_them() {
+        let dir = scratch_dir("backup");
+        let path = dir.join("claude_desktop_config.json");
+        let old = r#"{"mcpServers":{"other":{}}}"#;
+        write_text_atomically(path.to_str().unwrap(), old).unwrap();
+        assert!(list_backups(path.to_str().unwrap()).unwrap().is_empty());
+
+        write_text_atomically(path.to_str().unwrap(), r#"{"mcpServers":{"other":{},"noltri":{}}}"#).unwrap();
+        let backups = list_backups(path.to_str().unwrap()).unwrap();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read_to_string(&backups[0].file).unwrap(), old);
+        assert_eq!(backups[0].bytes, old.len() as u64);
+        assert!(backups[0].file.contains(".noltri-backup."));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Two writes in the same millisecond must not collapse into one undo point.
+    #[test]
+    fn successive_writes_keep_their_own_backup_and_list_newest_first() {
+        let dir = scratch_dir("multi");
+        let path = dir.join("claude_desktop_config.json");
+        let text = path.to_str().unwrap();
+        write_text_atomically(text, "first").unwrap();
+        write_text_atomically(text, "second").unwrap();
+        write_text_atomically(text, "third").unwrap();
+        let backups = list_backups(text).unwrap();
+        assert_eq!(backups.len(), 2);
+        assert!(backups[0].made_at >= backups[1].made_at);
+        assert_ne!(backups[0].file, backups[1].file);
+        assert_eq!(fs::read_to_string(&backups[0].file).unwrap(), "second");
+        assert_eq!(fs::read_to_string(&backups[1].file).unwrap(), "first");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_puts_the_old_bytes_back_and_is_itself_undoable() {
+        let dir = scratch_dir("restore");
+        let path = dir.join("claude_desktop_config.json");
+        let text = path.to_str().unwrap();
+        write_text_atomically(text, r#"{"before":true}"#).unwrap();
+        write_text_atomically(text, r#"{"after":true}"#).unwrap();
+        let backup = list_backups(text).unwrap().remove(0).file;
+        restore_backup(text, &backup).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"before":true}"#);
+        // Restoring wrote a backup of the replaced version too, so the mistake can be undone.
+        assert_eq!(list_backups(text).unwrap().len(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_refuses_files_this_app_does_not_own() {
+        let dir = scratch_dir("refuse");
+        let path = dir.join("claude_desktop_config.json");
+        let text = path.to_str().unwrap();
+        write_text_atomically(text, r#"{"mine":true}"#).unwrap();
+
+        let foreign = dir.join("claude_desktop_config.json.user-hand-made");
+        fs::write(&foreign, "not ours").unwrap();
+        let error = restore_backup(text, foreign.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("只恢复由本应用创建的备份"), "{error}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"mine":true}"#);
+
+        let missing = dir.join("gone.noltri-backup.1");
+        let error = restore_backup(text, missing.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("备份文件不存在"), "{error}");
+
+        // Same suffix, different directory: not something list_backups could ever have returned.
+        let elsewhere = scratch_dir("elsewhere");
+        let stray = elsewhere.join("claude_desktop_config.json.noltri-backup.123");
+        fs::write(&stray, "elsewhere").unwrap();
+        let error = restore_backup(text, stray.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("同一目录"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    /// The abort is the point: an undo that silently failed is not an undo, so the config must keep
+    /// its old bytes and leave no half-written file behind.
+    #[test]
+    fn a_failed_backup_aborts_the_write() {
+        let dir = scratch_dir("abort");
+        let path = dir.join("claude_desktop_config.json");
+        let text = path.to_str().unwrap();
+        write_text_atomically(text, "old contents").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_to_string(&path).is_ok() {
+            // Running as root: unreadable is not enforceable here, so there is nothing to prove.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let error = write_text_atomically(text, "new contents").unwrap_err();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(error.contains("备份失败，已取消写入"), "{error}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old contents");
+        assert!(!dir.join(".claude_desktop_config.json.noltri.tmp").exists());
+        assert!(list_backups(text).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

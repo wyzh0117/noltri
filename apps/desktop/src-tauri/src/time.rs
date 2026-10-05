@@ -26,6 +26,15 @@ fn format_iso(millis: i64) -> String {
     )
 }
 
+/// A readable label for an epoch-millisecond stamp — backup file names carry raw millis, which nobody
+/// can compare. Marked UTC because this module has no local-offset information to offer.
+pub fn clock_label(millis: u64) -> String {
+    let iso = format_iso(millis as i64);
+    let (date, rest) = iso.split_once('T').unwrap_or((iso.as_str(), ""));
+    let time = rest.get(..8).unwrap_or(rest);
+    format!("{date} {time} UTC")
+}
+
 /// Howard Hinnant's `civil_from_days` — public-domain algorithm, no dependencies.
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
@@ -57,5 +66,12 @@ mod tests {
         let value = now_iso();
         assert_eq!(value.len(), 24, "unexpected shape: {value}");
         assert!(value.ends_with('Z'));
+    }
+
+    /// Backup names carry raw epoch millis; this is the only part a user can actually read.
+    #[test]
+    fn clock_labels_a_millisecond_stamp_in_utc() {
+        assert_eq!(clock_label(0), "1970-01-01 00:00:00 UTC");
+        assert_eq!(clock_label(1_700_000_000_000), "2023-11-14 22:13:20 UTC");
     }
 }
