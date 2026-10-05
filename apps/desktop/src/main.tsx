@@ -701,7 +701,6 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
             </div>
           )}
           {conflict !== null && <p className="status-bad">{conflict}</p>}
-          {snippetChoice.error !== null && <p className="status-bad">{snippetChoice.error}</p>}
         </div>
       )}
       {facts !== null && (
