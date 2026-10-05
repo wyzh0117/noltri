@@ -21,6 +21,7 @@ import {
   nodeContextSchema,
   nodeDetailSchema,
   patchNodeRequestSchema,
+  RETRYABLE_ERROR_CODES,
   searchRequestSchema,
   searchResponseSchema,
   treeResponseSchema,
@@ -230,7 +231,14 @@ export async function startFakeCore(options: FakeCoreOptions = {}): Promise<Fake
           ? { status: error.status, code: error.code, message: error.message }
           : { status: 500, code: 'internal_error', message: error instanceof Error ? error.message : 'fake core failed' };
       send(response, failure.status >= 400 ? failure.status : 500, {
-        error: { code: failure.code, message: failure.message },
+        // The same table the real Core reads, so a client test cannot pass on an envelope the server
+        // would never send.
+        error: {
+          code: failure.code,
+          message: failure.message,
+          retryable: (RETRYABLE_ERROR_CODES as ReadonlySet<string>).has(failure.code),
+          traceId: 'fake-core-trace',
+        },
       });
     });
   });
@@ -242,7 +250,7 @@ export async function startFakeCore(options: FakeCoreOptions = {}): Promise<Fake
 
     if (options.requiredToken !== undefined && options.requiredToken.length > 0) {
       if (lastAuthorization !== `Bearer ${options.requiredToken}`) {
-        send(response, 401, { error: { code: 'unauthorized', message: 'Missing or wrong bearer token' } });
+        send(response, 401, { error: { code: 'unauthorized', message: 'Missing or wrong bearer token', retryable: false } });
         return;
       }
     }
@@ -252,6 +260,9 @@ export async function startFakeCore(options: FakeCoreOptions = {}): Promise<Fake
     if (method === 'GET' && url.pathname === '/api/health') {
       const payload: HealthResponse = {
         status: 'ok',
+        productId: 'noltri-knowledge-core',
+        instanceId: 'fake-instance-0001',
+        protocolVersion: '1',
         version: '0.1.0-fake',
         storageDriver: 'memory',
         storage: { driver: 'memory', ok: true, detail: { volatile: true, knowledgeItems: 0 } },
@@ -298,7 +309,7 @@ export async function startFakeCore(options: FakeCoreOptions = {}): Promise<Fake
           const parent = searchNode(parentId);
           // A cycle appears when the new parent is the node itself or one of its own descendants.
           if (target.id === parent.id || subtreeIds(target.id).includes(parent.id)) {
-            send(response, 409, { error: { code: 'conflict', message: 'Move would create a cycle' } });
+            send(response, 409, { error: { code: 'conflict', message: 'Move would create a cycle', retryable: false } });
             return;
           }
         }
@@ -339,7 +350,7 @@ export async function startFakeCore(options: FakeCoreOptions = {}): Promise<Fake
       return;
     }
 
-    send(response, 404, { error: { code: 'not_found', message: `No fake route for ${method} ${url.pathname}` } });
+    send(response, 404, { error: { code: 'not_found', message: `No fake route for ${method} ${url.pathname}`, retryable: false } });
   }
 
   function searchNode(id: string): KnowledgeNode {
@@ -511,6 +522,9 @@ export async function startFakeCore(options: FakeCoreOptions = {}): Promise<Fake
     });
     return {
       rawSourceId: 'source-book',
+      requestId: body.requestId,
+      stage: 'completed',
+      duplicate: false,
       items: [
         {
           knowledgeItemId: id,
@@ -606,6 +620,7 @@ function sendValid(response: ServerResponse, schema: SchemaLike, payload: unknow
       error: {
         code: 'internal_error',
         message: `Fake core broke the shared contract: ${parsed.error?.issues.map((issue) => issue.message).join('; ') ?? 'unknown'}`,
+        retryable: true,
       },
     });
     return;

@@ -68,6 +68,9 @@ const fixtureSource: NodeSourceSummary = {
 
 export const fixtureCaptureResult: CaptureResult = {
   rawSourceId: 'raw-0001',
+  requestId: 'req-mcp-fixture-0001',
+  stage: 'completed',
+  duplicate: false,
   processingStatus: 'done',
   items: [
     {
@@ -199,6 +202,9 @@ export const fixtureContext: NodeContext = {
 
 export const fixtureHealth: HealthResponse = {
   status: 'ok',
+  productId: 'noltri-knowledge-core',
+  instanceId: 'fake-instance-0001',
+  protocolVersion: '1',
   version: '0.1.0-fake',
   storageDriver: 'memory',
   storage: { driver: 'memory', ok: true, detail: { volatile: true, knowledgeItems: 0 } },
@@ -265,7 +271,7 @@ export async function startFakeKnowledgeCore(options: FakeCoreOptions = {}): Pro
       if (nodeMatch && req.method === 'GET') {
         const id = decodeURIComponent(nodeMatch[1] ?? '');
         if (id === 'missing-node') {
-          return json(res, 404, { error: { code: 'not_found', message: '节点不存在' } });
+          return json(res, 404, { error: { code: 'not_found', message: '节点不存在', retryable: false, traceId: 'fake-trace-404' } });
         }
         return json(res, 200, { ...fixtureNodeDetail, node: { ...fixtureNode, id } });
       }
@@ -285,15 +291,29 @@ export async function startFakeKnowledgeCore(options: FakeCoreOptions = {}): Pro
         const id = decodeURIComponent(moveMatch[1] ?? '');
         if (options.moveConflict === true) {
           return json(res, 409, {
-            error: { code: 'conflict', message: '目标父节点会成为当前节点的子孙，移动会形成循环', details: { nodeId: id } },
+            error: {
+              code: 'conflict',
+              message: '目标父节点会成为当前节点的子孙，移动会形成循环',
+              retryable: false,
+              traceId: 'fake-trace-409',
+              details: { nodeId: id },
+            },
           });
         }
         return json(res, 200, { ...fixtureMove, node: { ...fixtureNode, id } });
       }
 
-      return json(res, 404, { error: { code: 'not_found', message: `Unknown route ${String(req.method)} ${url.pathname}` } });
+      return json(res, 404, {
+        error: { code: 'not_found', message: `Unknown route ${String(req.method)} ${url.pathname}`, retryable: false },
+      });
     })().catch((error: unknown) => {
-      json(res, 500, { error: { code: 'internal_error', message: error instanceof Error ? error.message : 'fake core failed' } });
+      json(res, 500, {
+        error: {
+          code: 'internal_error',
+          message: error instanceof Error ? error.message : 'fake core failed',
+          retryable: true,
+        },
+      });
     });
   });
 

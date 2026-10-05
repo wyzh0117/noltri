@@ -410,6 +410,9 @@ describe('顶栏连接状态说得诚实', () => {
     const html = bar(
       {
         status: 'ok',
+        productId: 'noltri-knowledge-core',
+        instanceId: 'instance-under-test',
+        protocolVersion: '1',
         version: '0.1.0',
         storageDriver: 'sqlite',
         storage: { driver: 'sqlite', ok: true, detail: { journalMode: 'wal', rawSources: 3 } },
@@ -429,6 +432,9 @@ describe('顶栏连接状态说得诚实', () => {
     const html = bar(
       {
         status: 'degraded',
+        productId: 'noltri-knowledge-core',
+        instanceId: 'instance-under-test',
+        protocolVersion: '1',
         version: '0.1.0',
         storageDriver: 'sqlite',
         storage: { driver: 'sqlite', ok: false, detail: { reason: 'disk full' } },

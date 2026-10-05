@@ -59,6 +59,9 @@ describe('desktop capture request contract', () => {
         res.end(
           JSON.stringify({
             rawSourceId: 'raw-1',
+            requestId: 'req-desktop-contract-00',
+            stage: 'failed',
+            duplicate: false,
             items: [],
             processingStatus: 'failed',
             errorReason: 'provider 超时',
@@ -101,6 +104,9 @@ describe('desktop capture request contract', () => {
           res.end(
             JSON.stringify({
               rawSourceId: 'raw-2',
+              requestId: 'req-desktop-contract-01',
+              stage: 'completed',
+              duplicate: false,
               processingStatus: 'done',
               items: [
                 {
