@@ -29,7 +29,14 @@ import {
 import { SQLITE_DDL_V3, SQLITE_MIGRATIONS, SQLITE_SCHEMA_VERSION, openSqlite } from '../src/sqlite-schema';
 import { SqliteRepository } from '../src/sqlite';
 import { SqliteResearchRepository } from '../src/sqlite-research';
-import { createRepository, createResearchRepository } from '../src/index';
+import {
+  createRepository,
+  createResearchRepository,
+  supportsResearchDriver,
+  type RepositoryOptions,
+  type ResearchRepository,
+  type StorageDriverName,
+} from '../src/index';
 
 const directories: string[] = [];
 
@@ -303,6 +310,31 @@ describe('the research driver is chosen in one place', () => {
     await expect(createResearchRepository({ driver: 'postgres' as never })).rejects.toThrow(
       /Unknown storage driver/,
     );
+  });
+
+  /**
+   * A host asks this instead of comparing driver names itself, so the predicate cannot drift from the
+   * factory: for every driver the config can name, `true` has to mean "`createResearchRepository` hands
+   * something back" and `false` has to mean it refuses. Checked by calling both, not by reading a table.
+   */
+  it('answers supportsResearchDriver with the same verdict the factory gives', async () => {
+    const drivers: { driver: StorageDriverName; options: RepositoryOptions }[] = [
+      { driver: 'memory', options: { driver: 'memory' } },
+      { driver: 'sqlite', options: { driver: 'sqlite', sqliteFile: nextFile('predicate.sqlite') } },
+      { driver: 'supabase', options: { driver: 'supabase' } },
+    ];
+
+    for (const { driver, options } of drivers) {
+      let built: ResearchRepository | null = null;
+      try {
+        built = await createResearchRepository(options);
+      } catch {
+        built = null;
+      }
+      expect(supportsResearchDriver(driver)).toBe(built !== null);
+      const close = built === null ? undefined : Reflect.get(built, 'close');
+      if (typeof close === 'function') await (close as () => Promise<void>).call(built);
+    }
   });
 
   it('leaves the knowledge factory alone: research never changes how a driver is picked for it', async () => {

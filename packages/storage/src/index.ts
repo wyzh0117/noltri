@@ -50,6 +50,14 @@ export async function createRepository(options: RepositoryOptions): Promise<Know
 }
 
 /**
+ * Whether `createResearchRepository` can serve this driver. A host asks instead of comparing driver
+ * names itself, so the list of research drivers lives only in the file that implements them.
+ */
+export function supportsResearchDriver(driver: StorageDriverName): boolean {
+  return driver === 'memory' || driver === 'sqlite';
+}
+
+/**
  * The research half of the seam (Research V1): the same drivers and the same options object, so a
  * desktop profile hands one `sqliteFile` to both factories and the two repositories share the file —
  * WAL is what lets the second handle read while the first writes.

@@ -33,6 +33,7 @@ import type { KnowledgeCore } from '../core';
 import type { ActorContext } from '../types';
 import { handleAdminGrants } from './admin';
 import { parseWith, readJsonBody } from './parse';
+import { handleResearch } from './research';
 
 export type RequestHandler = (request: Request) => Promise<Response>;
 
@@ -74,6 +75,35 @@ const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'admin', 'grants'] },
   { method: 'POST', segments: ['api', 'admin', 'grants'] },
   { method: 'POST', segments: ['api', 'admin', 'grants', ':id', 'revoke'] },
+  // Research chain: 章程 → 研究问题 → 证据 → 论点 → 章节, plus 关系 / 决策 / 变更 / 时间线 (contract §1).
+  // Every shape carries at most one `:`-segment, which is what lets the router hand `research.ts` one id.
+  { method: 'GET', segments: ['api', 'research', 'projects'] },
+  { method: 'POST', segments: ['api', 'research', 'projects'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId'] },
+  { method: 'PATCH', segments: ['api', 'research', 'projects', ':projectId'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'charter'] },
+  { method: 'PUT', segments: ['api', 'research', 'projects', ':projectId', 'charter'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'questions'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'questions'] },
+  { method: 'PATCH', segments: ['api', 'research', 'questions', ':questionId'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'evidence'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'evidence'] },
+  { method: 'PATCH', segments: ['api', 'research', 'evidence', ':evidenceId'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'claims'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'claims'] },
+  { method: 'PATCH', segments: ['api', 'research', 'claims', ':claimId'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'sections'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'sections'] },
+  { method: 'PATCH', segments: ['api', 'research', 'sections', ':sectionId'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'relations'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'relations'] },
+  { method: 'DELETE', segments: ['api', 'research', 'relations', ':relationId'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'decisions'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'decisions'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'changes'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'changes'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'timeline'] },
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'timeline'] },
 ];
 
 function matchesShape(route: readonly string[], actual: readonly string[]): boolean {
@@ -92,7 +122,7 @@ function corsHeaders(config: CoreConfig, request: Request): Record<string, strin
   const origin = wildcard ? '*' : requested !== null && config.corsOrigin.split(',').includes(requested) ? requested : config.corsOrigin;
   const headers: Record<string, string> = {
     'access-control-allow-origin': origin,
-    'access-control-allow-methods': 'GET, POST, PATCH, OPTIONS',
+    'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'access-control-allow-headers': 'authorization, content-type, x-noltri-client',
     'access-control-max-age': '600',
   };
@@ -222,6 +252,26 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
         store: grants,
         ...(path === 'api/admin/grants/:id/revoke' ? { id: decodeURIComponent(paramAt(route, segments, 'id')) } : {}),
         body: method === 'POST' && path === 'api/admin/grants' ? await readJsonBody(request) : undefined,
+      }),
+      cors,
+    );
+  }
+
+  // Research runs through its own handler module. The scope check above is what keeps a granted client
+  // out of it: no `api/research/*` path has a SCOPE_BY_ACTION entry, so a grant is refused here with
+  // `route_not_granted` while the device credential the desktop workbench uses passes through.
+  if (path.startsWith('api/research')) {
+    const index = route.findIndex((segment) => segment.startsWith(':'));
+    return json(
+      200,
+      await handleResearch({
+        method,
+        path,
+        url,
+        request,
+        userId: actor.userId,
+        domain: core.research,
+        id: index < 0 ? '' : decodeURIComponent(segments[index] ?? ''),
       }),
       cors,
     );

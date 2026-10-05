@@ -8,11 +8,18 @@
 import type { AIProvider } from '@noltri/ai-provider';
 import { createProvider } from '@noltri/ai-provider';
 import { createLogger, currentEnv, type EnvSource, type Logger } from '@noltri/shared';
-import { createRepository, type KnowledgeRepository } from '@noltri/storage';
+import {
+  createRepository,
+  createResearchRepository,
+  supportsResearchDriver,
+  type KnowledgeRepository,
+  type ResearchRepository,
+} from '@noltri/storage';
 import { resolveIdentity } from '../auth';
 import { createGrantResolver, FileGrantStore, listGrants, type GrantStore } from '../authorization';
 import { loadCoreConfig, type CoreConfig } from '../config';
 import { createKnowledgeCore, type KnowledgeCore } from '../core';
+import { createResearchDomain, type ResearchDomain } from '../research';
 import { createRequestHandler, type RequestHandler, type RouterDeps } from './router';
 
 export interface CoreBundle {
@@ -24,6 +31,9 @@ export interface CoreBundle {
   readonly logger: Logger;
   /** The 本地客户端授权 store, or null when this deployment kept the single-credential behaviour. */
   readonly grants: GrantStore | null;
+  /** The Research half, or null when the configured storage driver has no research implementation. */
+  readonly researchRepository: ResearchRepository | null;
+  readonly research: ResearchDomain | null;
   /** Releases a Postgres pool when the driver owns one; the memory driver has nothing to close. */
   close(): Promise<void>;
 }
@@ -41,7 +51,22 @@ export async function buildHandler(
   const logger = options.logger ?? createLogger('knowledge-core', config.ai.driver === 'offline' ? 'info' : 'info');
   const repository = await createRepository(config.storage);
   const provider = createProvider(config.ai);
-  const core = createKnowledgeCore({ repository, provider, config, logger });
+
+  // Research keeps its own repository handle on the same profile file: WAL is what lets the second handle
+  // read while the first writes. A driver with no research implementation (the kept-alive cloud profile)
+  // leaves `research` unset, so the endpoints answer the honest research_not_wired refusal instead of
+  // pretending to hold an empty library — and the bundle still builds, because 网页版 lives until P7.
+  const researchRepository = supportsResearchDriver(config.storage.driver)
+    ? await createResearchRepository(config.storage)
+    : null;
+  const research = researchRepository === null ? null : createResearchDomain(researchRepository);
+  const core = createKnowledgeCore({
+    repository,
+    provider,
+    config,
+    logger,
+    ...(research === null ? {} : { research }),
+  });
 
   const grants = options.grantStore !== undefined ? options.grantStore : config.grantFile.length > 0 ? new FileGrantStore(config.grantFile) : null;
 
@@ -51,6 +76,7 @@ export async function buildHandler(
     embeddingDim: config.embeddingDim,
     attachThreshold: config.thresholds.similarityAttachThreshold,
     authorization: grants === null ? 'single-credential' : 'grants',
+    research: research === null ? 'not wired' : researchRepository?.driver ?? 'unknown',
   });
 
   const deps: RouterDeps = { core, config, logger, grants };
@@ -68,9 +94,14 @@ export async function buildHandler(
     config,
     logger,
     grants,
+    researchRepository,
+    research,
     close: async () => {
       const closable = repository as { close?: () => Promise<void> };
       if (typeof closable.close === 'function') await closable.close();
+      // Two handles, two closes: the research half holds its own WAL connection to the same file.
+      const closableResearch = researchRepository as { close?: () => Promise<void> } | null;
+      if (closableResearch !== null && typeof closableResearch.close === 'function') await closableResearch.close();
     },
   };
 }
@@ -91,6 +122,7 @@ export async function sharedHandler(env: EnvSource = currentEnv()): Promise<Requ
 }
 
 export { createRequestHandler, type RequestHandler, type RouterDeps } from './router';
+export type { ResearchDomain } from '../research';
 export { resolveIdentity, clearIdentityCache, bearerOf, type Identity, type IdentityResolver } from '../auth';
 export {
   FileGrantStore,
