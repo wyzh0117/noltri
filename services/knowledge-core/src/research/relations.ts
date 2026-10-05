@@ -1,13 +1,16 @@
 /**
  * Generic entity relations — one vocabulary for evidence↔claim, claim↔RQ, claim↔section… (§27).
  *
- * Contract §2 rules enforced here: both endpoints must exist inside the same project (otherwise
- * `invalid_request`, a dangling edge would corrupt the map), and re-creating an identical relation is
- * idempotent — the existing row is returned, never duplicated.
+ * Contract §2 rules enforced here: the pair must be one the vocabulary means (R02 — `RELATION_PAIRINGS`
+ * says `supports` joins an evidence to a claim, and a claim→evidence `supports` is a malformed edge, not
+ * a weaker statement); both endpoints must exist inside the same project (otherwise `invalid_request`, a
+ * dangling edge would corrupt the map); and re-creating an identical relation is idempotent — the existing
+ * row is returned, never duplicated.
  */
 import {
   createEntityRelationRequestSchema,
   relationListQuerySchema,
+  RELATION_PAIRINGS,
   type CreateEntityRelationRequest,
   type DeleteRelationResponse,
   type EntityRelation,
@@ -74,6 +77,19 @@ export async function createRelation(
 ): Promise<EntityRelation> {
   await requireProject(repo, projectId, userId);
   const request = validateRequest(createEntityRelationRequestSchema, body, 'create entity relation');
+
+  // Vocabulary before database reads: a pair the relation type cannot mean is a caller error whatever
+  // happens to exist in this project.
+  const pairing = RELATION_PAIRINGS[request.relationType];
+  if (!pairing.sourceTypes.includes(request.sourceType) || !pairing.targetTypes.includes(request.targetType)) {
+    throw knowledgeError(
+      'invalid_request',
+      `「${request.relationType}」只能连接 ${pairing.sourceTypes.join('/')} → ${pairing.targetTypes.join('/')}，`
+        + `收到的却是 ${request.sourceType} → ${request.targetType} / `
+        + `${request.relationType} cannot join ${request.sourceType} to ${request.targetType}`,
+      { relationType: request.relationType, sourceType: request.sourceType, targetType: request.targetType },
+    );
+  }
 
   for (const endpoint of [
     { type: request.sourceType, id: request.sourceId, label: 'source' },

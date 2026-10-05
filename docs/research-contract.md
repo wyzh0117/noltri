@@ -16,7 +16,9 @@
 3. **Decision / Change 是 append-only 历史对象**：没有 update / delete；变更用新增 Change 表达（开发文档 §13）。
 4. **领域逻辑是纯的**：`services/knowledge-core/src/research/**` 不 import UI 代码，core `src/` 里不出现
    `pg|@supabase/|openai|express` 等依赖 —— 由 `test/architecture-gate.test.ts` 机器检查。
-5. **Research 只新增、不改旧**：知识域 9 张表行为不变；`SQLITE_SCHEMA_VERSION = 3` 的 11 张 research 表是叠加的。
+5. **Research 只新增、不改旧**：知识域 9 张表行为不变；research 表随阶段叠加 —— V3 的 11 张是 P5-A 的领域对象，
+   V4 的 `research_charter_versions` / `research_review_marks` 是 P5-C 的批准基线与复核标记。
+   没有哪一版改掉了前向版本的列。
 
 ## 1 REST 契约（Knowledge Core，`/api/research/*`）
 
@@ -70,7 +72,11 @@
   `sourceType` + `sourceId` 指回来源对象，`occurredAt` = 该对象 `createdAt`）。
 - POST timeline 只用于 `milestone`（`sourceType='manual'`、`sourceId=null`）；`occurredAt` 解析不了就 `invalid_request`。
 - Timeline 按 `occurredAt` 倒序（新的在前）。
-- 创建 relation 时校验 `sourceId` / `targetId` 在**本项目内**存在且类型匹配，否则 `invalid_request`；
+- 创建 relation 时先查**配对表** `RELATION_PAIRINGS`（`packages/schema/src/research.ts`）：`supports` 一类
+  五种只能 `evidence → claim`，`answers` 只能 `claim → research_question`，`appears_in` 只能
+  `claim → manuscript_section`，`changes|affects` 只能由 decision/change 出发指向任意实体，`relates_to` 任意。
+  方向是含义的一部分：反过来的 `supports` 不是「弱一点的论断」，而是写错了的边（R02）。
+  再校验 `sourceId` / `targetId` 在**本项目内**存在，否则 `invalid_request`；
   `(sourceType, sourceId, relationType, targetType, targetId)` 五元组重复创建返回既有记录（幂等，不报错）。
 - 所有 list 只返回本项目 + 本用户数据；不属于该用户的 `projectId` 一律 `not_found`。
 - 时间统一 ISO-8601 UTC 字符串（`@noltri/shared` 的 `nowIso`）；ID 用同包的 `createId`。
@@ -171,7 +177,7 @@ docs/research-contract.md                              本文件
 | ID | 本轮口径 | 状态 |
 | --- | --- | --- |
 | R01 | 研究项目全流程 Charter→RQ→Evidence→Claim→Section 可建可读可修订 | P5-B（27 端点 + domain 测试） |
-| R02 | 五种证据关系可表示，反证与限定不被当作支持 | P5-B 表达 + P5-C 经 `SUPPORTING_RELATION_TYPES` 强制 |
+| R02 | 五种证据关系可表示，反证与限定不被当作支持 | ✅ P5-C1：`RELATION_PAIRINGS` 钉住方向，domain 与 schema 两侧有测试 |
 | R03 | 来源删除／修改／合并安全，原始版本与复核提示可追溯 | P5-C |
 | R06 | 批准章程修订：历史保留、影响对象被标记、后续检查绑定新基线 | P5-C |
 | R08 | 重启／导出恢复后关系完整 | P5-E（sqlite 往返） |

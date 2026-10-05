@@ -126,6 +126,46 @@ export const EVIDENCE_TO_CLAIM_RELATION_TYPES: readonly ResearchRelationType[] =
   'contextualizes',
 ];
 
+/** Which endpoint types one relation kind may join. */
+export interface RelationPairing {
+  readonly sourceTypes: readonly ResearchEntityType[];
+  readonly targetTypes: readonly ResearchEntityType[];
+}
+
+/**
+ * R02 的另一半：关系类型的方向属于它的含义，不是调用方的自由裁量。`supports` 读作「证据支撑论点」，
+ * 反向的一条边不是弱一点的论断而是写错了的边；`answers`、`appears_in` 同理。开发文档 §13「证据作用类型」
+ * 只规定了五种证据关系，其余方向的约束由研究地图的读法反推：地图按 RQ → Evidence → Claim → Section 走，
+ * 一条 claim→evidence 的 supports 会让那条路径走向反了。
+ *
+ * Frozen because the same arrays are the domain's rejection messages and zod's own enum options: a
+ * consumer that sorted one in place would quietly change what every client is allowed to write.
+ */
+const RESEARCH_ENTITY_TYPES: readonly ResearchEntityType[] = Object.freeze([...researchEntityTypeSchema.options]);
+
+const EVIDENCE_TO_CLAIM: RelationPairing = Object.freeze({
+  sourceTypes: Object.freeze(['evidence'] as const),
+  targetTypes: Object.freeze(['claim'] as const),
+});
+
+const DECISION_TO_ANY: RelationPairing = Object.freeze({
+  sourceTypes: Object.freeze(['research_decision', 'research_change'] as const),
+  targetTypes: RESEARCH_ENTITY_TYPES,
+});
+
+export const RELATION_PAIRINGS: Readonly<Record<ResearchRelationType, RelationPairing>> = Object.freeze({
+  supports: EVIDENCE_TO_CLAIM,
+  partially_supports: EVIDENCE_TO_CLAIM,
+  contradicts: EVIDENCE_TO_CLAIM,
+  qualifies: EVIDENCE_TO_CLAIM,
+  contextualizes: EVIDENCE_TO_CLAIM,
+  answers: Object.freeze({ sourceTypes: ['claim'], targetTypes: ['research_question'] } as const),
+  appears_in: Object.freeze({ sourceTypes: ['claim'], targetTypes: ['manuscript_section'] } as const),
+  changes: DECISION_TO_ANY,
+  affects: DECISION_TO_ANY,
+  relates_to: Object.freeze({ sourceTypes: RESEARCH_ENTITY_TYPES, targetTypes: RESEARCH_ENTITY_TYPES } as const),
+});
+
 export const timelineEventTypeSchema = z.enum(['decision', 'change', 'milestone']);
 export type TimelineEventType = z.infer<typeof timelineEventTypeSchema>;
 

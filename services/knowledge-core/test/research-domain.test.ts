@@ -200,6 +200,81 @@ describe('relations', () => {
     );
   });
 
+  it('refuses a pair the relation type cannot mean, even between two real entities', async () => {
+    const domain = harness();
+    const projectId = await seededProject(domain);
+    const evidence = await domain.createEvidence(projectId, USER, { type: 'literature', title: 'E1' });
+    const claim = await domain.createClaim(projectId, USER, {
+      claimCode: 'C1',
+      claimText: 'x',
+      claimType: 'empirical',
+    });
+    const question = await domain.createQuestion(projectId, USER, { questionCode: 'RQ1', questionText: 'q' });
+
+    // R02: the endpoints are both in this project, so existence cannot excuse the direction.
+    await expectCode(
+      domain.createRelation(projectId, USER, {
+        sourceType: 'claim',
+        sourceId: claim.id,
+        relationType: 'supports',
+        targetType: 'evidence',
+        targetId: evidence.id,
+      }),
+      'invalid_request',
+    );
+    await expectCode(
+      domain.createRelation(projectId, USER, {
+        sourceType: 'evidence',
+        sourceId: evidence.id,
+        relationType: 'answers',
+        targetType: 'research_question',
+        targetId: question.id,
+      }),
+      'invalid_request',
+    );
+    expect(await domain.listRelations(projectId, USER, {})).toHaveLength(0);
+
+    // 反证 is a real evidence relation: not 支撑, and still perfectly legal to record.
+    const contradicting = await domain.createRelation(projectId, USER, {
+      sourceType: 'evidence',
+      sourceId: evidence.id,
+      relationType: 'contradicts',
+      targetType: 'claim',
+      targetId: claim.id,
+    });
+    expect(contradicting.relationType).toBe('contradicts');
+
+    // A decision reaches anything, which is how 修订影响论点 without inventing a sixth evidence kind.
+    const decision = await domain.createDecision(projectId, USER, { title: '改用 DiD', decision: '采用双重差分' });
+    await expect(
+      domain.createRelation(projectId, USER, {
+        sourceType: 'research_decision',
+        sourceId: decision.id,
+        relationType: 'affects',
+        targetType: 'claim',
+        targetId: claim.id,
+      }),
+    ).resolves.toMatchObject({ relationType: 'affects' });
+  });
+
+  it('reports the pairing rather than the missing endpoint when both are wrong', async () => {
+    const domain = harness();
+    const projectId = await seededProject(domain);
+    try {
+      await domain.createRelation(projectId, USER, {
+        sourceType: 'claim',
+        sourceId: 'nowhere',
+        relationType: 'appears_in',
+        targetType: 'claim',
+        targetId: 'nowhere-either',
+      });
+      throw new Error('expected the pairing check to reject this relation');
+    } catch (error) {
+      expect(isKnowledgeError(error)).toBe(true);
+      if (isKnowledgeError(error)) expect(error.message).toContain('manuscript_section');
+    }
+  });
+
   it('is idempotent for an identical quintuple and supports delete', async () => {
     const domain = harness();
     const projectId = await seededProject(domain);
