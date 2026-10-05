@@ -33,6 +33,15 @@ import {
   supersededGrants,
 } from './lib/grants';
 import { agentRows, canWriteConfig, hasOfficialEntry, supportLabel } from './lib/agent-matrix';
+import {
+  describeProbeVerdict,
+  planProbe,
+  readAgentProbe,
+  runOwnProbe,
+  type ProbeCheck,
+  type ProbePlan,
+  type ProbeVerdict,
+} from './lib/probe';
 import { runConnectionProbe, type ConnectionPhase, type ProbeResult } from './lib/connection-status';
 
 const CONNECTION_TARGETS: { key: string; hint: string }[] = [
@@ -281,6 +290,11 @@ function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Enough entropy to tell two probes apart; a probe marker is an identifier, never a secret. */
+function newNonce(): string {
+  return crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+}
+
 function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: string; token: string }): ReactElement {
   const [facts, setFacts] = useState<TargetFacts | null>(null);
   const [local, setLocal] = useState<ConnectionProbeOut | null>(null);
@@ -289,6 +303,12 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
   const [copied, setCopied] = useState(false);
   const [backups, setBackups] = useState<ConfigBackup[] | null>(null);
   const [grant, setGrant] = useState<PublicGrant | null>(null);
+  /** The credential that actually went into this client's config file — the probe writes with it. */
+  const [writtenCredential, setWrittenCredential] = useState('');
+  const [plan, setPlan] = useState<ProbePlan | null>(null);
+  const [ownProbe, setOwnProbe] = useState<ProbeVerdict | null>(null);
+  const [agentProbe, setAgentProbe] = useState<ProbeCheck | null>(null);
+  const [probeBusy, setProbeBusy] = useState(false);
 
   async function loadFacts(): Promise<TargetFacts> {
     const resolved = await commands.mcpConfigFor(targetKey);
@@ -395,6 +415,11 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
     setDetail(
       `已写入配置文件${minted === null ? '' : `，并为「${label}」签发专属授权`}。请重启对应客户端以加载知序服务器。`,
     );
+    // A probe means something only with the credential that is now sitting in that file.
+    setWrittenCredential(credential.token);
+    setPlan(null);
+    setOwnProbe(null);
+    setAgentProbe(null);
     if (minted !== null) {
       setGrant(minted.grant);
       try {
@@ -450,6 +475,40 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
       return await revokeGrantOrExplain(resolved, live.id, `已同时撤销「${label}」的授权。`);
     } catch {
       return `无法确认「${label}」的授权状态，请在检测连接后复查。`;
+    }
+  }
+
+  /** §433: write a probe the user agreed to, with the credential that is in this client's file. */
+  async function startProbe(): Promise<void> {
+    if (facts === null || writtenCredential === '') return;
+    const next = planProbe(newNonce());
+    const confirmed = window.confirm(
+      `将向本机知识库写入一条诊断探针并读回：\n\n${next.own.text}\n\n` +
+        '它由配置文件里那份凭据写入，用来证明「写入验证完成」，不是你的知识内容。' +
+        '验证后可以在收件箱把它归档到诊断项目。\n\n确认写入？',
+    );
+    if (!confirmed) return;
+    setProbeBusy(true);
+    setPlan(next);
+    setAgentProbe(null);
+    try {
+      setOwnProbe(await runOwnProbe(grantClientFor(facts, writtenCredential), next, facts.label));
+    } catch (error) {
+      setOwnProbe({ ok: false, detail: `探针执行异常：${reasonOf(error)}` });
+    } finally {
+      setProbeBusy(false);
+    }
+  }
+
+  async function checkAgentProbe(): Promise<void> {
+    if (facts === null || plan === null || writtenCredential === '') return;
+    setProbeBusy(true);
+    try {
+      setAgentProbe(await readAgentProbe(grantClientFor(facts, writtenCredential), plan));
+    } catch (error) {
+      setAgentProbe({ ok: false, detail: `检查失败：${reasonOf(error)}` });
+    } finally {
+      setProbeBusy(false);
     }
   }
 
@@ -557,6 +616,43 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
           )}
           <span className="muted">「复制 MCP 条目」仍沿用设备凭据，需要可撤销的授权请走「写入配置」。</span>
         </p>
+      )}
+      {facts !== null && (
+        <div className="probe">
+          <div className="row">
+            <button type="button" disabled={writtenCredential === '' || probeBusy} onClick={() => void startProbe()}>
+              发起写入验证探针
+            </button>
+            {plan !== null && (
+              <button type="button" disabled={probeBusy} onClick={() => void checkAgentProbe()}>
+                检查 Agent 是否已写入
+              </button>
+            )}
+          </div>
+          <p className="muted">
+            {writtenCredential === ''
+              ? '「写入验证完成」需要用配置文件里那份凭据写入并读回一条专用探针；先完成「写入配置」，凭据才会留在本次会话里。'
+              : '探针将以配置文件里那份凭据写入并读回。真实握手与 tools/list 只证明连接可用，不足以标记验证完成。'}
+          </p>
+          {ownProbe !== null && (
+            <p className={ownProbe.ok ? 'status-ok' : 'status-bad'}>
+              {ownProbe.ok ? `写入验证完成（本机凭据写入并读回）：${describeProbeVerdict(ownProbe)}` : `未验证：${ownProbe.detail}`}
+            </p>
+          )}
+          {plan !== null && (
+            <p className="muted">
+              Agent 侧：请在「{facts.label}」里让 Agent 用知序工具保存这句话，然后回来检查。只有读回由知序工具写入的那条记录，才算「经
+              Agent 写入验证完成」。
+              <code className="probe-phrase">{plan.agent.text}</code>
+            </p>
+          )}
+          {agentProbe !== null && (
+            <p className={agentProbe.ok ? 'status-ok' : 'status-bad'}>
+              {agentProbe.ok ? '写入验证完成（经该客户端的知序工具）：' : '未验证：'}
+              {agentProbe.detail}
+            </p>
+          )}
+        </div>
       )}
       <div className="row">
         <button type="button" onClick={() => void test()}>

@@ -37,13 +37,13 @@ export interface GrantClientOptions {
 }
 
 /** The client is built from the Core's base URL, not the `/mcp` endpoint the Agent itself calls. */
-export function grantClientOptions(facts: TargetFacts, deviceToken: string): GrantClientOptions {
-  const token = deviceToken.trim();
+export function grantClientOptions(facts: TargetFacts, bearer: string): GrantClientOptions {
+  const token = bearer.trim();
   return { baseUrl: facts.coreBaseUrl, ...(token === '' ? {} : { token }), clientHint: 'desktop' };
 }
 
-export function grantClientFor(facts: TargetFacts, deviceToken: string): ApiClient {
-  return new ApiClient(grantClientOptions(facts, deviceToken));
+export function grantClientFor(facts: TargetFacts, bearer: string): ApiClient {
+  return new ApiClient(grantClientOptions(facts, bearer));
 }
 
 /** Newest live grant carrying this label — the connection currently in force for that client. */
