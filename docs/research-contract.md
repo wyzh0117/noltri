@@ -35,6 +35,11 @@
 | PATCH | `/api/research/projects/:projectId` | `PatchResearchProjectRequest` | `ResearchProject` |
 | GET | `/api/research/projects/:projectId/charter` | — | `{charter\|null}` |
 | PUT | `/api/research/projects/:projectId/charter` | `CharterRequest` | `ResearchCharter` |
+| POST | `/api/research/projects/:projectId/charter/approve` | `ApproveCharterRequest` | `CharterVersion` |
+| GET | `/api/research/projects/:projectId/charter/versions` | — | `{versions}` |
+| GET | `/api/research/projects/:projectId/charter/baseline` | — | `{baseline\|null}` |
+| GET | `/api/research/projects/:projectId/review-marks` | `?status=&entityType=&entityId=` | `{marks}` |
+| POST | `/api/research/review-marks/:markId/clear` | — | `ResearchReviewMark` |
 | POST | `/api/research/projects/:projectId/questions` | `CreateResearchQuestionRequest` | `ResearchQuestion` |
 | GET | `/api/research/projects/:projectId/questions` | — | `{questions}` |
 | PATCH | `/api/research/questions/:questionId` | `PatchResearchQuestionRequest` | `ResearchQuestion` |
@@ -79,6 +84,18 @@
   再校验 `sourceId` / `targetId` 在**本项目内**存在，否则 `invalid_request`；
   `(sourceType, sourceId, relationType, targetType, targetId)` 五元组重复创建返回既有记录（幂等，不报错）。
 - 所有 list 只返回本项目 + 本用户数据；不属于该用户的 `projectId` 一律 `not_found`。
+- **批准章程（R06）**：`approveCharter` 只读当前 `research_charters` 行作为草稿快照，不改它 —— 批准之后仍可继续编辑。
+  版本号为 `上一版 + 1`（首版 = 1，`previousVersion` 为 `null`），`changedFields` 是草稿与上一版快照的**字段名差集**
+  （字段集合是 `charterFieldsSchema` 的键、并且**冻结**，所以新增字段不会漏进差集，也没有调用方能改写这份账本
+  —— `packages/schema/test/research-baseline.test.ts` 钉住这两点）；驱动层不参与比对，版本语义只在 domain。
+  `revisionReason` 必填（1..2000）；`decisionId` 与 `affectedEntities` 里每个引用都必须**先证明属于本项目**才允许落库，
+  任一不成立即 `invalid_request` 且两张表都不写（`ResearchRepository` 没有事务，所以顺序是「先证明、后写」）。
+  基线读取 `findCharterBaseline` 与其他 `find*` 一样不加属主守卫，返回 `null` 而不是泄露存在性；列表 `listCharterVersions` 走 `requireProject`。
+- **复核标记（R03/R06）**：批准时按 `affectedEntities`（按 `type:id` 去重）为每个对象 raise 一条
+  `raisedBy='charter_baseline'`、`charterVersion=` 新版本号的标记；点名为空就一条也不加。
+  `(user, project, entityType, entityId, raisedBy, charterVersion)` 唯一：同一对象同一基线重复批准**原地刷新**
+  `reason` 并把 `status` 复位为 `pending`，不新增行。`clearReviewMark` 只把 `status` 改成 `cleared`，**不删行** ——
+  这行本身就是「什么时候处理过」的记录（开发文档 §14）。`source_archived` 那一类由 P5-C3 从知识域侧写入。
 - 时间统一 ISO-8601 UTC 字符串（`@noltri/shared` 的 `nowIso`）；ID 用同包的 `createId`。
 
 ## 3 存储与装配
@@ -106,9 +123,12 @@ Core 自己只监听 `127.0.0.1`，这两个句柄都不对外。
 （第 435 行「限制返回片段」）靠 `capText(actor, text)` 兑现，而 research 的文本（章程、证据描述、论点正文）
 还没有接入这条路径；即使 grant 要求限制片段，这里也兑现不了。打开 Research 给 Agent 客户端必须是**和 capping 一起决定**，
 不能先开后补。桌面工作台走 dev-token / dev-open（`identity.grant === undefined`），
-`requireScope` 是 no-op，27 条端点全部可达。
+`requireScope` 是 no-op，32 条端点全部可达。P5-C 新增的 5 条（批准 / 版本列表 / 基线读取 / 标记列表 / 标记清空）
+**同样没有** scope 条目：`CharterVersion.charter` 是整份章程文本，`reviewMark.reason` 里带着批准理由，
+兑现不了片段限制就一律不开。
 
-这条边界要有测试撑着：架构门禁里钉住「没有任何 `SCOPE_BY_ACTION` 的键提到 `api/research`」。
+这条边界要有测试撑着：架构门禁从 `ROUTES` 里收集出全部 `api/research/*` 形状，既钉住条数（现为 32，
+新增路由不登记就会失败），也钉住「这些形状没有一个能在 `SCOPE_BY_ACTION` 里查到条目」。
 
 ## 5 Research Map / 上下文包 / 六类偏移的口径（P6 落地，规则在此存档）
 
@@ -154,13 +174,16 @@ Current Drift Warnings（open findings，含 severity+description）。
 ## 6 文件归属（本分支单线推进，按阶段划界）
 
 ```
-packages/schema/src/research.ts|research-api.ts        P5-A 已落地（含 P6 的 drift/map/context schema）
-packages/storage/src/research-types.ts                 P5-A
-packages/storage/src/research-in-memory.ts             P5-A
+packages/schema/src/research.ts|research-api.ts        P5-A 已落地（P5-C 追加基线/标记 schema，含 P6 的 drift/map/context）
+packages/storage/src/sqlite-schema.ts                  P5-A（P5-C 追加 V4 两张基线/标记表）
+packages/storage/src/research-types.ts                 P5-A（P5-C 追加 7 个方法 + ReviewMarkListOptions）
+packages/storage/src/research-in-memory.ts             P5-A（同上，P5-C 两个驱动都实现）
 packages/storage/src/sqlite-research.ts                P5-A
+packages/storage/test/research-repository-contract.ts  两驱动共用契约测试（新增方法必须两侧同语义）
 packages/api-client/src/client.ts                      P5-D（research 路由常量 + 类型化方法）
-services/knowledge-core/src/research/**                P5-B（27 方法 façade；P6 在此补 drift/map/context）
-services/knowledge-core/src/http/research.ts|router.ts  P5-B（P6 追加 5 条路由）
+services/knowledge-core/src/research/**                P5-B（32 方法 façade；baselines.ts 是 P5-C）
+services/knowledge-core/src/research/support.ts        P5-B（P5-C 把端点归属判断 `entityIsInProject` 提到这里）
+services/knowledge-core/src/http/research.ts|router.ts  P5-B（P5-C 追加 5 条，P6 再追加 5 条）
 services/knowledge-core/test/research*.ts              P5-B
 apps/desktop/**                                        P5-D（研究工作台面板，prop 驱动、纯展示可测）
 docs/research-contract.md                              本文件
@@ -176,9 +199,9 @@ docs/research-contract.md                              本文件
 
 | ID | 本轮口径 | 状态 |
 | --- | --- | --- |
-| R01 | 研究项目全流程 Charter→RQ→Evidence→Claim→Section 可建可读可修订 | P5-B（27 端点 + domain 测试） |
+| R01 | 研究项目全流程 Charter→RQ→Evidence→Claim→Section 可建可读可修订 | ✅ P5-B（27 端点 + domain 测试；P5-C 后端点为 32 条） |
 | R02 | 五种证据关系可表示，反证与限定不被当作支持 | ✅ P5-C1：`RELATION_PAIRINGS` 钉住方向，domain 与 schema 两侧有测试 |
-| R03 | 来源删除／修改／合并安全，原始版本与复核提示可追溯 | P5-C |
-| R06 | 批准章程修订：历史保留、影响对象被标记、后续检查绑定新基线 | P5-C |
+| R03 | 来源删除／修改／合并安全，原始版本与复核提示可追溯 | 标记面 ✅ P5-C2（`research_review_marks` 只改状态不删行，原始版本可读回）；来源删除／归档的引用安全与 `source_archived` 标记 → P5-C3 |
+| R06 | 批准章程修订：历史保留、影响对象被标记、后续检查绑定新基线 | ✅ P5-C2（append-only 版本 + 快照不可变 + 按名标记）；「后续检查绑定新基线」等 P6 的 drift-check 读 `findCharterBaseline` |
 | R08 | 重启／导出恢复后关系完整 | P5-E（sqlite 往返） |
 | R04 / R05 / R07 | 六类偏移 fixture、无 AI 诚实、上下文包给 Agent | P6 |
