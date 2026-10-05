@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知序 Noltri · 本轮开发交付报告（P4 Agent Setup）</title>
+<style>
+  :root{--bg:#f6f6f4;--panel:#fff;--ink:#1c1d1f;--muted:#5f6469;--line:#dcdcd6;
+    --accent:#2f5d50;--accent-soft:#e4efe9;--warn:#8a5a11;--warn-soft:#fbf1dd;
+    --bad:#8f2f2f;--bad-soft:#fbe9e9;--ok:#1f6b45;--ok-soft:#e2f0e8;--code:#f1f1ec;}
+  html[data-theme="dark"]{--bg:#14161a;--panel:#1b1e23;--ink:#e6e8ea;--muted:#9aa1a9;--line:#2c3138;
+    --accent:#8fc0ad;--accent-soft:#1f2a26;--warn:#e0b070;--warn-soft:#2a2418;
+    --bad:#f0a0a0;--bad-soft:#2a1c1c;--ok:#8fd0ac;--ok-soft:#1a2620;--code:#22262c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 96px}
+  header.top{padding:44px 0 20px;border-bottom:1px solid var(--line)}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:31px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+  h2{font-size:22px;margin:44px 0 12px;padding-top:18px;border-top:1px solid var(--line);scroll-margin-top:64px}
+  h3{font-size:16.5px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:14.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:16px;font-size:13.5px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+  .chip{font-size:12.5px;padding:3px 11px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--line)}
+  .grid{display:grid;gap:14px}.grid.c3{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .grid.c4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .n{font-size:24px;font-weight:650;letter-spacing:-.02em}
+  .card .l{font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft);font-weight:600;font-size:13.5px}
+  tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 92%,var(--bg))}
+  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:6px;white-space:nowrap;border:1px solid var(--line)}
+  .t-ok{background:var(--ok-soft);color:var(--ok)}
+  .t-part{background:var(--warn-soft);color:var(--warn)}
+  .t-no{background:var(--bad-soft);color:var(--bad)}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:38px 14px 12px;overflow:auto;font-size:12.8px;line-height:1.62;margin:12px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  p code,li code,td code{background:var(--code);padding:1.5px 5px;border-radius:5px;font-size:13px;border:1px solid var(--line)}
+  .copy{position:absolute;top:8px;right:8px;font-size:11.5px;padding:3px 9px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .copy:hover{color:var(--ink);border-color:var(--accent)}
+  ul,ol{padding-left:22px;margin:10px 0}li{margin:5px 0}
+  nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:9px 0}
+  nav ol{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;padding-left:0;list-style:none;font-size:13px}
+  nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--accent);text-decoration:underline}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .warnbox{border-left:3px solid var(--warn);background:var(--warn-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .badbox{border-left:3px solid var(--bad);background:var(--bad-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .themer{font-size:12.5px;padding:4px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .themer:hover{color:var(--ink)}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  details{margin:10px 0}summary{cursor:pointer;font-size:14px;color:var(--accent);font-weight:600}
+  .muted{color:var(--muted)}
+  .phase{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+  .ph{font-size:12.5px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted)}
+  .ph.done{background:var(--ok-soft);color:var(--ok);border-color:var(--ok)}
+  .ph.now{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);font-weight:650}
+</style>
+</head>
+<body>
+<nav><div class="wrap bar" style="padding-bottom:0">
+  <ol>
+    <li><a href="#summary">结论</a></li>
+    <li><a href="#done">已完成工作总结</a></li>
+    <li><a href="#scope">范围与验收口径</a></li>
+    <li><a href="#commits">提交清单</a></li>
+    <li><a href="#gate">门禁与用例</a></li>
+    <li><a href="#stdio">stdio 与握手</a></li>
+    <li><a href="#matrix">支持矩阵</a></li>
+    <li><a href="#config">备份与卸载</a></li>
+    <li><a href="#agent">真实 Agent 实测</a></li>
+    <li><a href="#privacy">§435 授权选项</a></li>
+    <li><a href="#fixes">六个真问题</a></li>
+    <li><a href="#security">安全边界</a></li>
+    <li><a href="#gaps">未验证</a></li>
+    <li><a href="#method">环境与方法</a></li>
+    <li><a href="#next">下一步</a></li>
+  </ol>
+  <button class="themer" id="themer" type="button">切换主题</button>
+</div></nav>
+
+<div class="wrap">
+<header class="top">
+  <div class="kicker">知序 Noltri · 本地桌面版与 Research 整合</div>
+  <h1>P4 Agent Setup · 本轮交付报告</h1>
+  <div class="sub">Agent 检测、配置预览、备份合并、每客户端授权与 scope、真实 MCP 握手、卸载恢复，以及 §435 要求的隐私边界与三个授权选项。</div>
+  <div class="meta">
+    <span>日期 <b>2026-10-06</b></span>
+    <span>分支 <b>v1_research&amp;modify</b></span>
+    <span>提交范围 <b>99350de^..bd90588</b>（本报告自身的提交在范围之后）</span>
+    <span>平台 <b>macOS 26.6.2 / Darwin 25.6.0 / arm64</b></span>
+  </div>
+  <div class="phase">
+    <span class="ph done">P0 基线</span><span class="ph done">P1 纵向切片</span>
+    <span class="ph done">P2 工作台迁移</span><span class="ph done">P3 本地接入</span>
+    <span class="ph now">P4 Agent Setup</span><span class="ph">P5–P6 Research</span>
+    <span class="ph">P7 云清理</span><span class="ph">P8 安装包</span>
+  </div>
+  <div class="grid c4" style="margin-top:20px">
+    <div class="card"><div class="n">24 / 24</div><div class="l">全量门禁任务（12 包 × test＋typecheck）</div></div>
+    <div class="card"><div class="n">821 / 21</div><div class="l">通过 / 跳过（跳过全部是缺 <code>NOLTRI_PG_TEST_URL</code> 的 PG 用例，不计通过）</div></div>
+    <div class="card"><div class="n">16</div><div class="l">提交 · 35 文件 · +4 475 / −121（P4-E 的文档与本报告另算，不在此区间）</div></div>
+    <div class="card"><div class="n">18 / 18</div><div class="l">真实 stdio MCP 进程 × 真实 SQLite Core 的端到端断言</div></div>
+  </div>
+  <div class="chips">
+    <span class="chip">stdio 服务前先自证身份</span>
+    <span class="chip">7 张 Agent 卡片 · 三段支持状态</span>
+    <span class="chip">先备份再原子替换</span>
+    <span class="chip">卸载只删自家条目</span>
+    <span class="chip">每客户端一份可撤销凭据</span>
+    <span class="chip">只写采集 / 限制项目 / 限制返回片段</span>
+    <span class="chip">23 项 Rust 测试</span>
+  </div>
+</header>
+
+<h2 id="summary">一 结论</h2>
+<p>P4 的验收口径是「实际支持矩阵 ＋ 指定可用 Agent 完成写入、检索、上下文调用」。本轮把这两件事都做<b>跑</b>了：<code>M01</code>／<code>M03</code>／<code>M04</code> 的证据不再只是单元测试——一个真实的 stdio MCP 进程带着连接中心刚签发的那份凭据，与一个真实的 SQLite Core 完成了 <code>initialize → tools/list → tools/call capture_knowledge → tools/call search_knowledge</code>，写进去的就是 Core 收件箱里的那一条，读回来的每个片段都被授权上的 <code>snippetChars</code> 裁到 24 字；随后撤销，<b>同一条还没断的会话</b>下一次调用就吃了 401，而另一份未撤销的授权仍然可读。</p>
+<p><code>M02</code>（不损坏其它配置、重复安装幂等、卸载只删自己管理的项）由 13 项 Rust 测试 ＋ 18 项合并/摘除测试锁定：备份失败即中止写入、两次快写各留一份备份、恢复动作本身又可撤销。<code>M06</code>（不可检测／不支持不能伪造已连接）落到「三段支持状态 ＋ 未知值降级 ＋ 未验证客户端同时拿不到写路径和官方链接」。<code>M05</code> 需要打包产物，本轮未做，如实挂在 <a href="#gaps">§十三</a>。</p>
+<p>§435 要求的隐私边界写在<b>签发之前</b>，三个授权选项都在界面上：只写采集（<code>scopes:["capture"]</code>，<code>mutate</code> 从不出现在选项里）、限制项目（扁平化成可辨认路径，上限 100 与 Core 同一常量）、限制返回片段（20–4000，非整数或越界会挡住写入按钮而不是静默丢弃）。</p>
+<div class="note">本轮由实测暴露并修掉的问题共六个，其中一个差点让报告写出<b>假结论</b>：授权签发失败后，探针仍然「全部调用成功」——因为那时凭据是字面量 <code>undefined</code>，而 <code>dev-open</code> 的 Core 照单全收且<b>不受片段上限约束</b>。详见 <a href="#fixes">§十一</a>。</div>
+
+<h2 id="done">二 已完成工作总结</h2>
+<p class="sub">按用户要求，每轮交付都要把「已完成的工作」单独汇总一次。以下是 P4 全部完成项，与 <a href="#commits">§四</a> 的 16 个提交一一对应。</p>
+<table>
+  <thead><tr><th>片</th><th>完成了什么</th><th>证据</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>P4-A</b><br>stdio 通道</td>
+      <td>MCP server 增加 <b>stdio transport</b>（七工具复用同一份 <code>buildServer()</code>，只代理本机 Core、不另建库）；stdout 只承载 JSON-RPC，人类可读的行一律走 stderr；启动前用 <code>/api/health</code> ＋ <code>verifyCoreIdentity()</code> 自证，<b>核验不过就不开始服务</b>（四种拒绝、退出码 1）；注册条目改为<b>参数数组</b>而不是拼 shell 字符串</td>
+      <td><code>stdio.test.ts</code> 7 项（真实 SDK 客户端经 stdio 走完全流程）；mcp-server 包 20 → <b>27 项</b>；§15.2</td>
+    </tr>
+    <tr>
+      <td><b>P4-B</b><br>支持矩阵</td>
+      <td>7 个 Agent 卡片（Claude Desktop／Claude Code／ChatGPT‑Codex／Cursor／Hermes／Qoder／其他），每张分别报告 检测·版本·支持状态·配置路径·连接方式·权限；<code>writable｜guided｜unverified</code> 三段；只有 Claude 家族 JSON 会被代写；未验证的两家<b>拿不到写路径也拿不到官方链接</b>；界面文案改为矩阵而不是单一「已连接」布尔</td>
+      <td>Rust <code>mcp.rs</code> 13 项 ＋ 前端 <code>agent-matrix.test.ts</code> 7 项；§15.3</td>
+    </tr>
+    <tr>
+      <td><b>P4-C</b><br>备份与卸载</td>
+      <td>写入前预览（绝对路径＋<code>summarizeMerge</code> 合并摘要＋授权说明）→ 时间戳备份 → <code>rename</code> 原子替换；<b>备份失败即中止</b>；连续写各留一份备份；<code>list_backups</code> 只认 <code>.noltri-backup.</code> 前缀；恢复拒绝非本应用所有／不同目录的文件，且恢复本身再备份一次；卸载只摘自家条目、兄弟配置与键顺序全留、<b>重复安装逐字节相同</b>；非 JSON 或解析失败一律拒绝动笔</td>
+      <td><code>commands.rs</code> 4 项 ＋ <code>mcp-config.test.ts</code> 18 项；§15.4</td>
+    </tr>
+    <tr>
+      <td><b>P4-D</b><br>授权与探针</td>
+      <td>Core 侧授权表（<code>NOLTRI_GRANT_FILE</code>／<code>NOLTRI_DATA_DIR/grants.json</code>，不配则整套关闭）：SHA-256 摘要落盘、明文只出现一次、每请求重读因此<b>撤销杀死已建立的连接</b>；<code>requireScope</code> 拒绝越权动作；管理端点拒绝 grant 调用者，<code>dev-open</code> 拒绝签发（§569）；新增 <code>/api/admin/grants[/:id/revoke]</code> 三端点与 <code>ApiClient</code> 三个方法；桌面端「一次配置写入＝一份可撤销凭据」，取消确认或卸载时同步撤销；<b>写入验证探针</b>按 §433 才算「写入验证完成」（写入 → 读回同一条 → 检索命中并报归类位置）</td>
+      <td>Core <code>authorization.test.ts</code> <b>34 项</b>（新建）、api-client <code>grants.test.ts</code> 12 项、桌面 <code>grants.test.ts</code> 24 项＋<code>probe.test.ts</code> 15 项；§15.5</td>
+    </tr>
+    <tr>
+      <td><b>P4-D4/D5</b><br>§435</td>
+      <td>授权步骤写上隐私边界原文；<b>限制返回片段</b>贯通全链：schema（20–4000）→ 授权表 → <code>ActorContext.snippetChars</code> → <b>服务层内部</b>裁剪五个读取面（检索命中／节点详情／上下文包 markdown＋items＋sources＋estimatedTokens／收件箱预览／原文全文），标题与结构不裁，设备凭据与开放通路不裁；<code>apps/chat</code> 自动继承；矛盾选项在签发前指出</td>
+      <td>Core 五个读取面的 over-the-wire 用例；桌面 <code>snippetSetting()</code> 边界用例；<b>18 项真实端到端断言</b>；§15.5／§15.6</td>
+    </tr>
+    <tr>
+      <td><b>P4-E</b><br>文档回写</td>
+      <td><code>docs/P0-baseline-and-recovery.md</code> 新增 §15（9 小节，含 18 项断言逐字日志与六个真问题）；<code>FUNCTION_MAP.md</code> 改写 Core／Desktop／MCP 三节并更新计数与「后续实现」缺口；<code>README.md</code> 环境变量表补 <code>NOLTRI_GRANT_FILE</code>／<code>NOLTRI_ACCESS_TOKEN</code>、新增「本地客户端授权与 MCP 连接」配方节（<b>照抄跑过</b>）、验证状态补 P4 边界；本报告</td>
+      <td>配方实测日志 <code>/tmp/p4e-readme-check.txt</code>；<code>pnpm --filter @noltri/desktop run build</code> 四入口产出</td>
+    </tr>
+  </tbody>
+</table>
+<p class="sub">测试规模：P3 的 49 文件／710 通过／21 跳过 → P4 的 <b>55 文件／821 通过／21 跳过</b>（净增 111 通过、6 个文件）。Rust 从 8 项 → <b>23 项</b>。</p>
+
+<h2 id="scope">三 范围与验收口径</h2>
+<p>开发文档 §590 对 P4 的一行是：<b>「Agent Setup ｜ 检测、配置预览、备份合并、授权、MCP handshake、scope 和卸载恢复 ｜ 实际支持矩阵；指定可用 Agent 完成写入、检索、上下文调用。」</b> 对应的验收行与本轮结论：</p>
+<table>
+  <thead><tr><th>行</th><th>验收口径（原文）</th><th>本轮状态</th><th>证据在</th></tr></thead>
+  <tbody>
+    <tr><td><code>M01</code></td><td>Agent 首次连接：修改前预览与备份；握手＋<code>tools/list</code>＋明确授权通过</td><td><span class="tag t-ok">通过（真实进程）</span></td><td>§15.5 的 <code>G</code> ＋ 3 项 <code>M01</code> 断言：真实握手 <code>noltri-knowledge@0.1.0 proto=2025-03-26</code>、<code>tools/list</code> 七个工具、签发状态 200；预览与备份见 §八</td></tr>
+    <tr><td><code>M02</code></td><td>已有多 MCP 配置：其他配置不受损；重复安装幂等，卸载只删除自己管理的项</td><td><span class="tag t-ok">通过（代码级）</span></td><td><code>9b6ce85</code> 的逐字节相同断言、<code>commands.rs</code> 4 项、18 项合并/摘除；<b>未对用户真实配置文件写入过</b></td></tr>
+    <tr><td><code>M03</code></td><td>Agent 主动保存与搜索：工具经 Core 访问同一数据库；UI 可见真实结果和来源</td><td><span class="tag t-part">通过（半条）</span></td><td>同一 SQLite 库的写入＋读回已实测；「UI 可见」有桌面端的探针回执与收件箱视图与测试，但<b>未在真实 Agent 客户端界面里点过</b>（见 §十三）</td></tr>
+    <tr><td><code>M04</code></td><td>未授权项目／撤销 token：拒绝访问；旧连接不能继续读写</td><td><span class="tag t-ok">通过（真实进程）</span></td><td>撤销后<b>同一会话</b>下一次调用 401 <code>grant_revoked</code>；另一份授权仍可读；未授权项目的读取拒绝在 34 项用例里</td></tr>
+    <tr><td><code>M05</code></td><td>安装包路径更新：注册入口仍可启动或被 Setup 修复，不指向旧开发目录</td><td><span class="tag t-no">未做</span></td><td>需要打包产物，本轮未 <code>tauri build</code>；排到 P8</td></tr>
+    <tr><td><code>M06</code></td><td>某目标 Agent 不可检测／不支持：标记「不支持／待人工配置／未验证」，不能伪造已连接</td><td><span class="tag t-ok">通过</span></td><td>三段支持状态＋未知值降级＋未验证者无写路径无 URL＋「验证前不显示为已连接」文案；§六</td></tr>
+  </tbody>
+</table>
+<div class="warnbox">§433 原文是本轮的验收底线：「Setup Manager 的『已连接』必须至少完成<b>真实 MCP 握手与 <code>tools/list</code></b>；标记『写入验证完成』前需在用户同意的诊断项目写入并读回一条专用探针。<b>仅找到配置文件或 HTTP 返回 200 不够。</b>」本轮的 18 项断言正是照这句话组织的——握手的 <code>serverInfo</code> 来自真实 SDK，写入验证由「写入 → 读回同一条 → 检索命中」三步串成，任何一步失败就不给「完成」。</div>
+
+<h2 id="commits">四 提交清单（按提交范围统计，不由工作区反推）</h2>
+<p class="sub">范围 <code>99350de^..bd90588</code>，父提交 <code>ad50e55</code>。下表由 <code>git show --numstat</code> 逐提交取，不是工作区 diff。</p>
+<table>
+  <thead><tr><th>提交</th><th>内容</th><th>规模</th></tr></thead>
+  <tbody>
+    <tr><td><code>99350de</code></td><td>feat(mcp-server): serve the same seven tools over stdio, after the Core proves itself</td><td>2 文件 +269 / −0</td></tr>
+    <tr><td><code>92a196c</code></td><td>feat(desktop): build stdio registrations as argument arrays, never shell strings</td><td>2 文件 +115 / −1</td></tr>
+    <tr><td><code>a76ab6e</code></td><td>feat(desktop): report each agent as writable, guided, or detected-but-unverified</td><td>3 文件 +278 / −29</td></tr>
+    <tr><td><code>90d98c7</code></td><td>feat(desktop): show the agent matrix instead of a single connected flag</td><td>6 文件 +231 / −10</td></tr>
+    <tr><td><code>598ab56</code></td><td>feat(desktop): back up a config file before every replace, and make that backup undoable</td><td>2 文件 +227 / −3</td></tr>
+    <tr><td><code>748e19c</code></td><td>feat(desktop): gate removal and restore on the same checks that gate a write</td><td>2 文件 +192 / −16</td></tr>
+    <tr><td><code>9b6ce85</code></td><td>feat(desktop): remove only the entry we manage, and prove a repeat install is byte-identical</td><td>2 文件 +152 / −0</td></tr>
+    <tr><td><code>6b18361</code></td><td>feat(desktop): give every config write a visible way back</td><td>4 文件 +174 / −10</td></tr>
+    <tr><td><code>94a2034</code></td><td>feat(core): give each local client its own revocable, scoped credential</td><td>6 文件 +806 / −10</td></tr>
+    <tr><td><code>da8829f</code></td><td>feat(core): let the device credential mint, list and revoke client grants</td><td>8 文件 +340 / −44</td></tr>
+    <tr><td><code>202b29c</code></td><td>feat(api-client): speak to the local authorization endpoints</td><td>2 文件 +149 / −0</td></tr>
+    <tr><td><code>6640255</code></td><td>feat(desktop): hand each config write its own revocable credential</td><td>4 文件 +462 / −11</td></tr>
+    <tr><td><code>89bdfc4</code></td><td>feat(desktop): earn 「写入验证完成」 with a probe that is written and read back</td><td>5 文件 +531 / −4</td></tr>
+    <tr><td><code>2d1bc01</code></td><td>feat(desktop): put the privacy boundary in the authorization step</td><td>4 文件 +225 / −2</td></tr>
+    <tr><td><code>554b549</code></td><td>feat(core): let a grant cap the text its client reads back</td><td>12 文件 +273 / −23</td></tr>
+    <tr><td><code>bd90588</code></td><td>feat(desktop): offer 限制返回片段 when the credential is minted</td><td>4 文件 +112 / −19</td></tr>
+    <tr><td colspan="2"><b>区间净值（<code>git diff --stat 99350de^..bd90588</code>）</b></td><td><b>35 文件 · +4 475 · −121</b></td></tr>
+  </tbody>
+</table>
+<p class="sub">逐提交相加是 +4 536 / −282，<b>大于</b>区间净值的 +4 475 / −121 —— 同一文件（授权 store、<code>main.tsx</code>、<code>styles.css</code>、契约测试）被后续提交再次改动，区间 diffstat 只计最终差异。两个数都对，口径不同，以区间净值为规模结论。</p>
+<p class="sub">分片：P4-A 2 个提交 · P4-B 2 个 · P4-C 4 个 · P4-D 8 个；P4-E 是本报告的文档提交，在范围之后。</p>
+
+<h2 id="gate">五 门禁与用例分布（实测）</h2>
+<table>
+  <thead><tr><th>包</th><th>测试文件</th><th>通过</th><th>跳过</th><th>P3 时</th></tr></thead>
+  <tbody>
+    <tr><td><code>apps/desktop</code></td><td>10</td><td><b>137</b></td><td>0</td><td>7 文件／79</td></tr>
+    <tr><td><code>services/knowledge-core</code></td><td>11</td><td><b>133</b></td><td>0</td><td>10 文件／99</td></tr>
+    <tr><td><code>services/native-host</code></td><td>7</td><td>135</td><td>0</td><td>135</td></tr>
+    <tr><td><code>apps/extension</code></td><td>9</td><td>134</td><td>0</td><td>134</td></tr>
+    <tr><td><code>packages/storage</code></td><td>5</td><td>75</td><td>21</td><td>75／21</td></tr>
+    <tr><td><code>packages/shared</code></td><td>3</td><td>60</td><td>0</td><td>60</td></tr>
+    <tr><td><code>packages/api-client</code></td><td>3</td><td><b>29</b></td><td>0</td><td>2 文件／17</td></tr>
+    <tr><td><code>services/mcp-server</code></td><td>3</td><td><b>27</b></td><td>0</td><td>2 文件／20</td></tr>
+    <tr><td><code>packages/ai-provider</code></td><td>2</td><td>48</td><td>0</td><td>48</td></tr>
+    <tr><td><code>apps/web</code>（<code>node:test</code>）</td><td>1</td><td>28</td><td>0</td><td>28</td></tr>
+    <tr><td><code>services/ai</code></td><td>1</td><td>15</td><td>0</td><td>15</td></tr>
+    <tr><td><code>packages/schema</code></td><td>0</td><td>0</td><td>0</td><td>契约由消费方锁定，本包无独立用例</td></tr>
+    <tr><td><b>合计</b></td><td><b>55</b></td><td><b>821</b></td><td><b>21</b></td><td>49 文件／710／21</td></tr>
+  </tbody>
+</table>
+<p>21 项跳过全部是 <code>packages/storage/test/supabase.contract.test.ts</code> 缺少 <code>NOLTRI_PG_TEST_URL</code> 的 PG 集成用例，按 §19 X02 口径<b>不计通过</b>。<code>apps/web</code> 使用 <code>node --test</code>（TAP），与 vitest 分开计数，上表已合并标注。</p>
+<p>本轮新增用例的落点（逐文件实测）：Core <code>authorization.test.ts</code> <b>34</b>（新建）· 桌面 <code>grants.test.ts</code> <b>24</b>、<code>probe.test.ts</code> <b>15</b>（新建）、<code>mcp-config.test.ts</code> <b>18</b>、<code>agent-matrix.test.ts</code> <b>7</b>（新建）· api-client <code>grants.test.ts</code> <b>12</b>（新建）· mcp-server <code>stdio.test.ts</code> <b>7</b>（新建）。</p>
+<h3>全量门禁与 Rust</h3>
+<pre><code>npx turbo run test typecheck --force --concurrency=2 --continue
+# → Tasks: 24 successful, 24 total        （/tmp/p4e-gate-final.txt；修掉重复错误渲染后再跑一次，仍是 24/24）
+
+PATH="$HOME/.cargo/bin:$PATH" cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+# → test result: ok. 23 passed; 0 failed; 0 ignored        （/tmp/p4e-cargo.txt）
+#   分布：mcp 13（写入目标白名单 / 备份 / 恢复所有权 / plist 版本 / 未知 target 拒绝 / 未验证不给写路径）
+#         commands 4（文档形状与 removal 边界）· settings 3 · time 3
+#   另：main.rs target 0 项、doc-tests 0 项</code></pre>
+<p class="sub">§14.1 里「Rust 侧本轮未重新执行 <code>cargo test</code>」的悬账，本轮结清：23 项真实通过，此前引用的 8 项数字已作废。</p>
+
+<h2 id="stdio">六 P4-A：stdio 是第二条腿，而且它先自证身份</h2>
+<p>§11 要求「默认 stdio transport；其进程仅代理本地 Core，不另建数据库」。<code>services/mcp-server/src/stdio.ts</code> 与 HTTP 端点复用同一份 <code>buildServer()</code>，凭据来自 <code>NOLTRI_ACCESS_TOKEN</code>，Core 地址来自 <code>KNOWLEDGE_API_URL</code>。三条不变量都由测试钉住，而不是靠注释：</p>
+<ul>
+  <li><b>stdout 只承载 JSON-RPC。</b>给人看的每一行都走 stderr——这条是 P3 的 Native Host 用「10 条请求全部超时、但 Core 真的收到了采集」换来的，stdio 直接沿用。</li>
+  <li><b>Core 自证身份之前不开始服务。</b>先 <code>health()</code> 再 <code>verifyCoreIdentity()</code>（<code>productId</code>／<code>protocolVersion</code>／<code>version</code>），四种拒绝各有文案：<code>missing_api_url</code>、<code>core_unreachable</code>、<code>not_noltri_core</code>、<code>protocol_mismatch</code>；<code>main()</code> 在未服务时置<b>退出码 1</b>。理由是 M06：一个把陌生本地服务报告成「已连上知识库」的 stdio 客户端比没有客户端更糟。</li>
+  <li><b>注册条目按参数数组构造</b>（<code>92a196c</code>），绝不拼成一条 shell 字符串——URL 或路径里的空格与引号会把参数拆成别的东西。</li>
+</ul>
+<p>HTTP 侧 <code>/mcp</code> 把<b>调用方自己的</b> Bearer 原样转发给 Core，所以「每客户端授权／scope／撤销／片段上限」对 Agent 与对桌面端是同一套判定，Agent 没有第二条不走授权的路径。本轮实测到 stderr 的只有一行：<code>[noltri-mcp noltri-knowledge] serving over stdio, core 0.1.0 (instance b0497304-b6cf-4521-af21-8059d14d4fd7)</code>。</p>
+
+<h2 id="matrix">七 P4-B：支持矩阵不是一个「已连接」布尔</h2>
+<table>
+  <thead><tr><th>客户端</th><th>支持状态</th><th>代写配置</th><th>配置路径（相对 home）</th><th>官方入口</th></tr></thead>
+  <tbody>
+    <tr><td>Claude Desktop</td><td><span class="tag t-ok">可代写配置</span></td><td>是</td><td><code>Library/Application Support/Claude/claude_desktop_config.json</code></td><td>产品页＋MCP 文档</td></tr>
+    <tr><td>Claude Code</td><td><span class="tag t-ok">可代写配置</span></td><td>是</td><td><code>.claude.json</code></td><td>登录页＋MCP 文档</td></tr>
+    <tr><td>ChatGPT / Codex</td><td><span class="tag t-part">仅引导</span></td><td>否（TOML）</td><td><code>.codex/config.toml</code>（只展示，不写）</td><td>连接器设置＋Codex MCP 文档</td></tr>
+    <tr><td>Cursor</td><td><span class="tag t-part">仅引导</span></td><td>否</td><td><code>.cursor/mcp.json</code>（只展示，不写）</td><td>Settings＋MCP 文档</td></tr>
+    <tr><td>Hermes</td><td><span class="tag t-no">未验证：需人工配置</span></td><td>否</td><td><b>无</b></td><td><b>无</b>（不编 URL）</td></tr>
+    <tr><td>Qoder</td><td><span class="tag t-no">未验证：需人工配置</span></td><td>否</td><td><b>无</b></td><td><b>无</b></td></tr>
+    <tr><td>其他 MCP Client</td><td><span class="tag t-part">仅引导</span></td><td>否</td><td>无</td><td>modelcontextprotocol.io</td></tr>
+  </tbody>
+</table>
+<p>三条诚实性规则由测试兜住而不是靠文案：</p>
+<ul>
+  <li><code>support()</code> 之外的未知值在界面层<b>降级为「未验证」</b>（<code>supportLabel</code>／<code>agentRows</code>）——一个新出现的状态不会被读成「已支持」。</li>
+  <li>未验证的两家<b>同时</b>拿不到 <code>config_relative_path</code> 与官方链接（<code>detected_but_unverified_agents_get_no_write_path_and_no_url</code>，并对四个 key 断言 URL 为 <code>None</code>）。界面文案是「已检测到本机安装，但其 MCP 注册方式本轮未经真实握手验证：请在该客户端内手动添加，验证前不显示为已连接」。</li>
+  <li>检测只报告 <code>.app</code> bundle 是否存在与 <code>Info.plist</code> 版本：<code>bundle_version_reads_the_plist_and_refuses_junk</code> 拒垃圾，<code>an_absent_agent_reports_no_version</code> 保证「没检测到」不被渲染成「版本未知」。</li>
+</ul>
+
+<h2 id="config">八 P4-C：改别人的配置文件之前先备份，而且每一步都能撤销</h2>
+<pre><code>写入 = 预览 → fs::copy 成 &lt;file&gt;.noltri-backup.&lt;时间戳&gt; → rename 原子替换
+       （备份失败即中止写入：不存在"动了原文件但没留退路"的中间态）
+
+撤销点 = list_backups 只认 .noltri-backup. 前缀（用户手制的 .bak 不会被冒充成我们的撤销点）
+       restore_backup 拒绝 ①不是本应用所有的文件 ②不与目标同目录
+       恢复动作本身又先备份一次 → 撤销恢复也是可撤销的
+
+卸载 = removeServerEntry 只摘自家 noltri 条目：兄弟服务器／未知字段／键顺序全保留
+       重复安装产出逐字节相同的文档（幂等）
+       文档不是 JSON／没有 mcpServers 位／自家条目已存在但解析失败 → 拒绝动笔</code></pre>
+<p>界面上还有两条与凭据有关的行为，它们和备份是同一件事（都是「不要留下用户不知道的东西」）：确认框给的是<b>绝对路径＋合并摘要＋这份授权的说明</b>；用户点「取消」时<b>刚签发的凭据同步撤销</b>；卸载成功后同样撤销该客户端仍然生效的授权。</p>
+
+<h2 id="agent">九 P4-D：真实 stdio Agent × 真实 Core 的 18 项断言</h2>
+<p class="sub"><code>/tmp/p4e-agent-live.mjs</code>（本轮一次性脚本，日志 <code>/tmp/p4e-agent-live.txt</code>）。起<b>真实 Core 进程</b>（<code>STORAGE_DRIVER=sqlite AI_PROVIDER=offline PORT=8797</code> ＋ 设备凭据 ＋ 独立授权文件与独立库文件），经 <code>POST /api/admin/grants</code> 签发一份 <code>capture+read</code> ＋ <code>snippetChars:24</code> 的授权，把该明文交给<b>真实 stdio MCP 进程</b>，再用手工书写的换行分隔 JSON-RPC 走完调用；随后撤销并在<b>同一条会话</b>上重试。<code>grep -c '^PASS' = 18</code>、<code>FAIL = 0</code>；长行仅为排版折行。</p>
+<pre><code>PASS G:    Core answers /api/health as itself — noltri-knowledge-core 0.1.0 proto=1 storage=sqlite
+PASS M01:  连接中心 mints an Agent credential over HTTP — status=200 secretLen=43
+PASS §435: the minted grant carries the snippet cap — 24
+PASS M04:  listing returns metadata with no credential field —
+           id,label,client,scopes,nodeIds,snippetChars,createdAt,revokedAt
+PASS control: a second grant without a cap is mintable — status=200
+PASS M01:  real MCP handshake completes with the Agent credential —
+           noltri-knowledge@0.1.0 proto=2025-03-26
+PASS M01:  tools/list returns the advertised tool set —
+           capture_knowledge,search_knowledge,get_knowledge_tree,get_knowledge_node,
+           update_knowledge_node,move_knowledge_node,get_node_context
+PASS M03:  the Agent writes through the tool and Core answers with a placement —
+           已收纳 2 条知识点（rawSourceId=e1e259ef-7fb9-4938-a312-410593c2316c）：
+           1. Python 的元组一旦创建就不能修改，因此可以作
+PASS M03:  the Agent reads back the record the Core stored — hits=3
+PASS §435: every fragment this credential reads back is capped —
+           len=24 text="Python 的元组一旦创建就不能修改，因此可…"
+PASS §435: the cap holds for every hit, not just the first — 24/24/24
+PASS §435: an uncapped grant on the same Core reads the full text — len=32
+PASS §435: the device credential is never capped — len=32
+PASS M04:  revocation reports the record as dead — status=200 revokedAt=2026-10-05T18:03:02.432Z
+PASS M04:  the same live MCP session is refused once the token is revoked —
+           [unauthorized] 未授权：Knowledge Core 拒绝了当前 token，请让用户重新完成连接授权
+           （「知序 · Claude Desktop」的授权已被撤销，这条连接不能继续读写 / access refused (grant_revoked)）
+PASS M04:  revocation narrows reads without breaking the transport — tools=7
+PASS M04:  revoking one credential leaves the other connection working — hits=3
+PASS M04:  no plaintext credential is persisted anywhere in the grants file — bytes=825
+
+RESULT failures=0</code></pre>
+<p>三处值得单独解释的读法：</p>
+<ul>
+  <li><b>M04 是「旧连接」而不是「旧凭据」被拒。</b>撤销之后没有重启任何进程：同一个 stdio 会话的下一次 <code>tools/call</code> 就被拒，而 <code>tools/list</code> 仍返回七个工具（拒绝的是数据面，不是传输层），另一份未撤销的授权照常可读。机制是授权表<b>每请求重读</b>。</li>
+  <li><b>列表端点是「可截屏面」。</b>断言的不是「响应文本里没出现 secret 字样」，而是<b>键集合本身</b>不含任何凭据字段——多出一个 <code>digest</code> 也会让这条断言立刻失败。</li>
+  <li><b>凭据不落明文，也不落日志。</b><code>grants.json</code> 权限实测 <code>-rw-------</code>（<code>mode: 0o600</code> 写临时文件再 <code>rename</code>），825 字节里 <code>grep</code> 不到那份明文；Core 侧那行 401 日志只有 <code>{"method":"POST","path":"/api/search","code":"unauthorized",…,"traceId":"d8004538…"}</code>。</li>
+</ul>
+<h3>README 那段配方也照抄跑过</h3>
+<pre><code># /tmp/p4e-readme-check.sh（临时 profile 目录，端口 8789，用完按端口 PID 精确回收）
+mint   → {"grant":{…"snippetChars":40},"secret":"hwKklttsR-…"}        200
+capture→ capture_http=200
+search → search_http=200  hits=2  lengths=32/32  capped=true
+revoke → revokedAt=2026-10-05T18:14:48.523Z
+search → http=401 {"error":{"code":"unauthorized",
+          "message":"「知序 · Claude Desktop」的授权已被撤销，这条连接不能继续读写 / access refused (grant_revoked)",
+          "retryable":false,"traceId":"d635a4f0-…"}}
+file   → no plaintext in grants.json · still listening: 0</code></pre>
+
+<h2 id="privacy">十 §435：授权界面上的三个选项，以及它们真正约束到哪里</h2>
+<p>§435 要求「MCP 通信在本机，并不保证 Agent 的推理也在本机。某个本地 Agent 若调用云端模型，工具返回的知识可能随其上下文离开电脑。授权界面提示此边界，并提供只写采集、限制项目、限制返回片段等选项。」界面在<b>签发之前</b>原样写上这句话：<code>AGENT_PRIVACY_NOTE</code> = 「MCP 通信在本机，并不保证 Agent 的推理也在本机。若该客户端调用云端模型，工具返回的知识可能随上下文一起离开这台电脑。不确定就收窄下面的授权。」</p>
+<table>
+  <thead><tr><th>选项</th><th>落地</th><th>拒绝发生在</th></tr></thead>
+  <tbody>
+    <tr><td>只写采集</td><td><code>scopes:["capture"]</code>，永不带 <code>read</code>；<b><code>mutate</code> 从不出现在界面上</b>（<code>AGENT_SCOPES = ['capture','read']</code> 被测试钉住）</td><td>读取类动作在 <code>requireScope</code> 处拒绝（34 项授权用例覆盖）</td></tr>
+    <tr><td>限制项目</td><td>把树扁平化成「Python / 数据结构 / Tuple 元组」这类可辨认路径供勾选，上限 <code>MAX_GRANTED_PROJECTS=100</code>，到数即停</td><td>面板先停，Core 的 <code>issueGrantRequestSchema</code> 再拒——阈值是<b>同一个导出常量</b>，不会漂移</td></tr>
+    <tr><td>限制返回片段</td><td><code>snippetChars</code>（20–4000）随授权进入 <code>ActorContext</code>，在<b>服务层内部</b>裁剪</td><td>空输入＝不限制；非整数／越界在签发前挡住「写入配置」按钮，<b>不静默丢弃</b></td></tr>
+  </tbody>
+</table>
+<p><b>片段上限裁的是这五个读取面</b>：<code>search</code> 命中正文 · 节点详情（<code>normalizedText</code> 与 <code>summary</code>）· 上下文包（<code>markdown</code>／<code>items</code>／<code>sources</code>／<code>estimatedTokens</code> 因此自洽）· 收件箱预览 · <code>GET /api/inbox/:id</code> 的原文全文。<b>不裁</b>标题与树结构（所以界面写的是「正文」而不是「返回内容」），<b>不裁</b>设备凭据与未启用授权的通路——收件箱复核与桌面工作台需要全文，而那条路上根本没有授权可裁；<code>apps/chat</code> 的节点对话经 <code>buildNodeContext</code> 自动继承同一个上限。</p>
+<p>两项设计决定也值得写下：裁剪放在<b>服务层</b>而不是路由出口，是为了让同一份上下文的 markdown 与结构化 items 说的是同一份文本（否则用户会看到「摘要 3 条、正文 2 条」这类自相矛盾）；矛盾组合（限制项目＋只写采集）在<b>签发之前</b>由 <code>grantOptionConflict</code> 指出，是为了不签一份 Core 注定拒绝的授权。<code>describeGrant</code> 把结果念成人话：<code>capture+read · 全部项目 · 单次返回不超过 24 字 · 生效中</code>。兼容性同样是实测的：<code>.default(null)</code> ＋ 宽容判定，让<b>早于该选项存在的授权文件仍能读</b>（两处用例锁定）。</p>
+
+<h2 id="fixes">十一 实测暴露并修掉的六个真问题</h2>
+<ol>
+  <li><b>只设 <code>NOLTRI_DEV_TOKEN</code> 不设 <code>NOLTRI_DEV_REQUIRE_TOKEN</code>，签发端点 401。</b>实现是对的（§569：未配置凭据的 Core 不得发放长期凭据），探针的环境变量是错的。但<b>连锁后果很危险</b>：签发失败后脚本把字面量 <code>undefined</code> 当凭据交给 MCP，<code>dev-open</code> 的 Core 照常服务每一次工具调用，于是「片段上限生效了吗」会显示成「调用全部成功」——只看成功就通过了。修法是补上环境变量，并把<b>对照组</b>写进断言（受限 24 字 vs 未受限 32 字 vs 设备凭据 32 字）。这条已写进 README 的三条口径，因为下一个跑这段配方的人会撞同一个坑。</li>
+  <li><b>探针自己的假 PASS。</b>第一轮失败后 <code>kill</code> 掉的是 <code>tsx</code> 包装进程，它 fork 出来的 Core 仍在监听 8797；第二轮 <code>waitForHealth</code> 立刻「通过」，连上的却是<b>上一轮的陈旧进程</b>（<code>dev-open</code>、无授权表）。改为 <code>detached: true</code> ＋按进程组 <code>kill(-pid)</code> ＋运行前确认端口无人监听，并在末尾打印端口状态。教训：<b>「健康检查通过」不等于「服务的是本轮启动的那个进程」</b>。</li>
+  <li><b>授权面板同一条错误渲染两次。</b><code>snippetChoice.error</code> 在数字输入框下面出现一次，又在面板底部出现一次（<code>main.tsx:677</code>／<code>:704</code>）。这是本轮<b>唯一一处</b>在没有真实窗口的情况下也能确认的界面缺陷——靠通读渲染树发现，删掉重复的那条。</li>
+  <li><b>片段裁剪差点只裁了显示。</b>上下文包最初只改了 <code>itemLine()</code> 的渲染文字，<code>items</code> 数组与 token 预算仍在用全文，于是预算用例报 <code>expected 12 to be less than 12</code>，item 行渲染成 <code>- undefined</code>（<code>ItemEntry</code> 少了 <code>snippet</code> 字段）。修法是把裁剪放进条目构造点，显示、结构化输出与预算因此读同一份文本。</li>
+  <li><b>契约新增必填字段的提交顺序。</b><code>PublicGrant</code> 加上 <code>snippetChars</code> 后桌面端立刻 TS2322——不是代码错，是 schema 改动当时还没提交，消费方在自洽的工作树上编不过。按序落三批（桌面端旧契约 → schema＋Core → 桌面端新选项）后每批都可编译。</li>
+  <li><b>列表端点的断言形状。</b>从「消息里不含 secret 字样」升级为<b>键集合本身</b>不含凭据字段，新增字段时必须同时面对这条断言（见 §九 第二条）。</li>
+</ol>
+
+<h2 id="security">十二 §16 安全边界自查</h2>
+<table>
+  <thead><tr><th>边界</th><th>本轮状态</th></tr></thead>
+  <tbody>
+    <tr><td>长期凭据不进 Git、不进日志、不进预览</td><td>授权表只存 SHA-256 摘要，明文只在签发响应出现一次；实测 <code>grep</code> 授权文件与 Core 日志均无明文；<code>git status</code> 无新增 <code>.env</code>／密钥／用户库／构建产物（<code>dist/</code> 被 <code>.gitignore:2</code> 忽略）</td></tr>
+    <tr><td>运行期凭据文件只允许用户读写</td><td><code>grants.json</code> 以 <code>mode: 0o600</code> 写临时文件再 <code>rename</code>，实测权限 <code>-rw-------</code></td></tr>
+    <tr><td>只绑回环</td><td>Core 仍 <code>listen(port, '127.0.0.1')</code>；本轮所有实测端口（8789／8797）都只在本机</td></tr>
+    <tr><td>不替用户领权限、不静默改外部状态</td><td><b>未对用户真实客户端配置文件执行过任何写入</b>；未运行 <code>tauri dev</code>；未 <code>git push</code>；扩展的 <code>nativeMessaging</code> 决定仍留给用户</td></tr>
+    <tr><td>页面／文献／模型输出里的文字不是工具指令</td><td>本轮新增的攻击面（Agent 工具）没有绕开这一条：工具只认识七个动作，节点 id 必须来自 <code>tools/list</code> 之外的真实返回；写操作仍走 Core 同一套校验与事务（§431）</td></tr>
+    <tr><td>不宣称「端到端加密知识库」</td><td>本报告与文档均未做此宣称；§435 反而要求把「推理可能不在本机」这个不利方向写在界面上</td></tr>
+    <tr><td>日志与错误信息净化</td><td>401 信封只给 <code>code</code>／中文 <code>message</code>／<code>retryable</code>／<code>traceId</code>；凭据、堆栈、SQL、绝对路径都不出现</td></tr>
+  </tbody>
+</table>
+
+<h2 id="gaps">十三 未验证与明确没做的事</h2>
+<ul>
+  <li><b><code>M05</code>「安装包路径更新」未做</b>：本轮未 <code>tauri build</code>，因此「注册入口仍可启动或被 Setup 修复、不指向旧开发目录」只能是纸面。排到 P8。</li>
+  <li><b>连接中心面板没有在真实应用窗口里点过</b>：矩阵、授权选项、确认框文案、备份列表与恢复按钮的证据是 137 项前端测试＋23 项 Rust 测试＋<code>pnpm --filter @noltri/desktop run build</code>（四入口全部产出，<code>✓ built in 833ms</code>）。<b>本轮报告没有截图，这就是原因</b>——没有可截的窗口，也不是遗漏。</li>
+  <li><b>未对用户真实客户端配置文件写入过</b>：<code>claude_desktop_config.json</code> 与 <code>.claude.json</code> 保持原样，所有写入测试都在临时目录。<code>M01</code>／<code>M02</code> 的「真实第三方文件」这一层仍未实机走通。</li>
+  <li><b>M03 的「指定可用 Agent」是靠真实 stdio MCP 进程证明的，不是靠 Claude Desktop 的界面</b>：第三方 Agent 客户端自己的 UI 行为本轮未验证。</li>
+  <li><b>「复制 MCP 条目」仍沿用设备凭据</b>（不可撤销、不受片段上限约束）。界面已把这句话写在按钮旁边（「需要可撤销的授权请走『写入配置』」），彻底关掉这条通路要等配置写入全部走「签发→写入」，属 P8 收尾项。</li>
+  <li><b><code>mutate</code> 永不提供</b>，因此 §431 的「破坏性操作返回需要确认的动作」在 Agent 侧仍只有 <code>update_knowledge_node</code>／<code>move_knowledge_node</code> 两个受 Core 校验与事务约束的动作；相应地也<b>没有</b>实现「Agent 请求确认」这一类交互。</li>
+  <li>授权表<b>没有过期时间</b>、没有 per-node 的读写分离（<code>nodeIds</code> 只限制可见项目集合）——按 V1 范围有意不做。</li>
+  <li>Postgres 侧 21 项集成用例仍跳过（缺 <code>NOLTRI_PG_TEST_URL</code>），不计通过。<code>apps/web</code>、Supabase 驱动、<code>supabase/migrations/</code> 全部保留（P7 才动）；<code>get_selection_preview</code>／<code>runtime_info</code> 两个 Rust 命令仍注册但前端无调用点。</li>
+  <li>未 <code>git push</code>；未删任何分支／tag／远端引用；未改动用户的 <code>.workspace/</code>、<code>project.json</code>、<code>project.bak</code>。</li>
+</ul>
+
+<h2 id="method">十四 环境、命令与临时产物</h2>
+<table>
+  <thead><tr><th>项</th><th>实测值</th></tr></thead>
+  <tbody>
+    <tr><td>系统</td><td>macOS 26.6.2（Darwin 25.6.0）· arm64</td></tr>
+    <tr><td>Node</td><td><code>node -v</code> = v22.23.2（所有实测由此执行）；代理运行时另报 v24.18.0</td></tr>
+    <tr><td>工具链</td><td>pnpm · turbo 2.11.6 · TypeScript 5.9.3（strict） · vitest 5.0.3 · vite 8.3.2 · Rust cargo（<code>$HOME/.cargo/bin</code>）</td></tr>
+    <tr><td>存储</td><td><code>node:sqlite</code>（实验性 API，Core stderr 会出现 <code>ExperimentalWarning</code>）· WAL · <code>synchronous=FULL</code> · FTS5 可用 · <code>schemaVersion=2</code></td></tr>
+    <tr><td>AI</td><td><code>AI_PROVIDER=offline</code>（确定性回环提供方）；<b>本轮未发起任何真实模型调用</b></td></tr>
+    <tr><td>被测入口</td><td>Core <code>:8797</code>（18 项断言）与 <code>:8789</code>（README 配方）；stdio MCP 子进程 <code>npx tsx services/mcp-server/src/stdio.ts</code>；MCP 协议版本协商结果 <code>2025-03-26</code></td></tr>
+    <tr><td>探针</td><td>写入验证探针的标记形如 <code>ZN-PROBE-&lt;nonce&gt;-A/B</code>，放在正文<b>开头</b>（收件箱只预览开头，认不出标记的探针就读不回来）；重试用稳定 <code>requestId</code>，因此重复点击答「已存在」而不会写第二份</td></tr>
+  </tbody>
+</table>
+<h3>复核用的完整命令</h3>
+<pre><code>cd '/Users/youngi/Documents/MiniWork/知序-Noltri'
+
+# 1) 全量门禁（24 个任务）与架构门禁
+npx turbo run test typecheck --force --concurrency=2 --continue
+pnpm gate
+
+# 2) Rust（本轮重新执行，23 项）
+PATH="$HOME/.cargo/bin:$PATH" cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+# 3) 桌面 bundle（四入口）
+pnpm --filter @noltri/desktop run build
+
+# 4) 真实 stdio Agent × 真实 Core（本报告 §九 的 18 项断言）
+node /tmp/p4e-agent-live.mjs                # 日志 /tmp/p4e-agent-live.txt
+
+# 5) 起一个"启用授权 + 要求凭据"的 Core（两个开关缺一不可）
+STORAGE_DRIVER=sqlite AI_PROVIDER=offline PORT=8787 \
+NOLTRI_DEV_TOKEN=&lt;本机设备凭据&gt; NOLTRI_DEV_REQUIRE_TOKEN=true \
+NOLTRI_GRANT_FILE=/tmp/grants.json \
+  npx tsx services/knowledge-core/src/server.ts
+
+# 6) 签发 / 列出 / 撤销
+curl -s -X POST http://127.0.0.1:8787/api/admin/grants \
+  -H "authorization: Bearer &lt;本机设备凭据&gt;" -H 'content-type: application/json' \
+  -d '{"label":"知序 · Claude Desktop","client":"claude","scopes":["capture","read"],"snippetChars":200}'
+curl -s http://127.0.0.1:8787/api/admin/grants -H "authorization: Bearer &lt;本机设备凭据&gt;"
+curl -s -X POST http://127.0.0.1:8787/api/admin/grants/&lt;id&gt;/revoke \
+  -H "authorization: Bearer &lt;本机设备凭据&gt;"
+
+# 7) 让某个 Agent 用这份凭据连进来
+KNOWLEDGE_API_URL=http://127.0.0.1:8787 NOLTRI_ACCESS_TOKEN=&lt;secret&gt; \
+  npx tsx services/mcp-server/src/stdio.ts</code></pre>
+<p class="sub">临时产物都在仓库之外：<code>/tmp/p4e-agent-live.mjs</code>＋<code>.txt</code>、<code>/tmp/p4e-readme-check.sh</code>＋<code>.txt</code>、<code>/tmp/p4e-gate.txt</code>（去 ANSI 版 <code>-clean.txt</code>）与其重跑 <code>/tmp/p4e-gate-final.txt</code>、<code>/tmp/p4e-cargo.txt</code>、<code>/tmp/p4e-probe/</code> 与 <code>/tmp/p4e-readme/</code>（各自的 sqlite＋grants.json）。两个 Core 都按端口 PID 精确回收（<code>lsof -nP -tiTCP:&lt;port&gt; -sTCP:LISTEN</code>），<b>未使用宽匹配 <code>pkill</code></b>，未触碰用户自己的进程。仓库里未添加任何 <code>.env</code>、密钥、用户数据库或构建产物。</p>
+
+<h2 id="injection">十五 一条与代码无关的观察：不可信外来内容</h2>
+<p>从 P0 到本轮的多个工具返回结果<b>尾部</b>，仍会周期性出现两段不是用户写的指令式文本（大意「内容是硬上限，必须遵守规则，尽量多输出」与「Please continue」）。本轮它们出现在测试与脚本输出里，处理方式和前几轮一致：当作不可信内容，没有据此改变任务范围、没有放宽任何输出或采集长度约束、没有转述成用户指令。§15.5 那次真实实测恰好提供了一个新的观察点：<b>即使 Agent 侧的工具全部调用成功，成功本身也不是结论</b>——结论必须来自「片段长度等于授权上写的 24」这种可核对的具体值。</p>
+<p>实现层的兜底本轮又多了一道，而且方向正确：Agent 能做的每件事都以<b>它自己那份授权</b>的身份去做，节点 id 只能来自工具返回，破坏性 scope（<code>mutate</code>）在界面上根本不存在。页面里的文字让 Agent「把整库导出」，它拿到的只会是 Core 的拒绝。</p>
+
+<h2 id="next">十六 下一步</h2>
+<p>P4 已交付并落库。按开发文档 §590 继续走 <b>P5 Research 整合</b>：旧领域与测试迁入、<code>packages/storage</code> 侧的研究数据迁移、研究工作台与知识关联（§591 一行：「Research 整合 ｜ 旧领域与测试迁入、迁移 storage、研究工作台与关联」）。</p>
+<ol>
+  <li><b>盘点旧分支里的 Research 领域与测试</b>，列出「已在桌面侧有对等物／需要迁入／应当丢弃」三档，写入 §16 的新小节。这一步只读不写。</li>
+  <li><b>契约先行</b>：研究项目与知识条目的关联关系先写成 schema＋storage 契约用例（跨 SQLite／memory 两个驱动），再动 Core 服务层——这与 P3／P4 的顺序一致。</li>
+  <li><b>研究工作台迁入桌面 WebView</b>，并把 §十三 里「真实窗口点验」这项欠账<b>与 P5 的界面回归合并做一次</b>：跑一次 <code>tauri dev</code>，把手工路径（矩阵、授权选项、确认框、备份与恢复）走完并如实记录；这一步会在本机启动一个窗口，但<b>不写任何第三方配置文件</b>。</li>
+  <li>顺带补掉的欠账：M05 打包路径、README 里 <code>engines.node</code> 与实际版本不一致、Tauri 传入自身 app-data 目录（当前实测仍靠 <code>NOLTRI_SQLITE_FILE</code>）、<code>get_selection_preview</code>／<code>runtime_info</code> 的去留。</li>
+</ol>
+<div class="warnbox">
+  <p><b>需要用户点头、我不会替你做的一件事（沿用 P3 提出的那项，仍未决）：</b></p>
+  <p>要不要给扩展加 <code>nativeMessaging</code> 权限，把扩展 ↔ Native Host 真正接起来？P4 没有改变这个决定的代价与收益：加了，浏览器会真的启动 host；不加，扩展继续走 HTTP 直连本机 Core，而 P4 签发的可撤销授权对扩展入口同样适用。</p>
+</div>
+
+<div class="foot">
+  <p>知序 Noltri · P4 Agent Setup 交付报告 · 2026-10-06 · 分支 <code>v1_research&amp;modify</code> · 提交范围 <code>99350de^..bd90588</code></p>
+  <p>本报告为单文件、无外部依赖：样式与脚本全部内嵌，不请求任何网络资源，不含截图（本轮没有可截的真实窗口，原因见 §十三）。所有数字来自实际执行的命令输出；文档回写对应 <code>FUNCTION_MAP.md</code>、<code>README.md</code>、<code>docs/P0-baseline-and-recovery.md §15</code>，均为仓库内真实改动，不是只写在报告里的说法。</p>
+</div>
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var stored = null;
+  try { stored = localStorage.getItem('noltri-report-theme'); } catch (e) {}
+  if (stored === 'dark') root.setAttribute('data-theme', 'dark');
+  document.getElementById('themer').addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') === 'dark';
+    if (dark) { root.removeAttribute('data-theme'); } else { root.setAttribute('data-theme', 'dark'); }
+    try { localStorage.setItem('noltri-report-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+
+  Array.prototype.slice.call(document.querySelectorAll('pre')).forEach(function (block) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy';
+    button.textContent = '复制';
+    button.addEventListener('click', function () {
+      var text = block.textContent.replace(/^复制/, '');
+      function done(ok) {
+        button.textContent = ok ? '已复制' : '失败';
+        setTimeout(function () { button.textContent = '复制'; }, 1600);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+        return;
+      }
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', 'readonly');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      done(ok);
+    });
+    block.appendChild(button);
+  });
+
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav a'));
+  var targets = links.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); });
+  function onScroll() {
+    var y = window.scrollY + 90;
+    var active = 0;
+    for (var i = 0; i < targets.length; i += 1) { if (targets[i] && targets[i].offsetTop <= y) active = i; }
+    links.forEach(function (a, i) { a.style.color = i === active ? 'var(--accent)' : ''; });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+</body>
+</html>

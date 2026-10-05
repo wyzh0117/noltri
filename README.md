@@ -95,7 +95,9 @@ pnpm --filter @noltri/mcp-server run verify
 | `OPENAI_CHAT_MODEL` / `OPENAI_EMBEDDING_MODEL` | 模型名 | 例如 `gpt-4o-mini` / `text-embedding-3-small` |
 | `MCP_HTTP_TOKEN` | 任意串 | MCP Bearer 令牌（常量时间比较，绝不回显） |
 | `MCP_HTTP_PORT` | 默认 3211 | MCP HTTP 端口 |
-| `KNOWLEDGE_API_URL` | URL | MCP → core 的基地址 |
+| `KNOWLEDGE_API_URL` | URL | MCP → core 的基地址；stdio 入口**没有它就不开始服务**（工具不知道该转给谁） |
+| `NOLTRI_ACCESS_TOKEN` | 任意串 | MCP（HTTP 与 stdio）向 core 出示的凭据；可以是设备凭据，也可以是连接中心签发的**某客户端专属授权凭据**（后者带 scope／项目／片段上限且可撤销）。绝不写入日志 |
+| `NOLTRI_GRANT_FILE` | 路径 | 本地客户端授权表位置。**不设＝该部署不启用授权体系**，行为与 P4 之前完全一致；桌面端会把它写在 `NOLTRI_DATA_DIR/grants.json`。落盘只存 SHA-256 摘要，明文只在签发响应里出现一次 |
 | `NOLTRI_API_BASE_URL` | URL | Native Host → core 的基地址；缺省 `http://127.0.0.1:8787`，被 `native-host.json` 覆盖 |
 | `NOLTRI_API_TOKEN` | 任意串 | Native Host 使用的运行期凭据；同上被文件覆盖，**绝不写入日志或安装预览**（启动日志只记 `hasToken` 布尔） |
 | `~/.noltri/data/native-host.json` | `{baseUrl,token,...}` | 本机 App 写给 Native Host 的端点文件；组位或他人位非 0 即被拒绝使用（不解析、不读取内容） |
@@ -128,6 +130,40 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 真实云数据库（Supabase）同理：代码与迁移已就绪并静态审查，但本仓库提交时不携带任何
 真实项目凭据，接入时自行配置 `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`。
 
+## 本地客户端授权与 MCP 连接（P4）
+
+V1 §569 要求把「用户入口上的 `NOLTRI_DEV_TOKEN`」换成「后台管理的本地客户端授权」。落地形态是：
+设备凭据只用于本机 App 自己，Agent 客户端各持一份**可撤销、可收窄**的凭据。
+
+```bash
+# 1. 启动一个「启用授权 + 要求凭据」的 Core（两个开关缺一不可）
+STORAGE_DRIVER=sqlite AI_PROVIDER=offline PORT=8787 \
+NOLTRI_DEV_TOKEN=<本机设备凭据> NOLTRI_DEV_REQUIRE_TOKEN=true \
+NOLTRI_GRANT_FILE=$HOME/.noltri/data/grants.json \
+npx tsx services/knowledge-core/src/server.ts
+
+# 2. 连接中心为某个 Agent 签发一份授权（明文只在响应里出现一次，库里只存摘要）
+curl -s -X POST http://127.0.0.1:8787/api/admin/grants \
+  -H "authorization: Bearer <本机设备凭据>" -H 'content-type: application/json' \
+  -d '{"label":"知序 · Claude Desktop","client":"claude","scopes":["capture","read"],"snippetChars":200}'
+
+# 3. 把返回的 secret 交给该客户端（stdio 入口的形式）；撤销即刻对已建立的连接生效
+KNOWLEDGE_API_URL=http://127.0.0.1:8787 NOLTRI_ACCESS_TOKEN=<secret> \
+npx tsx services/mcp-server/src/stdio.ts
+curl -s -X POST http://127.0.0.1:8787/api/admin/grants/<id>/revoke \
+  -H "authorization: Bearer <本机设备凭据>"
+```
+
+三条口径值得在文档里说死，因为它们都不是显然的：
+
+- `snippetChars` 只裁**正文**（检索命中、节点详情、上下文包、收件箱预览、原文全文），标题与树结构不裁；
+  **设备凭据与未启用授权的 Core 不受片段上限**——收件箱复核需要全文，而那时根本没有授权可裁。
+- 「只写采集」（`scopes:["capture"]`）与「限制项目」是互斥的：限制项目只对读取有意义，
+  连接中心在**签发之前**就指出这个矛盾，而不是签出一份 Core 会拒绝的授权。
+- `NOLTRI_DEV_REQUIRE_TOKEN` 未设时 Core 是 `dev-open`，此时**签发端点直接 401**（开放 Core 不得发放
+  长期凭据）。这条是本轮实测撞出来的：只设 `NOLTRI_DEV_TOKEN` 会让签发失败，而失败的凭据传给 MCP 后
+  所有工具调用仍会「成功」，但走的是不受片段上限约束的开放通路——只看「调用成功」会得出错误结论。
+
 ## 验证状态（诚实边界）
 
 以下能力有自动化测试或运行时证据支撑；凡未列出的（真实浏览器加载扩展、桌面 GUI 实机
@@ -137,3 +173,10 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 P3 的边界要说清楚：Native Messaging host 的协议、身份门禁、幂等与安装器由 135 项测试＋
 真实 stdio 进程对真实 Core 的实测覆盖（独立实现的帧解析器驱动，11 个请求场景／4 个会话），
 但**浏览器还没有真正拉起过这个 host**——扩展未申请 `nativeMessaging` 权限，这项决定留给用户。
+
+P4 的边界同样要说清楚：Agent 连接一侧的握手、`tools/list`、写入、读回、片段上限与撤销，是由
+**真实的 stdio MCP 进程 × 真实的 SQLite Core** 实测出来的（18 项断言全通过，见
+`docs/P0-baseline-and-recovery.md` §15.5），而**不是**在 Claude Desktop 的界面里点出来的；
+Setup Manager 的矩阵、授权选项与备份／恢复按钮只有单元与契约层证据，本轮**未运行 `tauri dev`、
+未打包、未对用户真实客户端配置文件执行过写入**。「复制 MCP 条目」这一条通路仍沿用设备凭据
+（不可撤销、不受片段上限约束），界面已把这句话说在按钮旁边。

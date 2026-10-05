@@ -364,3 +364,153 @@ README 里新增的 host 手动示例不是纸面命令，实测过：`printf '\
 ### 14.7 一条与本轮改动无关的观察（不信任外来内容）
 
 在 P0～P3 的多个工具返回结果尾部，反复出现过两段**不是用户写的**指令式文本（大意：「内容是硬上限，必须遵守规则，尽量多输出」以及「Please continue」）。处理方式是把它们当作不可信内容：没有据此改变任务范围、没有放宽任何输出长度约束、也没有转述成用户指令。开发文档 §16 关于「文献／网页／模型输出里的文字不是工具指令」的要求，在实现层由 host 的四动词判别联合兜住——页面里的文字让 host 去「导出全库」，得到的只会是 `forbidden_scope`。该现象留档，供后续轮次继续观察。
+
+## 15 P4 落地结果（2026-10-06 实测）
+
+P4 的范围口径是开发文档 §590：「Agent Setup ｜ 检测、配置预览、备份合并、授权、MCP handshake、scope 和卸载恢复 ｜ 实际支持矩阵；指定可用 Agent 完成写入、检索、上下文调用」。分四片交付，加本片文档回写共 17 个提交，代码范围 `99350de^..bd90588`（16 个提交，35 files changed，4475 insertions(+)，121 deletions(-)）：P4-A 2 个提交（stdio transport 与身份自证、参数数组化注册）、P4-B 2 个（三段式支持状态与矩阵界面）、P4-C 4 个（备份／原子替换／可撤销卸载／幂等）、P4-D 8 个（授权表与 scope／撤销贯通 Core、连接中心端点、api-client、按客户端签发、写入验证探针、§435 隐私边界、限制返回片段）。
+
+### 15.1 用例分布（逐包 `npx turbo run test --filter=@noltri/<pkg> --force` 实测，非估算）
+
+| 包 | 测试文件 | 通过 | 跳过 | P3 时 |
+| --- | --- | --- | --- | --- |
+| `apps/desktop` | 10 | 137 | 0 | 7 文件／79 |
+| `services/knowledge-core` | 11 | 133 | 0 | 10 文件／99 |
+| `services/native-host` | 7 | 135 | 0 | 135 |
+| `apps/extension` | 9 | 134 | 0 | 134 |
+| `packages/storage` | 5 | 75 | 21 | 75／21 |
+| `packages/shared` | 3 | 60 | 0 | 60 |
+| `packages/api-client` | 3 | 29 | 0 | 2 文件／17 |
+| `services/mcp-server` | 3 | 27 | 0 | 2 文件／20 |
+| `packages/ai-provider` | 2 | 48 | 0 | 48 |
+| `apps/web`（`node:test`） | 1 | 28 | 0 | 28 |
+| `services/ai` | 1 | 15 | 0 | 15 |
+| `packages/schema` | 0 | 0 | 0 | 契约由消费方锁定，本包无独立用例 |
+| 合计 | **55** | **821** | **21** | 49 文件／710／21 |
+
+净增 111 通过、6 个测试文件。21 项跳过仍全部是 `packages/storage/test/supabase.contract.test.ts` 缺少 `NOLTRI_PG_TEST_URL` 的 PG 集成用例，按 §19 X02 口径**不计通过**。
+
+本轮新增用例的落点（逐文件实测计数）：
+
+- `services/knowledge-core/test/authorization.test.ts` **34 项**（P4 新建）：摘要而非明文、scope 判定、`mutate` 不被提供、撤销即拒、项目限制、片段上下界、旧版 `grants.json` 仍可读、以及「限制返回片段 over the wire」的五个读取面
+- `apps/desktop/test/grants.test.ts` **24 项**、`mcp-config.test.ts` **18 项**、`probe.test.ts` **15 项**（P4 新建）、`agent-matrix.test.ts` **7 项**（P4 新建）、`gating.test.ts` 4 项、`workbench-render.test.tsx` 20 项（P2 脚手架，本轮未动）
+- `services/mcp-server/test/stdio.test.ts` **7 项**（P4 新建，3.9 s：真实 SDK 客户端经 stdio 走完握手＋`tools/list`＋`tools/call`）
+- `packages/api-client/test/grants.test.ts` **12 项**（P4 新建）：URL／方法／载荷校验发生在出网之前，以及「一次性明文必须原样穿过 round trip」
+
+全量门禁：`npx turbo run test typecheck --force --concurrency=2 --continue` → **24/24 任务通过**（12 包 × 2），日志 `/tmp/p4e-gate.txt`（去 ANSI 版 `/tmp/p4e-gate-clean.txt`）；删掉 §15.7 第 3 条的重复渲染后**又完整重跑一次**，仍是 24/24（`/tmp/p4e-gate-final.txt`），本节的逐包计数取自这最后一次。Rust 侧本轮**重新执行**：`PATH="$HOME/.cargo/bin:$PATH" cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` → **23 passed; 0 failed**（`/tmp/p4e-cargo.txt`：`mcp` 13、`commands` 4、`settings` 3、`time` 3），另有两个空 target（lib 测试之外的 0 项）与 0 项 doc-test。§14.1 里「Rust 侧本轮未重新执行」的悬账已结清。修掉 §15.7 第 3 条的重复渲染之后，全量门禁**再次重跑**：`/tmp/p4e-gate-final.txt` 仍是 **24/24**、**821 通过／21 跳过／55 个测试文件**，逐包计数与上表一致（`@noltri/desktop:test → Tests 137 passed`）。上表的数字取自这份最终日志。
+
+### 15.2 P4-A：stdio 是第二条腿，而且它先自证身份
+
+`services/mcp-server/src/stdio.ts` 把 §11「默认 stdio transport；其进程仅代理本地 Core，不另建数据库」落到实现：`buildServer()` 与 HTTP 端点复用同一份七工具代码，凭据来自 `NOLTRI_ACCESS_TOKEN`，Core 地址来自 `KNOWLEDGE_API_URL`。三条不可让步的行为都由测试锁定：
+
+- **stdout 只承载 JSON-RPC**，给人看的每一行都走 stderr（P3 的 Native Host 用真金白银换来的规则，这里直接沿用）
+- **在 Core 自证身份之前不开始服务**：先用 `ApiClient.health()` 探测，再过 `verifyCoreIdentity()`；四种拒绝各有明确原因——`missing_api_url`（不知道该转给谁，因此不服务）、`core_unreachable`、`not_noltri_core`、`protocol_mismatch`，并且 `main()` 在未服务时置 **退出码 1**。理由是 M06：一个把陌生本地服务报告成「已连上知识库」的 stdio 客户端比没有客户端更糟
+- 注册条目按 **参数数组**构造而不是拼 shell 字符串（`92a196c`）：把 `KNOWLEDGE_API_URL` 之类的值拼进一条命令行字符串时，路径或 URL 里的空格与引号会把它拆成别的参数
+
+HTTP 侧 `/mcp` 把**调用方自己的** `Authorization: Bearer` 原样转发给 Core，所以 P4-D 的每客户端授权、scope、撤销、片段上限对 Agent 与对桌面端是同一套判定，而不是「Agent 走后门」。
+
+### 15.3 P4-B：支持矩阵不是一个「已连接」布尔
+
+`Target::ALL` 是七张卡片，每张分别报告 检测／版本／支持状态／配置路径／连接方式／权限（`apps/desktop/src/lib/agent-matrix.ts` ＋ `apps/desktop/src-tauri/src/mcp.rs`）：
+
+| 客户端 | 支持状态 | 是否代写配置 | 配置路径（相对 home） | 官方入口 |
+| --- | --- | --- | --- | --- |
+| Claude Desktop | 可代写配置 | 是 | `Library/Application Support/Claude/claude_desktop_config.json` | 产品页＋MCP 文档 |
+| Claude Code | 可代写配置 | 是 | `.claude.json` | 登录页＋MCP 文档 |
+| ChatGPT / Codex | 仅引导 | 否（TOML） | `~/.codex/config.toml`（只展示，不写） | 连接器设置＋Codex MCP 文档 |
+| Cursor | 仅引导 | 否 | `~/.cursor/mcp.json`（只展示，不写） | Settings＋MCP 文档 |
+| Hermes | 未验证：需人工配置 | 否 | **无**（不给写路径） | **无**（不编 URL） |
+| Qoder | 未验证：需人工配置 | 否 | **无** | **无** |
+| 其他 MCP Client | 仅引导 | 否 | 无 | modelcontextprotocol.io |
+
+三条诚实性规则由测试兜住，而不是靠文案：`support()` 之外的未知值在界面层降级为「未验证」（`agentRows`／`supportLabel`）；未验证的两家**同时**拿不到 `config_relative_path` 与官方链接（`detected_but_unverified_agents_get_no_write_path_and_no_url`，并断言四个 key 的 URL 都为 `None`）；检测只报告 `.app` bundle 是否存在与 `Info.plist` 版本，`bundle_version_reads_the_plist_and_refuses_junk` 拒掉垃圾 plist，`an_absent_agent_reports_no_version` 保证「没检测到」不会被渲染成「版本未知」。界面文案对未验证客户端写的是「验证前不显示为已连接」——这就是 M06 要的「不能伪造已连接」。
+
+### 15.4 P4-C：改别人的配置文件之前先备份，而且每一步都能撤销（M02）
+
+写入路径是 预览 → 备份 → 原子替换，三段都有 Rust 侧证据（`mcp.rs` 13 项）：
+
+- `write_text_atomically` 先 `fs::copy` 成 `<file>.noltri-backup.<时间戳>` 再 `rename`；**备份失败即中止写入**（`a_failed_backup_aborts_the_write`），不存在「已经动了原文件但没留下退路」的中间态
+- 连续两次写**各留一份备份**、按时间倒序、文件名互不相同（`successive_writes_keep_their_own_backup_and_list_newest_first`）——两次快速写入时，第一次的备份不会被第二次的覆盖掉，因为界面把两者都列为撤销点
+- `list_backups` 只认 `<file>.noltri-backup.` 前缀：用户手制的 `.bak` 不会被冒充成「本应用给的撤销点」
+- `restore_backup` 两道拒绝：来源必须是 `list_backups` 给过的文件，且必须与目标同目录；恢复动作本身又先备份一次，所以**撤销恢复也是可撤销的**（`restore_puts_the_old_bytes_back_and_is_itself_undoable`、`restore_refuses_files_this_app_does_not_own`）
+- 合并与摘除由 `mcp-config.ts` 18 项锁定：只替换自家 `noltri` 条目，兄弟服务器／未知字段／键顺序都保留；**重复安装产出逐字节相同的文档**；文档不是 JSON、没有 `mcpServers` 位、或自家条目已存在但解析失败时**拒绝动笔**（`commands.rs` 4 项：`a_document_that_is_not_json_or_has_no_servers_is_refused`、`a_write_must_carry_our_entry_and_every_existing_one`、`a_removal_must_drop_our_entry_and_touch_nothing_else`、`an_unparseable_existing_file_blocks_the_write`）
+- 确认框给的是绝对路径＋`summarizeMerge` 的合并摘要＋这份授权的说明；**用户点「取消」时刚签发的凭据同步撤销**，卸载成功后同样撤销该客户端仍生效的授权——不留一份没人知道的授权
+
+### 15.5 P4-D：真实 stdio Agent × 真实 Core 的 18 项断言（M01／M03／M04／§435）
+
+`/tmp/p4e-agent-live.mjs`（本轮一次性脚本，日志 `/tmp/p4e-agent-live.txt`）不是模拟：它起**真实 Core 进程**（`STORAGE_DRIVER=sqlite AI_PROVIDER=offline PORT=8797 NOLTRI_DEV_TOKEN=… NOLTRI_DEV_REQUIRE_TOKEN=true NOLTRI_GRANT_FILE=/tmp/p4e-probe/grants.json NOLTRI_SQLITE_FILE=/tmp/p4e-probe/noltri.sqlite`），经 `POST /api/admin/grants` 签发一份 `capture+read`＋`snippetChars:24` 的授权，再把该明文塞进**真实 stdio MCP 进程**（`npx tsx services/mcp-server/src/stdio.ts`），用手工书写的 newline-delimited JSON-RPC 走完 `initialize → notifications/initialized → tools/list → tools/call capture_knowledge → tools/call search_knowledge`，然后撤销、在**同一条已建立的会话**上再调一次。18 项断言全通过（`grep -c '^PASS' = 18`、`FAIL = 0`），逐字实测；长行仅为排版折行，文字未改：
+
+```
+PASS G:   Core answers /api/health as itself — noltri-knowledge-core 0.1.0 proto=1 storage=sqlite
+PASS M01: 连接中心 mints an Agent credential over HTTP — status=200 secretLen=43
+PASS §435: the minted grant carries the snippet cap — 24
+PASS M04: listing returns metadata with no credential field —
+          id,label,client,scopes,nodeIds,snippetChars,createdAt,revokedAt
+PASS control: a second grant without a cap is mintable — status=200
+PASS M01: real MCP handshake completes with the Agent credential —
+          noltri-knowledge@0.1.0 proto=2025-03-26
+PASS M01: tools/list returns the advertised tool set —
+          capture_knowledge,search_knowledge,get_knowledge_tree,get_knowledge_node,
+          update_knowledge_node,move_knowledge_node,get_node_context
+PASS M03: the Agent writes through the tool and Core answers with a placement —
+          已收纳 2 条知识点（rawSourceId=e1e259ef-7fb9-4938-a312-410593c2316c）：
+          1. Python 的元组一旦创建就不能修改，因此可以作
+PASS M03: the Agent reads back the record the Core stored — hits=3
+PASS §435: every fragment this credential reads back is capped —
+          len=24 text="Python 的元组一旦创建就不能修改，因此可…"
+PASS §435: the cap holds for every hit, not just the first — 24/24/24
+PASS §435: an uncapped grant on the same Core reads the full text — len=32
+PASS §435: the device credential is never capped — len=32
+PASS M04: revocation reports the record as dead — status=200 revokedAt=2026-10-05T18:03:02.432Z
+PASS M04: the same live MCP session is refused once the token is revoked —
+          [unauthorized] 未授权：Knowledge Core 拒绝了当前 token，请让用户重新完成连接授权
+          （「知序 · Claude Desktop」的授权已被撤销，这条连接不能继续读写 / access refused (grant_revoked)）
+PASS M04: revocation narrows reads without breaking the transport — tools=7
+PASS M04: revoking one credential leaves the other connection working — hits=3
+PASS M04: no plaintext credential is persisted anywhere in the grants file — bytes=825
+```
+
+M03 的口径在这里要说准：「工具经 Core 访问同一数据库」由**同一条 SQLite 库**证明——工具写入的 `rawSourceId` 就是 Core 收件箱里的那一条，Agent 检索命中的就是它自己刚写的内容；M04 的「旧连接不能继续读写」不是重新连接后才拒绝，而是**同一个进程、同一个 stdio 会话**的下一次调用就被拒（授权表每请求重读），同时另一份未撤销的授权仍然可读，`tools/list` 仍然正常（拒绝的是数据面，不是传输层）。stderr 侧只出现一行 `serving over stdio, core 0.1.0 (instance b0497304…)`；Core 日志里那次 401 是 `{"method":"POST","path":"/api/search","code":"unauthorized",…,"traceId":"d8004538…"}`，**没有任何一行出现凭据**。
+
+README 里那段「本地客户端授权」配方也照抄跑过一遍（`/tmp/p4e-readme-check.sh`，日志 `/tmp/p4e-readme-check.txt`，临时 profile 目录，用完按端口 PID 精确回收，`still listening: 0`）：curl 签发 `snippetChars:40` → 以该 secret 采集并检索 → 命中长度 `32/32`、`capped=true` → curl 撤销 → 同一 secret 立即 **401**，`message` 是「『知序 · Claude Desktop』的授权已被撤销，这条连接不能继续读写 / access refused (grant_revoked)」，`retryable=false`；`grants.json` 权限 `-rw-------`（`mode: 0o600` 写入临时文件后 `rename`），`grep` 该明文的结果是 `no plaintext in grants.json`。
+
+### 15.6 §435：授权界面上的三个选项，以及它们真正约束到哪里
+
+隐私说明按 §435 原文的意思写在**签发之前**（`AGENT_PRIVACY_NOTE`）：「MCP 通信在本机，并不保证 Agent 的推理也在本机。某个本地 Agent 若调用云端模型，工具返回的知识可能随其上下文一起离开这台电脑。不确定就收窄下面的授权。」这句话之所以必须出现在界面上，是因为它无法从代码里推断，而且方向对用户不利。
+
+三个选项与它们的真实作用域：
+
+| 选项 | 落地 | 拒绝发生在 |
+| --- | --- | --- |
+| 只写采集 | `scopes:["capture"]`，永不带 `read`；`mutate` **从不出现在界面上** | 读取类动作在 `requireScope` 处拒绝（34 项授权用例覆盖） |
+| 限制项目 | 扁平化成「Python / 数据结构 / Tuple 元组」这类可辨认路径标签供勾选，上限 `MAX_GRANTED_PROJECTS=100`，复选框到数即停 | 面板先停，Core 的 `issueGrantRequestSchema` 再拒（同一常量导出，不会漂移） |
+| 限制返回片段 | `snippetChars`（20–4000）随授权进入 `ActorContext`，在**服务层内部**裁剪 | 空输入＝不限制；非整数／越界在签发前挡住「写入配置」按钮，不静默丢弃 |
+
+片段上限裁剪的是五个读取面：`search` 命中正文、节点详情（`normalizedText` 与 `summary`）、上下文包（`markdown`／`items`／`sources`／`estimatedTokens` 因此自洽）、收件箱预览、`GET /api/inbox/:id` 的原文全文。**不裁剪**标题与树结构（界面因此写的是「正文」而不是「返回内容」），**不裁剪**设备凭据与未启用授权的通路——收件箱复核与桌面工作台需要全文，而那条路上根本没有授权可裁；`apps/chat` 的节点对话经 `buildNodeContext` 自动继承同一个上限。三项选项互相矛盾的组合（限制项目＋只写采集）在**签发之前**就被 `grantOptionConflict` 指出，而不是签一份 Core 会拒绝的授权；`describeGrant` 把结果念成人话（`capture+read · 全部项目 · 单次返回不超过 24 字 · 生效中`）。
+
+兼容性也是实测的而非口头：`publicGrantSchema` 对 `snippetChars` 用 `.default(null)`、`isGrant` 用宽容判定，因此**授权文件早于该选项存在时仍能读**（`reads a grants file written before 限制返回片段 existed` 与 api-client 的键列表断言两处锁定）。
+
+### 15.7 本轮实测暴露并修掉的六个真问题
+
+1. **只设 `NOLTRI_DEV_TOKEN` 不设 `NOLTRI_DEV_REQUIRE_TOKEN`，签发端点直接 401**——这是 §569 要的守卫（`dev-open` 的 Core 不得发放长期凭据），实现是对的，探针的环境变量是错的。但**连锁后果很危险**：签发失败后脚本把字面量 `undefined` 当成凭据交给 MCP，`dev-open` 的 Core 照常服务每一次工具调用，于是「片段上限生效了吗」会显示成调用全部成功——只看「成功」就通过了。修法是补上 `NOLTRI_DEV_REQUIRE_TOKEN=true`，并把**对照组**写进断言：受限授权 24 字 vs 未受限授权 32 字 vs 设备凭据 32 字。这条已经写进 README 的三条口径里，因为它对下一个跑这段配方的人是同一个坑。
+2. **探针自己的假 PASS**：第一轮失败后 `kill` 掉的是 `tsx` 包装进程，它 fork 出来的 Core 仍在监听 8797；第二轮 `waitForHealth` 立刻「通过」，而它连上的是**上一轮的陈旧进程**（`dev-open`、无授权表）。改为 `detached: true` ＋ 按进程组 `kill(-pid)` ＋ 运行前确认端口无人监听，并在脚本末尾打印端口状态。教训：「健康检查通过」不等于「服务的是本轮启动的那个进程」。
+3. **授权面板同一条错误渲染两次**：`snippetChoice.error` 在数字输入框下面出现一次，又在面板底部出现一次（`main.tsx:677`／`:704`）。实机点击之前这是看不见的，靠通读渲染树发现，删掉重复的那条。
+4. **片段裁剪差点只裁了显示**：上下文包最初只改了 `itemLine()` 的渲染文字，`items` 数组与 token 预算仍在用全文，于是 `search-and-context` 的预算用例报 `expected 12 to be less than 12`，而 item 行渲染成 `- undefined`（`ItemEntry` 少了 `snippet` 字段）。修法是把裁剪放进条目构造点（`snippet: capText(actor, item.normalizedText)`），显示、结构化输出与预算因此读同一份文本。
+5. **契约新增必填字段的提交顺序**：`PublicGrant` 加上 `snippetChars` 后桌面端立刻 TS2322——不是代码错，是 schema 改动当时还没提交，消费方在自洽的工作树上编不过。按序提交（先落桌面端旧契约那批，再落 schema＋Core，最后桌面端新选项）之后每批都可编译。
+6. **列表端点是「可截屏面」**：`grants()` 的断言从「消息里不含 secret 字样」升级为**键集合本身**不含凭据字段（`id,label,client,scopes,nodeIds,snippetChars,createdAt,revokedAt`），新增字段时这条断言会立刻失败，而不是留一个悄悄多出 `digest` 的响应体。
+
+### 15.8 P4 明确没做的事
+
+- **M05「安装包路径更新」未验证**：没有打包，因此「注册入口仍可启动或被 Setup 修复、不指向旧开发目录」这条只能是纸面。它需要 `pnpm --filter noltri-desktop run build` 之后的真实产物，排到 P8。
+- **Setup Manager 的连接中心面板没有在真实应用窗口里点过**：本轮未运行 `tauri dev`。矩阵、授权选项、确认框文案、备份列表与恢复按钮的证据是 137 项前端测试＋23 项 Rust 测试＋`pnpm --filter @noltri/desktop run build`（四个入口 `main.html`／`workbench.html`／`paste.html`／`overlay.html` 全部产出，`✓ built in 833ms`），界面级的已知缺陷只有 §15.7 第 3 条那种能靠读代码发现的。
+- **未对用户真实客户端配置文件执行过任何写入**：`~/Library/Application Support/Claude/claude_desktop_config.json` 与 `~/.claude.json` 保持原样，所有写入测试都在临时目录里。M01／M02 的「真实第三方文件」这一层仍未实机走通。
+- **M03 的「指定可用 Agent」是靠真实 stdio MCP 进程证明的，不是靠 Claude Desktop 的界面**：Agent 客户端自己的 UI 行为本轮未验证。
+- **「复制 MCP 条目」这条通路仍沿用设备凭据**（不可撤销、不受片段上限约束）。界面上已把这句话写在按钮旁边（「需要可撤销的授权请走『写入配置』」），但彻底关掉这条后门要等配置写入全部走「签发→写入」，属 P8 收尾项。
+- **`mutate` scope 永不在界面上提供**，因此 §431「破坏性操作应返回需要确认的动作」在 Agent 侧仍只有 `update_knowledge_node`／`move_knowledge_node` 这两个受 Core 校验与事务约束的动作，没有新增危险面；相应地也**没有**实现「Agent 请求确认」这一类交互。
+- 授权表**没有过期时间**、没有 per-node 的读写分离（`nodeIds` 只限制可见项目集合），这两点按 V1 范围有意不做，若要做属于 V2。
+- `apps/web`、`packages/storage` 的 Supabase 驱动、`supabase/migrations/` 全部保留（P7 才动）；`get_selection_preview`／`runtime_info` 两个 Rust 命令仍注册但前端无调用点。
+- 未 `git push`；未删除任何分支／tag／远端引用；未改动用户的 `.workspace/`、`project.json`、`project.bak`。
+
+### 15.9 下一步
+
+P4 的验收行里 M01／M02／M03／M04／M06 已有代码与实测证据，M05 待打包。下一片按 §590 进入 **P5 Research 整合**：旧领域与测试迁入、`packages/storage` 侧的研究数据迁移、研究工作台与知识关联，并把 §15.8 里「真实窗口点验」这项欠账与 P5 的界面回归合并做一次。
+
