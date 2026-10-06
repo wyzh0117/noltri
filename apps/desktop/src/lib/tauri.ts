@@ -49,6 +49,10 @@ export const commands = {
   }) => invoke<unknown>('record_capture_outcome', { outcome }),
   dismissOverlay: () => invoke<void>('dismiss_overlay'),
   hideWindow: (label: string) => invoke<void>('hide_window', { label }),
+  browserHostStatus: () => invoke<import('./types').BrowserHostStatus>('browser_host_status'),
+  browserHostRepair: (extensionIds: string[], browser: string, confirm: boolean) =>
+    invoke<string>('browser_host_repair', { extensionIds, browser, confirm }),
+  browserHostUninstall: (browser: string) => invoke<string>('browser_host_uninstall', { browser }),
 };
 
 /** Event names, mirroring the `pub const *_EVENT` strings in Rust. */

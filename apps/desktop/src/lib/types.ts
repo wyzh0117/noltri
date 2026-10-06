@@ -137,3 +137,16 @@ export interface ConfigBackup {
   /** The same instant rendered for a human, UTC. */
   readonly madeAtLabel: string;
 }
+
+/** `browser_host_status` — the installed app's registration entry for the browser channel (M05). */
+export interface BrowserHostStatus {
+  /** False in dev builds: registration is only offered where a bundle exists. */
+  readonly serviceable: boolean;
+  readonly note: string;
+  readonly launcherPath: string;
+  readonly launcherPresent: boolean;
+  readonly manifestFile: string | null;
+  readonly currentExecutable: string | null;
+  /** True when the recorded path is exactly our launcher — nothing to repair. */
+  readonly managed: boolean | null;
+}

@@ -1,11 +1,13 @@
 /**
- * Setup Manager (V1 §12): two sections only — 「捕获」 and 「AI 连接」.
+ * Setup Manager (V1 §12 / M05): 「捕获」、「AI 连接」 and 「浏览器通道」.
  *
  * 捕获: honest Accessibility status (the grant belongs to macOS System Settings and is never
  * bypassed), a live one-shot capture test, gating knobs and the per-app opt-out lists.
  * AI 连接: detect → test → prepare → (optionally) write, per MCP client; Cursor / Codex / 其他 are
  * guided with a copyable entry instead of a written file. A written config receives a freshly minted
  * per-client grant (采集 + 读取) rather than the device credential, and both 撤销 and 卸载 retire it.
+ * 浏览器通道: register / repair / retire the native-messaging entry, always pointing at the installed
+ * app's own runtime instead of whatever a development run left behind.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -13,7 +15,7 @@ import './styles.css';
 import type { ReactElement } from 'react';
 import type { IssueGrantResponse, PublicGrant } from '@noltri/api-client';
 import { commands } from './lib/tauri';
-import type { CaptureStateOut, ConfigBackup, ConnectionProbeOut, SettingsShape, TargetFacts } from './lib/types';
+import type { BrowserHostStatus, CaptureStateOut, ConfigBackup, ConnectionProbeOut, SettingsShape, TargetFacts } from './lib/types';
 import {
   buildServerEntry,
   describeRemoval,
@@ -203,6 +205,11 @@ function App(): ReactElement {
         {CONNECTION_TARGETS.map((target) => (
           <ConnectionCard key={target.key} targetKey={target.key} hint={target.hint} token={settings.apiToken} />
         ))}
+      </section>
+
+      <section aria-labelledby="browser-heading">
+        <h2 id="browser-heading">浏览器通道</h2>
+        <BrowserChannel />
       </section>
 
       <footer className="setup-footer muted">
@@ -803,6 +810,136 @@ function ConnectionCard({ targetKey, hint, token }: { targetKey: string; hint: s
             </ul>
           )}
         </div>
+      )}
+    </article>
+  );
+}
+
+const BROWSER_CHOICES = ['chrome', 'edge', 'brave', 'firefox'] as const;
+type BrowserChoice = (typeof BROWSER_CHOICES)[number];
+
+/**
+ * M05: the native-messaging registration lives in a file *the browser* reads. The launcher that
+ * gets registered is written by the Rust side into the app data directory and always execs this
+ * bundle's runtime, so 修复 means "the manifest now points at the installed app again" — never at
+ * a development directory. Preview is read-only; the write needs an explicit confirmation.
+ */
+function BrowserChannel(): ReactElement {
+  const [status, setStatus] = useState<BrowserHostStatus | null>(null);
+  const [extensionId, setExtensionId] = useState('');
+  const [browser, setBrowser] = useState<BrowserChoice>('chrome');
+  const [busy, setBusy] = useState(false);
+  const [output, setOutput] = useState<string | null>(null);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      setStatus(await commands.browserHostStatus());
+    } catch (error) {
+      setOutput(`无法读取注册状态：${reasonOf(error)}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function run(action: 'preview' | 'write' | 'uninstall'): Promise<void> {
+    if (action === 'write') {
+      const confirmed = window.confirm(
+        `将为 ${browser} 注册知序本地入口：\n\n入口：${status?.launcherPath ?? '（随包入口）'}\n扩展：${extensionId.trim()}\n\n` +
+          '入口会先写入应用数据目录；如果这台机器已有 manifest，会先备份再覆盖。确认写入？',
+      );
+      if (!confirmed) return;
+    }
+    if (action === 'uninstall') {
+      const confirmed = window.confirm(
+        `撤销 ${browser} 的知序 host 注册？\n\n如果注册前的 manifest 有备份，会恢复它；入口文件本身不会被删除。`,
+      );
+      if (!confirmed) return;
+    }
+    setBusy(true);
+    setOutput(null);
+    try {
+      const text =
+        action === 'uninstall'
+          ? await commands.browserHostUninstall(browser)
+          : await commands.browserHostRepair([extensionId.trim()], browser, action === 'write');
+      setOutput(text);
+      await refresh();
+    } catch (error) {
+      setOutput(
+        `${action === 'preview' ? '预览' : action === 'write' ? '写入' : '撤销'}失败：${reasonOf(error)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <article className="connection-card">
+      <h3>浏览器采集通道（native messaging）</h3>
+      <p className="muted">
+        注册或修复后，浏览器启动的固定入口指向本应用随包运行时；这台机器上任何指向开发目录的旧注册，都可以用「修复注册」换掉。
+      </p>
+      {status === null ? (
+        <p className="muted">正在读取注册状态…</p>
+      ) : (
+        <>
+          {!status.serviceable ? (
+            <p className="muted">{status.note}</p>
+          ) : (
+            <ul className="channel-facts">
+              <li>
+                随包入口：{status.launcherPath}（{status.launcherPresent ? '已写入' : '尚未写入，注册时创建'}）
+              </li>
+              <li>manifest：{status.manifestFile ?? '未能确定'}</li>
+              <li>
+                当前注册：
+                {status.currentExecutable === null
+                  ? '（没有已注册的 host）'
+                  : `${status.currentExecutable}${
+                      status.managed === true ? '（指向本应用，无需修复）' : '（不是本应用入口，需要修复）'
+                    }`}
+              </li>
+            </ul>
+          )}
+          <div className="row">
+            <input
+              value={extensionId}
+              onChange={(event) => setExtensionId(event.target.value)}
+              placeholder="扩展 ID（chrome-extension:// 后的 32 位）"
+              disabled={!status.serviceable}
+            />
+            <select value={browser} onChange={(event) => setBrowser(event.target.value as BrowserChoice)}>
+              {BROWSER_CHOICES.map((choice) => (
+                <option key={choice} value={choice}>
+                  {choice}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="row">
+            <button type="button" disabled={busy || !status.serviceable} onClick={() => void run('preview')}>
+              预览注册
+            </button>
+            <button
+              type="button"
+              disabled={busy || !status.serviceable || extensionId.trim() === ''}
+              onClick={() => void run('write')}
+            >
+              写入注册
+            </button>
+            <button
+              type="button"
+              className="button-danger"
+              disabled={busy || !status.serviceable}
+              onClick={() => void run('uninstall')}
+            >
+              撤销注册
+            </button>
+          </div>
+          {output !== null && <pre className="cli-output">{output}</pre>}
+        </>
       )}
     </article>
   );

@@ -330,3 +330,21 @@ input:not([type]) {
 .paste-hint {
   color: #6b7280;
 }
+
+/* 浏览器通道：注册事实与 CLI 预览/结果原文照印，路径要能整行读完。 */
+.channel-facts {
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.cli-output {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #f4f5f7;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
