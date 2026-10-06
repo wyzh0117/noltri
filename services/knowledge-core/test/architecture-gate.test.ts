@@ -192,7 +192,7 @@ describe('architecture gate — native messaging host', () => {
 describe('architecture gate — storage seam', () => {
   it('the repository factory is the only place a driver is chosen', () => {
     const coreSources = tsFilesUnder(CORE_SRC).map((file) => readFileSync(file, 'utf8')).join('\n');
-    expect(coreSources).not.toMatch(/driver\s*===?\s*['"](memory|supabase)['"]/);
+    expect(coreSources).not.toMatch(/driver\s*===?\s*['"](memory|sqlite)['"]/);
   });
 });
 

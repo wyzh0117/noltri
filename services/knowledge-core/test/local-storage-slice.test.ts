@@ -1,7 +1,7 @@
 /**
  * The P1 vertical slice: one real capture, written to a real file, then read back after the process
  * handle closed. Nothing here mocks the storage layer — it goes through `createRepository`, the same
- * factory a desktop shell will call, with no Supabase URL, no hosting runtime and no network.
+ * factory a desktop shell will call, with no server and no network.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';

@@ -2,8 +2,8 @@
  * HTTP layer in web standards only — no express, no fastify.
  *
  * The same `handle(request: Request): Promise<Response>` runs inside a node:http server (see
- * `src/server.ts`) and inside a Next.js route handler (`apps/web`), which is what keeps one Knowledge
- * Core deployable on Vercel today and embeddable in a Desktop Local Core later.
+ * `src/server.ts`) and inside the MCP stdio transport, which is what keeps one Knowledge Core
+ * embeddable in the desktop build without a hosting runtime.
  */
 import {
   assignSourceRequestSchema,

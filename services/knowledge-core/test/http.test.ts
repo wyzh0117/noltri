@@ -1,5 +1,5 @@
 /**
- * HTTP contract tests: the same handler Next.js will mount and node:http will serve (V1 §8).
+ * HTTP contract tests: the same handler node:http serves in the local build (V1 §8).
  * Responses are parsed with the schema package so the wire contract holds in both directions.
  */
 import { describe, expect, it } from 'vitest';

@@ -40,8 +40,6 @@ export const CORE_DEFAULTS = {
   relatedNodeCap: 6,
   treeDefaultDepth: 6,
   searchDefaultLimit: 10,
-  /** Supabase JWT verification cache window, so one token is not re-checked per request. */
-  authCacheMs: 60_000,
   /** Relative file names are always resolved against this, never against the current directory. */
   dataDirname: '.noltri',
   sqliteFilename: 'noltri.sqlite',
@@ -103,9 +101,6 @@ export interface CoreConfig {
   readonly relatedNodeCap: number;
   readonly treeDefaultDepth: number;
   readonly searchDefaultLimit: number;
-  readonly authCacheMs: number;
-  readonly supabaseUrl: string;
-  readonly supabaseAnonKey: string;
   /** Absolute path of the local profile database, whichever driver is configured. */
   readonly sqliteFile: string;
   /**
@@ -121,17 +116,12 @@ const positive = (value: number, fallback: number): number =>
 export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
   const ai = loadAiConfig(env);
   const driver = loadStorageDriver(env);
-  const databaseUrl = envString(env, 'DATABASE_URL') || envString(env, 'DIRECT_URL');
 
   const storage: RepositoryOptions = {
     driver,
-    embeddingDim: ai.embeddingDim,
     // Resolved for every driver: `createRepository` is the only thing that decides what to do with it,
     // so a host that asks for sqlite gets a clear error and a host that does not pays nothing.
     sqliteFile: resolveSqliteFile(env),
-    ...(databaseUrl.length > 0 ? { databaseUrl } : {}),
-    ...(env['STATEMENT_TIMEOUT_MS'] ? { statementTimeoutMs: envInt(env, 'STATEMENT_TIMEOUT_MS', 30_000) } : {}),
-    ...(env['STORAGE_POOL_MAX'] ? { maxConnections: envInt(env, 'STORAGE_POOL_MAX', 5) } : {}),
   };
 
   return {
@@ -153,9 +143,6 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
     relatedNodeCap: positive(envInt(env, 'RELATED_NODE_CAP', CORE_DEFAULTS.relatedNodeCap), 1),
     treeDefaultDepth: positive(envInt(env, 'TREE_DEFAULT_DEPTH', CORE_DEFAULTS.treeDefaultDepth), 1),
     searchDefaultLimit: positive(envInt(env, 'SEARCH_DEFAULT_LIMIT', CORE_DEFAULTS.searchDefaultLimit), 1),
-    authCacheMs: positive(envInt(env, 'AUTH_CACHE_MS', CORE_DEFAULTS.authCacheMs), 1_000),
-    supabaseUrl: envString(env, 'SUPABASE_URL'),
-    supabaseAnonKey: envString(env, 'SUPABASE_ANON_KEY'),
     sqliteFile: storage.sqliteFile ?? '',
     grantFile: resolveGrantFile(env),
   };

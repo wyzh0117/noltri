@@ -1,9 +1,10 @@
 /**
  * `@noltri/knowledge-core/http` — the host-facing wiring.
  *
- * `apps/web` route handlers and `services/mcp-server` both call `buildHandler`, so a request that
- * arrives over HTTP and a request that arrives over MCP run through the same core object, the same
- * repository and the same provider (V1_DEVELOPMENT §19 Phase 8: one pipeline for every client).
+ * `services/mcp-server` and the local HTTP server (`src/server.ts`) both call `buildHandler`, so a
+ * request that arrives over HTTP and a request that arrives over MCP run through the same core
+ * object, the same repository and the same provider (V1_DEVELOPMENT §19 Phase 8: one pipeline for
+ * every client).
  */
 import type { AIProvider } from '@noltri/ai-provider';
 import { createProvider } from '@noltri/ai-provider';
@@ -34,7 +35,7 @@ export interface CoreBundle {
   /** The Research half, or null when the configured storage driver has no research implementation. */
   readonly researchRepository: ResearchRepository | null;
   readonly research: ResearchDomain | null;
-  /** Releases a Postgres pool when the driver owns one; the memory driver has nothing to close. */
+  /** Releases whatever handle the driver owns; the memory driver has nothing to close. */
   close(): Promise<void>;
 }
 
@@ -53,9 +54,9 @@ export async function buildHandler(
   const provider = createProvider(config.ai);
 
   // Research keeps its own repository handle on the same profile file: WAL is what lets the second handle
-  // read while the first writes. A driver with no research implementation (the kept-alive cloud profile)
-  // leaves `research` unset, so the endpoints answer the honest research_not_wired refusal instead of
-  // pretending to hold an empty library — and the bundle still builds, because 网页版 lives until P7.
+  // read while the first writes. The predicate keeps the seam honest for any driver that cannot serve
+  // research: it leaves `research` unset, so the endpoints answer the honest research_not_wired refusal
+  // instead of pretending to hold an empty library, and the bundle still builds.
   const researchRepository = supportsResearchDriver(config.storage.driver)
     ? await createResearchRepository(config.storage)
     : null;
@@ -109,8 +110,8 @@ export async function buildHandler(
 let shared: Promise<CoreBundle> | null = null;
 
 /**
- * Serverless-friendly singleton: a warm Lambda/Function instance reuses one repository pool instead of
- * opening a connection per request.
+ * One bundle per process: `buildHandler` runs its async setup once and every caller reuses the same
+ * repository handles instead of opening connections per request.
  */
 export function sharedBundle(env: EnvSource = currentEnv()): Promise<CoreBundle> {
   if (shared === null) shared = buildHandler(loadCoreConfig(env));
@@ -123,7 +124,7 @@ export async function sharedHandler(env: EnvSource = currentEnv()): Promise<Requ
 
 export { createRequestHandler, type RequestHandler, type RouterDeps } from './router';
 export type { ResearchDomain } from '../research';
-export { resolveIdentity, clearIdentityCache, bearerOf, type Identity, type IdentityResolver } from '../auth';
+export { resolveIdentity, bearerOf, type Identity, type IdentityResolver } from '../auth';
 export {
   FileGrantStore,
   InMemoryGrantStore,
