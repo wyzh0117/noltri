@@ -70,9 +70,13 @@
 `GET …/map`、`GET …/context-pack`。开发文档 §18 把「六类检测、人工处理、决策版本、研究地图和上下文包」
 明确排在 P6；本轮不因为 `drift_findings` 表已经能存就顺手把产生它的规则也发出去。
 
-`packages/api-client/src/client.ts` **还没有** research 方法与路由常量（`apiRoutes` 只覆盖知识与
-`api/admin/grants`）。桌面工作台必须经 `ApiClient` 调 Core，所以 P5-D 的第一步是补这两样，
-而不是在 UI 里手写 `fetch`。本分支没有 `/api/web/research/*` 云代理；`apps/web` 存活到 P7。
+`packages/api-client/src/client.ts` 已覆盖全部 33 条（P5-D1）：`apiRoutes.research*` 是路由常量（带 id 的走
+`encodeURIComponent`），`ApiClient` 上 15 个读方法在客户端解开列表信封（`章程`／`基线` 没数据时是 `null`，
+不是 `undefined`），18 个写方法的请求体**先过共享 schema** —— 表单拼出来的 `论点` 不合格时，调用方拿到的是
+zod 的 issues，而不是一次注定被 Core 拒掉的往返；`userId`／`projectId` 这类身份字段被挡在请求体之外（§0 铁律 1）。
+`GET /api/research/references` 在本地就要求至少一个 id：漏传的过滤器会变成一次跨项目的全表检查。
+桌面工作台必须经 `ApiClient` 调 Core，所以 UI 里不出现手写 `fetch`；P6 的 5 条端点**不进** client，
+等它们先在 domain／HTTP 侧落地。本分支没有 `/api/web/research/*` 云代理；`apps/web` 存活到 P7。
 
 ## 2 服务层行为约定
 
@@ -199,7 +203,7 @@ packages/storage/src/research-types.ts                 P5-A（P5-C 追加 8 个�
 packages/storage/src/research-in-memory.ts             P5-A（同上，P5-C 两个驱动都实现）
 packages/storage/src/sqlite-research.ts                P5-A
 packages/storage/test/research-repository-contract.ts  两驱动共用契约测试（新增方法必须两侧同语义）
-packages/api-client/src/client.ts                      P5-D（research 路由常量 + 类型化方法）
+packages/api-client/src/client.ts                      P5-D1 已落地（33 条：15 读 + 18 写；测试在 test/research.test.ts）
 services/knowledge-core/src/research/**                P5-B（34 方法 façade；baselines.ts / references.ts 是 P5-C）
 services/knowledge-core/src/research/support.ts        P5-B（P5-C 把端点归属判断 `entityIsInProject` 提到这里）
 services/knowledge-core/src/services/node.ts           知识域唯一伸进 research 的一处：归档时标记引用（R03）
