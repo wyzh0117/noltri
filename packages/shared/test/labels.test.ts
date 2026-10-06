@@ -6,24 +6,49 @@
 import { describe, expect, it } from 'vitest';
 import {
   captureActionSchema,
+  claimStatusSchema,
+  claimTypeSchema,
   contextScopeSchema,
   edgeRelationSchema,
+  evidenceLocationOriginSchema,
+  evidenceTypeSchema,
   nodeStatusSchema,
   processingStatusSchema,
+  researchChangeTypeSchema,
+  researchEntityTypeSchema,
+  researchProjectStatusSchema,
+  researchQuestionStatusSchema,
+  researchRelationTypeSchema,
+  reviewMarkRaisedBySchema,
+  reviewMarkStatusSchema,
   searchHitSchema,
   sourceTypeSchema,
+  timelineEventTypeSchema,
 } from '@noltri/schema';
 import {
   captureActionLabels,
+  claimStatusLabels,
+  claimTypeLabels,
+  evidenceLocationOriginLabels,
+  evidenceTypeLabels,
   matchedByLabels,
   nodeStatusLabels,
   processingStatusLabels,
   relationLabel,
   relationLabels,
+  researchChangeTypeLabels,
+  researchEntityTypeLabels,
+  researchProjectStatusLabels,
+  researchQuestionStatusLabels,
+  researchRelationLabel,
+  researchRelationTypeLabels,
+  reviewMarkRaisedByLabels,
+  reviewMarkStatusLabels,
   scopeDescriptions,
   scopeIsAdvanced,
   scopeLabels,
   sourceTypeLabels,
+  timelineEventTypeLabels,
 } from '../src/labels';
 
 function keysOf<T extends { options: readonly string[] }>(schema: T): string[] {
@@ -39,6 +64,18 @@ const MAPS: readonly (readonly [string, Readonly<Record<string, string>>, readon
   ['scopeLabels', scopeLabels, keysOf(contextScopeSchema)],
   ['scopeDescriptions', scopeDescriptions, keysOf(contextScopeSchema)],
   ['matchedByLabels', matchedByLabels, [...searchHitSchema.shape.matchedBy.options]],
+  ['researchProjectStatusLabels', researchProjectStatusLabels, keysOf(researchProjectStatusSchema)],
+  ['researchQuestionStatusLabels', researchQuestionStatusLabels, keysOf(researchQuestionStatusSchema)],
+  ['evidenceTypeLabels', evidenceTypeLabels, keysOf(evidenceTypeSchema)],
+  ['evidenceLocationOriginLabels', evidenceLocationOriginLabels, keysOf(evidenceLocationOriginSchema)],
+  ['claimTypeLabels', claimTypeLabels, keysOf(claimTypeSchema)],
+  ['claimStatusLabels', claimStatusLabels, keysOf(claimStatusSchema)],
+  ['researchRelationTypeLabels', researchRelationTypeLabels, keysOf(researchRelationTypeSchema)],
+  ['researchChangeTypeLabels', researchChangeTypeLabels, keysOf(researchChangeTypeSchema)],
+  ['researchEntityTypeLabels', researchEntityTypeLabels, keysOf(researchEntityTypeSchema)],
+  ['reviewMarkRaisedByLabels', reviewMarkRaisedByLabels, keysOf(reviewMarkRaisedBySchema)],
+  ['reviewMarkStatusLabels', reviewMarkStatusLabels, keysOf(reviewMarkStatusSchema)],
+  ['timelineEventTypeLabels', timelineEventTypeLabels, keysOf(timelineEventTypeSchema)],
 ];
 
 describe('label maps cover their schema enums', () => {
@@ -95,5 +132,19 @@ describe('relationLabel', () => {
 
   it('passes an unknown token through instead of throwing or blanking', () => {
     expect(relationLabel('derived_from_v2')).toBe('derived_from_v2');
+  });
+});
+
+describe('researchRelationLabel', () => {
+  it('names the five evidence relations so 反证 and 限定 cannot read as 支持', () => {
+    expect(researchRelationLabel('supports')).toBe('支持');
+    expect(researchRelationLabel('partially_supports')).toBe('部分支持');
+    expect(researchRelationLabel('contradicts')).toBe('反证');
+    expect(researchRelationLabel('qualifies')).toBe('限定');
+    expect(researchRelationLabel('contextualizes')).toBe('背景');
+  });
+
+  it('passes an unknown token through instead of throwing or blanking', () => {
+    expect(researchRelationLabel('supersedes')).toBe('supersedes');
   });
 });
