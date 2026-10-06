@@ -623,9 +623,8 @@ describe('the research driver is chosen in one place', () => {
     if (typeof close === 'function') await (close as () => Promise<void>).call(repository);
   });
 
-  it('refuses a sqlite file it was not given and a supabase driver it does not have', async () => {
+  it('refuses a sqlite file it was not given and a driver name outside the union', async () => {
     await expect(createResearchRepository({ driver: 'sqlite' })).rejects.toThrow(/sqliteFile/);
-    await expect(createResearchRepository({ driver: 'supabase' })).rejects.toThrow(/supabase/);
     // A driver name outside the union is what a mis-typed config produces; the factory says so out loud.
     await expect(createResearchRepository({ driver: 'postgres' as never })).rejects.toThrow(
       /Unknown storage driver/,
@@ -641,7 +640,7 @@ describe('the research driver is chosen in one place', () => {
     const drivers: { driver: StorageDriverName; options: RepositoryOptions }[] = [
       { driver: 'memory', options: { driver: 'memory' } },
       { driver: 'sqlite', options: { driver: 'sqlite', sqliteFile: nextFile('predicate.sqlite') } },
-      { driver: 'supabase', options: { driver: 'supabase' } },
+      { driver: 'postgres' as never, options: { driver: 'postgres' as never } },
     ];
 
     for (const { driver, options } of drivers) {

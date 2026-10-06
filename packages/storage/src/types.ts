@@ -21,7 +21,7 @@ import type {
   JsonValue,
 } from '@noltri/schema';
 
-export type StorageDriverName = 'memory' | 'supabase' | 'sqlite';
+export type StorageDriverName = 'memory' | 'sqlite';
 
 /**
  * What a driver can state about itself without a network round trip or a full scan — the payload

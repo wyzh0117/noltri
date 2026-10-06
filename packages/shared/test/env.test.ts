@@ -12,12 +12,11 @@ describe('STORAGE_DRIVER', () => {
     expect(loadStorageDriver({ STORAGE_DRIVER: 'memory' })).toBe('memory');
     expect(loadStorageDriver({ STORAGE_DRIVER: 'sqlite' })).toBe('sqlite');
     expect(loadStorageDriver({ STORAGE_DRIVER: 'SQLITE' })).toBe('sqlite');
-    expect(loadStorageDriver({ STORAGE_DRIVER: 'supabase' })).toBe('supabase');
   });
 
   it('names the accepted values when the value is not one of them', () => {
     expect(() => loadStorageDriver({ STORAGE_DRIVER: 'postgres' })).toThrow(/STORAGE_DRIVER "postgres"/);
-    expect(() => loadStorageDriver({ STORAGE_DRIVER: 'postgres' })).toThrow(/"memory", "supabase", "sqlite"/);
+    expect(() => loadStorageDriver({ STORAGE_DRIVER: 'postgres' })).toThrow(/"memory", "sqlite"/);
     expect(() => loadStorageDriver({ STORAGE_DRIVER: '   ' })).toThrow(/STORAGE_DRIVER/);
   });
 

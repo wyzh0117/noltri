@@ -1,15 +1,12 @@
 /**
  * SQLite schema ownership: pragmas, versioned DDL and the migration runner.
  *
- * Versions 1–2 mirror `supabase/migrations/20261002000200_core_tables.sql` minus Postgres-only
- * machinery (no roles, no RLS, no `extensions.vector`). Enum CHECK labels are copied from the same
- * source of truth as the Postgres file — `packages/schema/src/enums.ts` — and `sqlite-schema.test.ts`
- * fails if the two drift.
+ * Versions 1–2 carry the core tables, version 3 the Research tables. Enum CHECK labels are copied
+ * from the zod enums in `packages/schema/src/enums.ts` and `research.ts` — the single source of
+ * truth — and `sqlite-schema.test.ts` / `research-schema.test.ts` fail if the two drift.
  *
- * Version 3 adds the Research tables. They have no Postgres counterpart in this repository: the
- * archived `research-supabase.ts` driver and its two migrations were left in `ad1d0c6`, so the zod
- * enums in `packages/schema/src/research.ts` are the only source of truth for these labels, and
- * `research-schema.test.ts` is what keeps the two from drifting.
+ * The Postgres SQL these tables were once kept in step with, and the driver that read it, were
+ * deleted in the P7 local-desktop cleanup; the archived research variant stayed in `ad1d0c6`.
  *
  * Durability choices follow the local-desktop brief: WAL for reader/writer concurrency, `FULL`
  * synchronous so a confirmed write survives a power loss, foreign keys on per connection, and a busy
@@ -222,8 +219,8 @@ create table if not exists conversation_messages (
 create index if not exists conversation_messages_list_idx
   on conversation_messages (conversation_id, created_at);
 
--- One row per embedded entity. Postgres fixed the width in the column type; a local file must be able
--- to hold several models over time, so the width travels with the vector and search refuses to mix.
+-- One row per embedded entity. A local file must be able to hold several models over time, so the
+-- width travels with the vector and search refuses to mix.
 create table if not exists vectors (
   owner_type text not null check (owner_type in ('knowledge_item', 'knowledge_node')),
   owner_id text not null,

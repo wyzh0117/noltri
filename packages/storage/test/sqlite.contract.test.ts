@@ -1,9 +1,9 @@
 /**
- * The same contract the in-memory and Postgres drivers must satisfy, run against real SQLite files.
+ * The same contract the in-memory driver must satisfy, run against real SQLite files.
  *
  * Each case gets a fresh database in its own temporary directory and closes it afterwards, so
- * `close()` and the migration path are exercised on every run. No `NOLTRI_PG_TEST_URL`, no server,
- * no mocking of the layer under test.
+ * `close()` and the migration path are exercised on every run. No server, no mocking of the layer
+ * under test.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

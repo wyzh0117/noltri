@@ -61,9 +61,9 @@ export function loadScopeBudgets(env: EnvSource = currentEnv()): ScopeTokenBudge
   };
 }
 
-export type StorageDriver = 'memory' | 'supabase' | 'sqlite';
+export type StorageDriver = 'memory' | 'sqlite';
 
-const STORAGE_DRIVERS: readonly StorageDriver[] = ['memory', 'supabase', 'sqlite'];
+const STORAGE_DRIVERS: readonly StorageDriver[] = ['memory', 'sqlite'];
 
 export function loadStorageDriver(env: EnvSource = currentEnv()): StorageDriver {
   const raw = envString(env, 'STORAGE_DRIVER', 'memory').toLowerCase();

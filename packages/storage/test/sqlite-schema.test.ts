@@ -7,8 +7,24 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  conversationRoleSchema,
+  contextScopeSchema,
+  edgeRelationSchema,
+  embeddingStatusSchema,
+  itemLinkRelationSchema,
+  knowledgeItemStatusSchema,
+  masteryLevelSchema,
+  nodeStatusSchema,
+  processingStatusSchema,
+  sourceTypeSchema,
+  structureOperationSchema,
+  versionedEntitySchema,
+} from '@noltri/schema';
 import { isKnowledgeError } from '@noltri/shared';
 import {
+  SQLITE_DDL_V1,
+  SQLITE_DDL_V2,
   SQLITE_MIGRATIONS,
   SQLITE_SCHEMA_VERSION,
   migrateSqlite,
@@ -37,6 +53,46 @@ function sourceOf(userId: string, rawText: string) {
     capturedAt: new Date().toISOString(),
     metadata: { origin: 'schema-test', nested: { a: 1 } },
   };
+}
+
+/** The slice of a zod enum this file needs, kept structural so every enum fits. */
+interface EnumLike {
+  readonly options: readonly string[];
+  safeParse(data: unknown): { success: boolean };
+}
+
+/** Every core column that carries an enum: its CHECK labels and the zod enum must agree exactly. */
+const ENUM_COLUMNS: ReadonlyArray<{ table: string; column: string; schema: EnumLike }> = [
+  { table: 'raw_sources', column: 'source_type', schema: sourceTypeSchema },
+  { table: 'raw_sources', column: 'processing_status', schema: processingStatusSchema },
+  { table: 'knowledge_items', column: 'status', schema: knowledgeItemStatusSchema },
+  { table: 'knowledge_items', column: 'embedding_status', schema: embeddingStatusSchema },
+  { table: 'knowledge_nodes', column: 'status', schema: nodeStatusSchema },
+  { table: 'knowledge_nodes', column: 'embedding_status', schema: embeddingStatusSchema },
+  { table: 'knowledge_nodes', column: 'mastery_level', schema: masteryLevelSchema },
+  { table: 'knowledge_edges', column: 'relation_type', schema: edgeRelationSchema },
+  { table: 'item_node_links', column: 'relation_type', schema: itemLinkRelationSchema },
+  { table: 'version_records', column: 'entity_type', schema: versionedEntitySchema },
+  { table: 'version_records', column: 'operation', schema: structureOperationSchema },
+  { table: 'conversations', column: 'scope', schema: contextScopeSchema },
+  { table: 'conversation_messages', column: 'role', schema: conversationRoleSchema },
+];
+
+/** The core tables live in versions 1–2; later versions only add columns there, never constraints. */
+const CORE_DDL = `${SQLITE_DDL_V1}${SQLITE_DDL_V2}`;
+
+function coreCheckLabels(table: string, column: string): string[] {
+  const pattern = new RegExp(
+    `constraint ${table}_${column}_enum_check\\s+check\\s*\\(\\s*` +
+      `(?:${column}\\s+is\\s+null\\s+or\\s+)?${column}\\s+in\\s*\\(([^)]*)\\)`,
+    'i',
+  );
+  const found = pattern.exec(CORE_DDL);
+  const list = found?.[1];
+  if (list === undefined) {
+    throw new Error(`${table}.${column} has no ${table}_${column}_enum_check CHECK clause in the core DDL`);
+  }
+  return [...list.matchAll(/'([^']*)'/g)].map((match) => match[1] ?? '').sort();
 }
 
 describe('the file that gets created', () => {
@@ -106,6 +162,21 @@ describe('the file that gets created', () => {
         .run(),
     ).toThrow(/CHECK constraint/i);
     db.close();
+  });
+
+  it('keeps every core enum CHECK label in sync with the zod enums, in both directions', () => {
+    for (const { table, column, schema } of ENUM_COLUMNS) {
+      const sqlLabels = coreCheckLabels(table, column);
+      const expected = [...schema.options].sort();
+      for (const label of expected) {
+        expect(sqlLabels, `${table}.${column} is missing the zod label "${label}"`).toContain(label);
+      }
+      for (const label of sqlLabels) {
+        expect(expected, `${table}.${column} carries the undeclared label "${label}"`).toContain(label);
+        expect(schema.safeParse(label).success, `${label} no longer parses`).toBe(true);
+      }
+      expect(sqlLabels, `${table}.${column} labels drifted from zod`).toEqual(expected);
+    }
   });
 
   it('enforces foreign keys and the self-parent rule', () => {
