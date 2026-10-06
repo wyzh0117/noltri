@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知序 Noltri · 本轮开发交付报告（P5 Research 整合）</title>
+<style>
+  :root{--bg:#f6f6f4;--panel:#fff;--ink:#1c1d1f;--muted:#5f6469;--line:#dcdcd6;
+    --accent:#2f5d50;--accent-soft:#e4efe9;--warn:#8a5a11;--warn-soft:#fbf1dd;
+    --bad:#8f2f2f;--bad-soft:#fbe9e9;--ok:#1f6b45;--ok-soft:#e2f0e8;--code:#f1f1ec;}
+  html[data-theme="dark"]{--bg:#14161a;--panel:#1b1e23;--ink:#e6e8ea;--muted:#9aa1a9;--line:#2c3138;
+    --accent:#8fc0ad;--accent-soft:#1f2a26;--warn:#e0b070;--warn-soft:#2a2418;
+    --bad:#f0a0a0;--bad-soft:#2a1c1c;--ok:#8fd0ac;--ok-soft:#1a2620;--code:#22262c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 96px}
+  header.top{padding:44px 0 20px;border-bottom:1px solid var(--line)}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:31px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+  h2{font-size:22px;margin:44px 0 12px;padding-top:18px;border-top:1px solid var(--line);scroll-margin-top:64px}
+  h3{font-size:16.5px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:14.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:16px;font-size:13.5px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+  .chip{font-size:12.5px;padding:3px 11px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--line)}
+  .grid{display:grid;gap:14px}.grid.c3{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .grid.c4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .n{font-size:24px;font-weight:650;letter-spacing:-.02em}
+  .card .l{font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft);font-weight:600;font-size:13.5px}
+  tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 92%,var(--bg))}
+  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:6px;white-space:nowrap;border:1px solid var(--line)}
+  .t-ok{background:var(--ok-soft);color:var(--ok)}
+  .t-part{background:var(--warn-soft);color:var(--warn)}
+  .t-no{background:var(--bad-soft);color:var(--bad)}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:38px 14px 12px;overflow:auto;font-size:12.8px;line-height:1.62;margin:12px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  p code,li code,td code{background:var(--code);padding:1.5px 5px;border-radius:5px;font-size:13px;border:1px solid var(--line)}
+  .copy{position:absolute;top:8px;right:8px;font-size:11.5px;padding:3px 9px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .copy:hover{color:var(--ink);border-color:var(--accent)}
+  ul,ol{padding-left:22px;margin:10px 0}li{margin:5px 0}
+  nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:9px 0}
+  nav ol{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;padding-left:0;list-style:none;font-size:13px}
+  nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--accent);text-decoration:underline}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .warnbox{border-left:3px solid var(--warn);background:var(--warn-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .badbox{border-left:3px solid var(--bad);background:var(--bad-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .themer{font-size:12.5px;padding:4px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .themer:hover{color:var(--ink)}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  details{margin:10px 0}summary{cursor:pointer;font-size:14px;color:var(--accent);font-weight:600}
+  .muted{color:var(--muted)}
+  .phase{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+  .ph{font-size:12.5px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted)}
+  .ph.done{background:var(--ok-soft);color:var(--ok);border-color:var(--ok)}
+  .ph.now{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);font-weight:650}
+</style>
+</head>
+<body>
+<nav><div class="wrap bar" style="padding-bottom:0">
+  <ol>
+    <li><a href="#summary">结论</a></li>
+    <li><a href="#done">已完成工作总结</a></li>
+    <li><a href="#scope">范围与验收口径</a></li>
+    <li><a href="#commits">提交清单</a></li>
+    <li><a href="#gate">门禁与用例</a></li>
+    <li><a href="#foundation">契约与双驱动</a></li>
+    <li><a href="#relations">关系方向</a></li>
+    <li><a href="#baseline">基线与 R03</a></li>
+    <li><a href="#workbench">桌面工作台</a></li>
+    <li><a href="#restart">demo 与重启往返</a></li>
+    <li><a href="#gaps">未验证</a></li>
+    <li><a href="#method">环境与方法</a></li>
+    <li><a href="#next">下一步</a></li>
+  </ol>
+  <button class="themer" id="themer" type="button">切换主题</button>
+</div></nav>
+
+<div class="wrap">
+<header class="top">
+  <div class="kicker">知序 Noltri · 本地桌面版与 Research 整合</div>
+  <h1>P5 Research 整合 · 本轮交付报告</h1>
+  <div class="sub">Research 域迁入：schema 契约、双驱动 storage、34 方法领域门面、33 条 HTTP 端点（全部不在授权 scope 表里）、关系方向约束（R02）、不可变章程基线（R06）、来源归档／引用安全（R03）、api-client 33 个类型化调用、桌面「研究工作台」六视图、demo 种子与 R08 重启／导出往返。</div>
+  <div class="meta">
+    <span>日期 <b>2026-10-07</b></span>
+    <span>分支 <b>v1_research&amp;modify</b></span>
+    <span>提交范围 <b>7935bbe^..de7d4f4</b>（22 个提交；P5-E 的文档提交 <code>f27212c</code> 与本报告在范围之后）</span>
+    <span>平台 <b>macOS 26.6.2 / Darwin 25.6.0 / arm64</b></span>
+  </div>
+  <div class="phase">
+    <span class="ph done">P0 基线</span><span class="ph done">P1 纵向切片</span>
+    <span class="ph done">P2 工作台迁移</span><span class="ph done">P3 本地接入</span>
+    <span class="ph done">P4 Agent Setup</span><span class="ph now">P5 Research 整合</span>
+    <span class="ph">P6 偏移检查与地图</span><span class="ph">P7 云清理</span>
+    <span class="ph">P8 安装包</span>
+  </div>
+  <div class="grid c4" style="margin-top:20px">
+    <div class="card"><div class="n">22 · 61</div><div class="l">提交 · 文件（区间净值 <b>+14 626 / −15</b>，取 <code>git diff --stat 7935bbe^..de7d4f4</code>）</div></div>
+    <div class="card"><div class="n">24 / 24</div><div class="l">全量门禁任务（12 包 × typecheck＋test，本轮实测重跑）</div></div>
+    <div class="card"><div class="n">1082 / 21</div><div class="l">通过 / 跳过（跳过全部是缺 <code>NOLTRI_PG_TEST_URL</code> 的 PG 用例，不计通过）</div></div>
+    <div class="card"><div class="n">5 / 8</div><div class="l">验收矩阵转绿（R01 R02 R03 R06 R08）；R04 / R05 / R07 归 P6，不计入本轮</div></div>
+  </div>
+  <div class="chips">
+    <span class="chip">契约先行：schema 先落，两个驱动再答同一份题</span>
+    <span class="chip">关系方向由端点配对表钉死</span>
+    <span class="chip">批准过的章程快照不可变</span>
+    <span class="chip">出处指针可空、不重绑</span>
+    <span class="chip">33 个端点一条都不进授权 scope 表</span>
+    <span class="chip">桌面六视图只画不写，渲染即测试</span>
+    <span class="chip">demo 是测试造数，三个缺口留给 P6</span>
+  </div>
+</header>
+
+<h2 id="summary">一 结论</h2>
+<p>P5 的验收口径来自开发文档 §18 的完成门槛——<b>「章程到章节的真实数据闭环；保留既有知识溯源」</b>——以及 §19 验收矩阵里属于 Research 的 R 行。本轮把这条闭环从 schema 一直修到桌面：四个 schema 提交先把三类契约迁进来（研究实体、批准基线／复核标记、证据的出处引用），随后<b>两个 storage 驱动（memory 与 SQLite）用同一份契约测试文件答题</b>，34 方法的领域门面在每个方法里先验项目归属，33 条 REST 端点（15 读 ＋ 18 写）全部上线且<b>一条都不在授权 scope 表里</b>；桌面「研究」页随后落地六个只画的视图。R01、R02、R03、R06、R08 五行全部转绿，各有可跑的用例，而不是只有文档里的说法。</p>
+<p>两件最容易做假的规则被测试钉死：其一，<b>关系方向属于含义</b>——<code>supports</code> 读作「证据支撑论点」，反向的一条边不是弱论断而是写错了的边；<code>RELATION_PAIRINGS</code> 把十种关系各自的端点类型冻结成表，schema 与 domain 两侧同时拒绝非法配对（R02）。其二，<b>批准过的章程不可变</b>——每次批准追加一个版本，快照字段冻结在批准时刻，只有「变化字段台账」记录与上一版的差异（首个基线为空表）；被点名的对象在同一事务里收到 <code>charter_baseline</code> 复核标记（R06）。来源一侧同理：证据的出处指针（<code>nodeId</code>／<code>rawSourceId</code>／<code>locationOrigin</code>）可空、从不被重新绑定；归档一个知识节点时，先把它引用处的证据与这些证据支撑的论点标上 <code>source_archived</code> 待复核，才完成归档（R03）。</p>
+<p>R08 用最朴素的方式验证「关系完整」：<code>research-restart.test.ts</code> 按桌面 profile 的真实布局打开 SQLite（两个句柄、同一个文件、WAL），种下 demo 项目 ＋ 首个基线 ＋ 两种状态的标记 ＋ 一条带出处指针的证据，关掉再开——13 条关系的五元组、基线快照、pending／cleared 两种标记、出处指针逐项读回；再把库文件连同 <code>-wal</code>／<code>-shm</code> 复制到新路径重开，结果相同。</p>
+<div class="note">诚实边界：六类偏移检查、研究地图与上下文包（R04 / R05 / R07）是 P6，五个端点<b>没有</b>提前塞进 api-client，工作台的地图／偏移／上下文视图同样没开。demo 种子刻意留的三个缺口正是 P6 的输入：C-03 无任何支持证据、C-05 因果强表述且无 boundary、一条 <code>journal</code> change 落在章程之后——本轮只保证它们「建得出、读得回、改得动」。</div>
+
+<h2 id="done">二 已完成工作总结</h2>
+<p class="sub">按惯例，每轮交付把「已完成的工作」单独汇总一次。以下是 P5 全部完成项，与 <a href="#commits">§四</a> 的 22 个提交一一对应。</p>
+<table>
+  <thead><tr><th>片</th><th>完成了什么</th><th>证据</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>P5-A</b><br>契约与双驱动</td>
+      <td>schema 迁入研究域全部实体与请求／响应契约（含正文枚举、<code>CHARTER_FIELD_NAMES</code> 冻结词表、关系配对表）；storage 新增 <code>ResearchRepository</code> 与 <b>memory＋SQLite 两个驱动</b>，共用一份契约测试文件——新增方法必须两侧同语义；SQLite 侧建 research 表族，与知识域共用同一个库文件</td>
+      <td><code>research-schema.test.ts</code> <b>20 项</b>、两驱动契约各 <b>17 项</b>；schema 包 4 文件 +865 · storage 9 文件 +3 575</td>
+    </tr>
+    <tr>
+      <td><b>P5-B</b><br>领域与 HTTP</td>
+      <td><code>ResearchDomain</code> 门面 <b>34 方法</b>：每个方法先从凭据取 <code>userId</code>，再验项目归属才动数据；决策与变更写入同时追加时间线事件；HTTP 层上线 <b>27 条</b>端点，全部<b>不进授权 scope 表</b>（研究文本尚未被 §435 的片段上限覆盖，grant 凭据一律拒绝），架构门禁测试把这条冻结成规则；research 未接线时知识域路由照常服务</td>
+      <td><code>research-domain.test.ts</code> <b>26 项</b>、<code>research-http.test.ts</code> <b>12 项</b>、<code>architecture-gate.test.ts</code> <b>12 项</b></td>
+    </tr>
+    <tr>
+      <td><b>P5-C1</b><br>关系词汇</td>
+      <td><code>RELATION_PAIRINGS</code>：十种关系各自允许的端点类型冻结成表——五种证据关系（<code>supports｜partially_supports｜contradicts｜qualifies｜contextualizes</code>）只能 evidence→claim；<code>answers</code> 只能 claim→RQ；<code>appears_in</code> 只能 claim→章节；<code>changes／affects</code> 只能 决策｜变更→任意；<code>relates_to</code> 不限。同一份冻结数组既是 domain 的拒绝文案，也是 zod 的枚举选项——被就地排序就会悄悄改变所有客户端可写的东西</td>
+      <td><code>research-relations.test.ts</code> <b>10 项</b>（schema 侧）＋ domain 拒绝路径用例；R02</td>
+    </tr>
+    <tr>
+      <td><b>P5-C2</b><br>批准基线</td>
+      <td>五条批准路由（approve／versions／baseline／review-marks／clear）；版本 <b>append-only</b>、快照字段批准即冻结；<code>changedFields</code> 台账相对上一版，首版为空表；批准时按名点名对象（上限 200）打 <code>charter_baseline</code> 复核标记；<code>clearReviewMark</code> 只清这一条标记</td>
+      <td><code>research-baseline.test.ts</code> <b>14 项</b>（schema 侧字段台账）＋ domain／HTTP 侧；R06</td>
+    </tr>
+    <tr>
+      <td><b>P5-C3</b><br>来源安全（R03）</td>
+      <td>证据的三个出处列（<code>nodeId</code>／<code>rawSourceId</code>／<code>locationOrigin</code>）可空、<b>不重绑</b>；<code>GET /api/research/references</code> 是唯一非项目键路由（至少给一个 id），只读地跨项目找出引用一个出处的全部证据与它们支撑的论点；知识节点归档时，<b>先</b>标引用与其论点（<code>source_archived</code>）再完成归档；来源恢复不误清已打的标记；research 未接线不阻断归档</td>
+      <td><code>research-source-reference.test.ts</code> <b>7 项</b>（schema 侧）、<code>research-archive.test.ts</code> <b>6 项</b>（跨域真流程）</td>
+    </tr>
+    <tr>
+      <td><b>P5-D</b><br>客户端与桌面</td>
+      <td>api-client <b>33 个</b>类型化调用（15 读 ＋ 18 写，常量与类型同步冻结）；shared 补齐研究词表中文标签（状态、类型、关系、标记来源、时间线……）；桌面新增「研究」页＝<code>ResearchWorkspace</code> 容器 ＋ 六个只画视图（研究总览／章程与边界／研究问题／证据工作台／论点与章节／决策与时间线），纯决策逻辑集中在 <code>research-model.ts</code>，写入后整页重载</td>
+      <td>api-client <code>research.test.ts</code> <b>48 项</b>；桌面 <code>research-model.test.ts</code> <b>18 项</b>＋<code>research-render.test.tsx</code> <b>18 项</b>；<code>vite build</code> 四入口产出</td>
+    </tr>
+    <tr>
+      <td><b>P5-E</b><br>demo 与往返</td>
+      <td>「Noltri Research Demo」种子：RQ×2、证据×5、论点×5、章节×4、决策×2、变更×2、关系×13，正文标明<b>虚构测试数据</b>；三个刻意留下的结构缺口用断言固定为 P6 的输入；R08 重启／导出往返测试（见 §十）；契约文档回写（R08 行、文件归属表）</td>
+      <td><code>research-demo.test.ts</code> <b>6 项</b>、<code>research-restart.test.ts</code> <b>2 项</b>；<code>f27212c</code></td>
+    </tr>
+  </tbody>
+</table>
+<p class="sub">测试规模：P4 的 55 文件／821 通过／21 跳过 → P5 的 <b>69 文件／1082 通过／21 跳过</b>（净增 261 通过、14 个文件；含新增的 schema 包 3 文件 31 项）。</p>
+
+<h2 id="scope">三 范围与验收口径</h2>
+<p>开发文档 §19 的验收矩阵里属于 Research 的是 R01–R03、R06、R08 五行（R04 / R05 / R07 是 P6）。逐行口径与结论：</p>
+<table>
+  <thead><tr><th>行</th><th>验收口径</th><th>本轮状态</th><th>证据在</th></tr></thead>
+  <tbody>
+    <tr><td><code>R01</code></td><td>研究项目全流程 Charter→RQ→Evidence→Claim→Section 可建可读可修订</td><td><span class="tag t-ok">通过</span></td><td>33 端点 ＋ 34 方法门面；<code>research-demo.test.ts</code> 把完整链路（项目→章程→RQ→证据→论点→三类关系→章节→决策／变更→时间线）在 domain、种子上各走一遍，并用冻结 schema 在真实 router 上再走一遍（§六）</td></tr>
+    <tr><td><code>R02</code></td><td>五种证据关系可表示，反证与限定不被当作支持</td><td><span class="tag t-ok">通过</span></td><td><code>RELATION_PAIRINGS</code> 钉住方向与端点类型；反证／限定各有自己的类型、从不出现在「有支撑」口径里（§七）</td></tr>
+    <tr><td><code>R03</code></td><td>来源删除／修改／合并安全，原始版本与复核提示可追溯</td><td><span class="tag t-ok">通过（V1 范围＝归档）</span></td><td>出处指针可空不重绑 ＋ <code>GET /api/research/references</code> 只读检查 ＋ 归档打标、恢复不误清、未接线不阻断。V1 只有「归档」，没有删除／合并——那两条路径<b>不该被报告成已实现</b>，代码没得挂（§八）</td></tr>
+    <tr><td><code>R06</code></td><td>批准章程修订：历史保留、影响对象被标记、后续检查绑定新基线</td><td><span class="tag t-ok">通过（前半句）</span></td><td>append-only 版本 ＋ 快照不可变 ＋ 按名标记；「后续检查绑定新基线」由 P6 的 drift-check 读 <code>findCharterBaseline</code> 完成（§八）</td></tr>
+    <tr><td><code>R08</code></td><td>重启／导出恢复后关系完整</td><td><span class="tag t-ok">通过</span></td><td><code>research-restart.test.ts</code> 两条往返：同一文件关掉再开、文件复制到新路径重开（§十）</td></tr>
+    <tr><td><code>R04</code> / <code>R05</code> / <code>R07</code></td><td>六类偏移 fixture、无 AI 诚实、上下文包给 Agent</td><td><span class="tag t-no">未做（P6）</span></td><td>规则已冻结在契约 §5（六类规则、去重口径、上下文包 12 区块），实现与五个端点归 P6；本轮不计通过</td></tr>
+  </tbody>
+</table>
+<div class="warnbox">本报告只把「有可跑用例」的行写成通过。R03 的通过口径是归档路径：删除／合并来源尚不存在代码路径，因此只保留 <code>rawSourceId</code> 的预留列，报告里不写成「删除安全已实现」；R06 同理，标记与历史已做，「绑定新基线」的行为要等 P6 的检查器来读，届时补测。</div>
+
+<h2 id="commits">四 提交清单（按提交范围统计，不由工作区反推）</h2>
+<p class="sub">范围 <code>7935bbe^..de7d4f4</code>，父提交 <code>b4b6c57</code>。下表由 <code>git log --shortstat</code> 逐提交取，不是工作区 diff。</p>
+<table>
+  <thead><tr><th>提交</th><th>内容</th><th>规模</th></tr></thead>
+  <tbody>
+    <tr><td><code>7935bbe</code></td><td>feat(schema): carry the Research domain contracts in from the archive</td><td>4 文件 +865 / −0</td></tr>
+    <tr><td><code>dffe740</code></td><td>feat(storage): give Research two drivers that answer the same contract</td><td>9 文件 +3 575 / −3</td></tr>
+    <tr><td><code>79dddab</code></td><td>feat(core): carry the Research domain in, as far as P5 goes</td><td>13 文件 +1 165 / −0</td></tr>
+    <tr><td><code>efaf156</code></td><td>feat(core): serve the 27 research endpoints, and keep them off the grant surface</td><td>5 文件 +290 / −4</td></tr>
+    <tr><td><code>053f8ac</code></td><td>test(core): prove the research chain, its refusal of grants, and its phase edge</td><td>5 文件 +1 364 / −1</td></tr>
+    <tr><td><code>82e8219</code></td><td>docs: write the research contract for this branch, not for the archived build</td><td>1 文件 +178 / −0</td></tr>
+    <tr><td><code>3675f68</code></td><td>feat(research): give every relation kind the endpoints its meaning requires</td><td>5 文件 +202 / −10</td></tr>
+    <tr><td><code>5a826c2</code></td><td>feat(schema): describe an approved charter and the marks it leaves</td><td>2 文件 +129 / −0</td></tr>
+    <tr><td><code>4577b7b</code></td><td>test(schema): pin the field ledger a baseline diff depends on</td><td>2 文件 +209 / −3</td></tr>
+    <tr><td><code>4c4e215</code></td><td>feat(storage): append every approved charter version, in both drivers</td><td>6 文件 +882 / −8</td></tr>
+    <tr><td><code>1cf4d05</code></td><td>feat(core): approve a charter baseline and mark what the revision touched</td><td>10 文件 +638 / −54</td></tr>
+    <tr><td><code>2953ed5</code></td><td>docs: put the five approval routes and what 批准 guarantees in the contract</td><td>1 文件 +33 / −10</td></tr>
+    <tr><td><code>ecdabe2</code></td><td>feat(schema): let a 证据 point at the source it came from</td><td>2 文件 +91 / −0</td></tr>
+    <tr><td><code>76709c0</code></td><td>test(schema): pin which 出处 a 证据 is allowed to point at</td><td>1 文件 +120 / −0</td></tr>
+    <tr><td><code>636f9be</code></td><td>feat(storage): find every 证据 that cites a source, in both drivers</td><td>6 文件 +279 / −7</td></tr>
+    <tr><td><code>90d89e2</code></td><td>feat(core): mark 引用 and their 论点 before a node finishes archiving</td><td>13 文件 +629 / −10</td></tr>
+    <tr><td><code>0d5c63d</code></td><td>docs: write R03 into the contract, including what V1 does not delete</td><td>1 文件 +32 / −12</td></tr>
+    <tr><td><code>0d8f082</code></td><td>feat(api-client): give the workbench all 33 research calls</td><td>2 文件 +989 / −1</td></tr>
+    <tr><td><code>6f6f2e1</code></td><td>docs: record the api-client research surface as P5-D1</td><td>1 文件 +8 / −4</td></tr>
+    <tr><td><code>5776613</code></td><td>feat(shared): give the research vocabulary its Chinese labels</td><td>2 文件 +185 / −1</td></tr>
+    <tr><td><code>5f10dea</code></td><td>feat(desktop): give 研究工作台 its six draw-only views</td><td>13 文件 +2 711 / −4</td></tr>
+    <tr><td><code>de7d4f4</code></td><td>test(core): prove R08 with the demo profile after a restart and an export</td><td>1 文件 +169 / −0</td></tr>
+    <tr><td colspan="2"><b>区间净值（<code>git diff --stat 7935bbe^..de7d4f4</code>）</b></td><td><b>61 文件 · +14 626 · −15</b></td></tr>
+  </tbody>
+</table>
+<p class="sub">逐提交相加是 +14 743 / −132，<b>大于</b>区间净值的 +14 626 / −15 —— 同一文件（research schema、storage 契约、router、面板与 CSS）被后续提交再次改动，区间 diffstat 只计最终差异。两个数都对，口径不同，以区间净值为规模结论。</p>
+<p class="sub">分片：P5-A 2 个提交 · P5-B 3 个 · P5-C1 1 个 · P5-C2 4 个 · P5-C3 4 个 · P5-D 3 个；契约文档 4 个提交穿插其中（<code>82e8219</code>、<code>2953ed5</code>、<code>0d5c63d</code>、<code>6f6f2e1</code>）；P5-E 的文档回写 <code>f27212c</code>（3 行）与本报告自身的提交在范围之后。</p>
+
+<h2 id="gate">五 门禁与用例分布（实测）</h2>
+<table>
+  <thead><tr><th>包</th><th>测试文件</th><th>通过</th><th>跳过</th><th>P4 时</th></tr></thead>
+  <tbody>
+    <tr><td><code>apps/desktop</code></td><td>12</td><td><b>173</b></td><td>0</td><td>10 文件／137</td></tr>
+    <tr><td><code>services/knowledge-core</code></td><td>16</td><td><b>187</b></td><td>0</td><td>11 文件／133</td></tr>
+    <tr><td><code>services/native-host</code></td><td>7</td><td>135</td><td>0</td><td>135</td></tr>
+    <tr><td><code>apps/extension</code></td><td>9</td><td>134</td><td>0</td><td>134</td></tr>
+    <tr><td><code>packages/storage</code></td><td>8</td><td><b>129</b></td><td>21</td><td>5 文件／75／21</td></tr>
+    <tr><td><code>packages/shared</code></td><td>3</td><td><b>98</b></td><td>0</td><td>60</td></tr>
+    <tr><td><code>packages/api-client</code></td><td>4</td><td><b>77</b></td><td>0</td><td>3 文件／29</td></tr>
+    <tr><td><code>packages/schema</code></td><td>3</td><td><b>31</b></td><td>0</td><td>0（此前契约由消费方锁定）</td></tr>
+    <tr><td><code>services/mcp-server</code></td><td>3</td><td>27</td><td>0</td><td>27</td></tr>
+    <tr><td><code>packages/ai-provider</code></td><td>2</td><td>48</td><td>0</td><td>48</td></tr>
+    <tr><td><code>apps/web</code>（<code>node:test</code>）</td><td>1</td><td>28</td><td>0</td><td>28</td></tr>
+    <tr><td><code>services/ai</code></td><td>1</td><td>15</td><td>0</td><td>15</td></tr>
+    <tr><td><b>合计</b></td><td><b>69</b></td><td><b>1082</b></td><td><b>21</b></td><td>55 文件／821／21</td></tr>
+  </tbody>
+</table>
+<p>21 项跳过仍全部是 <code>packages/storage/test/supabase.contract.test.ts</code> 缺少 <code>NOLTRI_PG_TEST_URL</code> 的 PG 集成用例，按 §19 X02 口径<b>不计通过</b>。<code>apps/web</code> 使用 <code>node --test</code>（TAP），与 vitest 分开计数，上表已合并标注。</p>
+<p>本轮新增／扩容用例的落点（逐文件实测）：schema 包 <b>3 个新文件</b>——<code>research-baseline.test.ts</code> 14、<code>research-relations.test.ts</code> 10、<code>research-source-reference.test.ts</code> 7；Core <code>research-domain.test.ts</code> 26、<code>research-http.test.ts</code> 12、<code>architecture-gate.test.ts</code> 12、<code>research-archive.test.ts</code> 6、<code>research-demo.test.ts</code> 6、<code>research-restart.test.ts</code> 2；storage <code>research-schema.test.ts</code> 20 ＋ 两驱动契约各 17；api-client <code>research.test.ts</code> 48；shared <code>labels.test.ts</code> 67；桌面 <code>research-model.test.ts</code> 18、<code>research-render.test.tsx</code> 18。</p>
+<h3>全量门禁与桌面构建</h3>
+<pre><code>pnpm -w typecheck --force
+# → Tasks: 12 successful, 12 total（22.9s；日志 /tmp/p5e-gate-final.txt）
+
+pnpm -w test --force --concurrency=1
+# → Tasks: 12 successful, 12 total（55.3s；69 测试文件 / 1082 通过 / 21 跳过）
+# → GATE_EXIT=0（同日志尾部）
+
+pnpm --filter @noltri/desktop run build
+# → ✓ built in 651ms；四入口产出（main / workbench / overlay / paste）
+#   dist/assets/workbench-*.js 71.89 kB（gzip 19.84）· workbench-*.css 16.16 kB（gzip 3.74）
+#   日志 /tmp/p5e-desktop-build.txt</code></pre>
+<p class="sub">测试并发按仓库惯例收成 1（mcp-server 与 ai-provider 在并行争抢下曾出现假失败）；两次独立的 <code>--force</code> 全量门禁都以 12/12 绿收尾，本报告的逐包数字取第二次重跑的完整日志。</p>
+
+<h2 id="foundation">六 P5-A·B：契约先行，两个驱动答同一份题</h2>
+<p>Research 的迁移顺序是刻意选的：<b>schema → storage → domain → HTTP</b>。四个 schema 提交先落三类契约——研究实体（项目／章程／RQ／证据／论点／章节／关系／决策／变更／时间线）、批准基线（<code>CharterVersion</code>）与复核标记（<code>ResearchReviewMark</code>）、证据的出处引用（三个可空指针 ＋ <code>locationOrigin</code>）。之后 storage 的两个驱动共用同一份契约测试文件 <code>research-repository-contract.ts</code>：<b>新增方法必须在两侧给出同一语义</b>，谁也不能只改一侧蒙混过去。</p>
+<ul>
+  <li><b>34 方法门面，每个先验归属。</b><code>ResearchDomain</code> 的每个方法都从凭据取 <code>userId</code>（契约 §0 铁律 1），再证明调用者拥有该项目，然后才动数据；决策与变更的写入同时追加时间线事件，时间线列表永远最新在前。</li>
+  <li><b>33 条端点，一条都不上授权面。</b>27 条在 P5-B 上线，P5-C 追加 6 条（五条批准路由 ＋ <code>GET /api/research/references</code>）。研究文本还没有被 §435 的片段上限覆盖，所以 <b>grant 凭据调用研究端点一律拒绝</b>，架构门禁测试保证没有任何 <code>/api/research/*</code> 路径出现在授权 scope 表里——将来想卖研究读取能力，得先补片段上限，不能悄悄开一条。</li>
+  <li><b>research 是可选接线。</b>Core 的装配里 research 域缺席时，知识域路由照常服务；<code>research-http</code> 与本地切片测试都覆盖这一点。研究域随后被桌面 profile 以同一个 <code>sqliteFile</code> 接上（两个句柄、WAL，两域共库）。</li>
+</ul>
+
+<h2 id="relations">七 P5-C1：关系方向由含义决定，不由调用方自由裁量</h2>
+<p>开发文档 §13 只规定了五种证据关系，方向约束由研究地图的读法反推：地图按 RQ → Evidence → Claim → Section 走，一条 claim→evidence 的 <code>supports</code> 会让那条路径走向反了。因此 <code>RELATION_PAIRINGS</code> 把十种关系各自允许的端点类型冻结成表：</p>
+<table>
+  <thead><tr><th>关系</th><th>来源 → 目标</th><th>备注</th></tr></thead>
+  <tbody>
+    <tr><td><code>supports</code> · <code>partially_supports</code> · <code>contradicts</code> · <code>qualifies</code> · <code>contextualizes</code></td><td>evidence → claim</td><td>五种证据关系；只有前两种计入「有支撑」口径，反证与限定永远不会被当成支持</td></tr>
+    <tr><td><code>answers</code></td><td>claim → research_question</td><td>方向的另一端是写错了的边</td></tr>
+    <tr><td><code>appears_in</code></td><td>claim → manuscript_section</td><td>同上</td></tr>
+    <tr><td><code>changes</code> · <code>affects</code></td><td>research_decision｜research_change → 任意</td><td>决策／变更对对象的作用</td></tr>
+    <tr><td><code>relates_to</code></td><td>任意 → 任意</td><td>无方向约束</td></tr>
+  </tbody>
+</table>
+<p>冻结的理由写在了代码里：同一份数组既作 domain 的拒绝文案、又作 zod 的枚举选项——被某个消费者就地 <code>sort()</code> 就会悄悄改变所有客户端可写的东西。schema 侧 <code>research-relations.test.ts</code> 10 项与 domain 侧的拒绝路径用例同时钉住它。</p>
+
+<h2 id="baseline">八 P5-C2·C3：批准过的章程不可变，归档过的来源有回声</h2>
+<p><b>批准基线（R06）。</b>五条路由：<code>POST …/charter/approve</code>、<code>GET …/charter/versions</code>、<code>GET …/charter/baseline</code>、<code>GET …/review-marks</code>、<code>POST …/review-marks/:markId/clear</code>。批准一次做的事，按顺序：把当前章程草稿冻结成一个不可变快照（append-only，旧版本永不改写）；相对上一版计算「变化字段台账」（首版为空表）；把调用者点名的对象（<code>affectedEntities</code>，上限 200，带 <code>entityType</code>）逐条打上 <code>charter_baseline</code> 复核标记。标记只表示「该对象被这次修订点到过」，清除一条标记就只清除这一条——它不触发任何别的动作。<code>listReviewMarks</code> 支持按状态与对象过滤。为什么快照不可变：章程是用户正在写的活文档，批准只是把「当时说的话」留证；如果快照跟着草稿改，历史保留就是假的。</p>
+<p><b>来源与引用（R03）。</b>证据可以有出处指针（知识节点 <code>nodeId</code>、收录原文 <code>rawSourceId</code>），两者都可空、<b>从不被重新绑定</b>——来源变了，指针不会偷偷指到别处，只会在检查里被发现。<code>GET /api/research/references?nodeId=…｜rawSourceId=…</code>（至少给一个 id，否则拒绝——漏传的过滤器会变成一次跨项目的全表检查）只读地回答「这个出处被谁引用」：跨项目列出全部证据，以及这些证据支撑的论点。知识节点归档时，知识域调用研究域的 <code>markSourceArchived</code>：<b>先</b>把引用处的证据与它们支撑的论点标上 <code>source_archived</code> 待复核，<b>然后</b>归档才完成；来源恢复不误清已打的标记；research 未接线时归档照常完成，不会因为研究域缺席而卡住知识域。</p>
+<p class="sub">这是知识域唯一伸进 research 的一处（<code>services/knowledge-core/src/services/node.ts</code>），文件归属写在契约 §6 里，供后续审查。</p>
+
+<h2 id="workbench">九 P5-D：33 个调用与六个只画的视图</h2>
+<p><b>api-client</b> 一次给足 33 个类型化调用（15 读 ＋ 18 写），路径常量与请求／响应类型同步冻结，<code>research.test.ts</code> 48 项把每个调用的方法、路径与载荷形态钉死。<b>shared</b> 补齐研究中文词表：项目／问题状态、证据类型、定位来源、论点类型与状态、关系类型、变更类型、标记来源（章程新基线／出处已归档）、标记状态、时间线事件类型——桌面端不再自己编词。</p>
+<p><b>桌面「研究」页</b>拆成一个容器 ＋ 六个只画视图：研究总览（项目选择、计数、待复核标记）、章程与边界（15 字段表单 × 批准块）、研究问题、证据工作台（含 R03 的检查引用块）、论点与章节（关系写入 ／ 删除）、决策与时间线。纯决策逻辑全部集中在 <code>research-model.ts</code>（18 项模型测试）：草稿差异、批准载荷、标记行、被引用汇总、关系模式与载荷、时间线行……渲染层用 <code>renderToStaticMarkup</code> 断言（18 项），不依赖 jsdom。容器负责取数与写入：一次 <code>Promise.all</code> 取齐 12 份数据，任何写入成功后整页重载，失败只提示不装作成功。</p>
+<p class="sub">本轮桌面构建实测：<code>vite build</code> 四入口 651ms，workbench 入口 71.89 kB JS（gzip 19.84）＋16.16 kB CSS（gzip 3.74）。</p>
+
+<h2 id="restart">十 P5-E：demo 种子与两次「关掉再开」</h2>
+<p><b>种子是测试造数，而且被断言为测试造数。</b>「Noltri Research Demo」的正文里写着「虚构测试数据」；<code>research-demo.test.ts</code> 六项断言把它的形状钉死（RQ×2、证据×5、论点×5、章节×4、决策×2、变更×2、关系×13、时间线 ≥5），并额外断言三个<b>刻意留下的缺口</b>仍是缺口：C-03 没有任何支持边、C-05 没有 boundary、两条 Change 里有 <code>journal</code> 且在章程之后——它们就是 P6 六类偏移检查的输入，本轮不修。</p>
+<p><b>R08 两条往返。</b><code>research-restart.test.ts</code> 用桌面 profile 的真实布局：同一 <code>sqliteFile</code> 交给知识域与研究域两个句柄（WAL）——种子（demo ＋ 批准 v1 基线 ＋ 点名两个对象 ＋ 清掉其中一条标记 ＋ 补一条带出处指针的 captured 证据）种完后关闭两个句柄，重新打开同一文件：项目、章程、<b>首个基线快照</b>（<code>previousVersion:null</code>、<code>changedFields</code> 空表）、版本列表、两种状态的 <code>charter_baseline</code> 标记逐项读回；13 条关系的五元组（源类型／源 id／关系／目标类型／目标 id）与种子逐条相等；6 条证据的出处指针原样；C-03 依旧没有入边；时间线 ≥5 且最新在前。第二条把库文件连同 <code>-wal</code>／<code>-shm</code> 复制到新路径再开，全部相等——这就是「导出恢复后关系完整」的可执行定义。</p>
+
+<h2 id="gaps">十一 未验证与明确没做的事</h2>
+<ul>
+  <li><b>P6 未做，且没有提前泄进接口面。</b>五个端点（drift-check／drift-findings／更新 finding／map／context-pack）未实现、未进 api-client；工作台的地图／偏移／上下文三个视图未开；桌面研究总览页预留说明「研究地图等 P6 再开」。</li>
+  <li><b>R03 的删除／合并路径尚无代码。</b>V1 的知识域只有「归档」；删除／合并来源落地时复用同一套标记与 <code>rawSourceId</code> 预留列。报告不把没实现的路径算成安全已覆盖。</li>
+  <li><b>桌面研究视图没有在真实 Tauri 窗口里点过。</b>验证手段是 18 项渲染测试＋模型测试＋真实 <code>vite build</code>；与 P3／P4 报告的缺口一致。真实窗口的活体检查（含 Setup Manager 连接中心）仍留在桌面验证清单上。</li>
+  <li><b>Postgres 研究驱动按设计缺席。</b>归档分支的 <code>research-supabase.ts</code> 与两条迁移留在 <code>ad1d0c6</code> 不进本分支；<code>supportsResearchDriver</code> 明确只认 memory／sqlite。storage 的 21 项 PG 跳过用例仍是整套门禁里唯一的不通过来源。</li>
+  <li><b><code>apps/web</code> 还在树里。</b>P7 的删除（连同云依赖清理）是破坏性动作，按约定要用户明确点头后才做。</li>
+  <li><b>推送状态。</b>本范围 22 个提交＋<code>f27212c</code> 目前只在本地；此前对 GitHub 的同步只推了分支（未建 PR）。按契约 §6「push 单独确认」，P5 的推送等用户确认后执行——本报告与后续 P6 提交一并推送。</li>
+  <li><b>三个非项目文件留在未跟踪状态。</b><code>.workspace/</code>、<code>project.bak</code>、<code>project.json</code> 是工作区既有的本地杂物，不属于产品源码，历轮提交刻意不带上它们。</li>
+</ul>
+
+<h2 id="method">十二 环境、命令与临时产物</h2>
+<table>
+  <thead><tr><th>项</th><th>值</th></tr></thead>
+  <tbody>
+    <tr><td>平台</td><td>macOS 26.6.2 / Darwin 25.6.0 / arm64 · Node v24.18.0 · pnpm ＋ turbo 2.11.6 · vitest 5.0.3</td></tr>
+    <tr><td>范围净值</td><td><code>git diff --stat 7935bbe^..de7d4f4</code> → 61 文件 · +14 626 / −15</td></tr>
+    <tr><td>门禁日志</td><td><code>/tmp/p5e-gate-final.txt</code>（typecheck 12/12 · test 12/12 · GATE_EXIT=0）</td></tr>
+    <tr><td>构建日志</td><td><code>/tmp/p5e-desktop-build.txt</code>（四入口，651ms）</td></tr>
+    <tr><td>不再使用的临时产物</td><td>本轮的 UI 数据库与 demo 库都在测试的临时目录里，用后即删；工作区未留测试残留</td></tr>
+  </tbody>
+</table>
+<p class="sub">数字口径：§四由 <code>git log --reverse --pretty=format:'%h|%s' --shortstat</code> 逐提交取；§五由一次完整的 <code>--force</code> 重跑取，两次独立重跑结果一致。报告自身与 <code>f27212c</code> 的提交在范围之后，不计入任何统计。</p>
+
+<h2 id="next">十三 下一步</h2>
+<p><b>P6（下一批）：六类偏移检查、研究地图与上下文包。</b>规则已全部冻结在契约 §5，实现按它写、不重新发明：</p>
+<ul>
+  <li><b>drift-check</b>：确定性规则、不调模型（R05 的「无 AI 诚实」）；每次运行先生成草稿，再按 <code>(driftType, sourceEntityId, targetEntityId)</code> 去重（已有 open 的直接并入，不重复创建）。六类：<code>evidence_drift</code>（confirmed 的缺支持论点升 critical）、<code>causality_drift</code>（因果强词 × 非统计证据，boundary 缺失 critical、含弱化词降 info）、<code>rq_drift</code>（仅当带 manuscriptText）、<code>contribution_drift</code>（token 重合率 &lt; 0.2）、<code>method_drift</code>／<code>journal_drift</code>（章程之后动过对应 Change）。demo 种子的三个缺口保证每类都有真实输入。</li>
+  <li><b>map</b>：questions → evidence → claims → sections → contribution 聚合与边集（七种关系），<code>unsupportedClaimIds</code> 同「有支撑」口径；排版归 UI。</li>
+  <li><b>context-pack</b>：12 区块的 markdown ＝ blocks 拼接，默认按需最小化（R07 给 Agent 的那一份）。</li>
+  <li><b>接线</b>：五个端点 ＋ 领域规则 ＋ api-client 方法 ＋ 桌面三视图（地图、偏移检查、上下文包），R04／R05／R07 届时补测转绿；「后续检查绑定新基线」也在此落地（drift-check 读 <code>findCharterBaseline</code>，补 R06 后半句）。</li>
+</ul>
+<p><b>之后：</b>P7 删除 <code>apps/web</code> 与云依赖（破坏性动作，等用户明确确认）；P8 安装包／签名与 M05（Setup Manager 连接中心的真实窗口检查一并补上）。每完成一个模块照旧跑所在包 typecheck＋test，提交按路径窄范围分批。</p>
+
+<div class="foot">
+  <p>知序 Noltri · P5 Research 整合交付报告 · 2026-10-07 · 分支 <code>v1_research&amp;modify</code> · 提交范围 <code>7935bbe^..de7d4f4</code></p>
+  <p>本报告为单文件、无外部依赖：样式与脚本全部内嵌，不请求任何网络资源，不含截图（研究视图本轮没有可截的真实窗口，原因见 §十一）。所有数字来自实际执行的命令输出；契约回写对应 <code>docs/research-contract.md</code> 的真实改动，不是只写在报告里的说法。</p>
+</div>
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var stored = null;
+  try { stored = localStorage.getItem('noltri-report-theme'); } catch (e) {}
+  if (stored === 'dark') root.setAttribute('data-theme', 'dark');
+  document.getElementById('themer').addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') === 'dark';
+    if (dark) { root.removeAttribute('data-theme'); } else { root.setAttribute('data-theme', 'dark'); }
+    try { localStorage.setItem('noltri-report-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+
+  Array.prototype.slice.call(document.querySelectorAll('pre')).forEach(function (block) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy';
+    button.textContent = '复制';
+    button.addEventListener('click', function () {
+      var text = block.textContent.replace(/^复制/, '');
+      function done(ok) {
+        button.textContent = ok ? '已复制' : '失败';
+        setTimeout(function () { button.textContent = '复制'; }, 1600);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+        return;
+      }
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', 'readonly');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      done(ok);
+    });
+    block.appendChild(button);
+  });
+
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav a'));
+  var targets = links.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); });
+  function onScroll() {
+    var y = window.scrollY + 90;
+    var active = 0;
+    for (var i = 0; i < targets.length; i += 1) { if (targets[i] && targets[i].offsetTop <= y) active = i; }
+    links.forEach(function (a, i) { a.style.color = i === active ? 'var(--accent)' : ''; });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+</body>
+</html>
