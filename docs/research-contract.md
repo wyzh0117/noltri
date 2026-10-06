@@ -208,8 +208,8 @@ services/knowledge-core/src/research/**                P5-B（34 方法 façade�
 services/knowledge-core/src/research/support.ts        P5-B（P5-C 把端点归属判断 `entityIsInProject` 提到这里）
 services/knowledge-core/src/services/node.ts           知识域唯一伸进 research 的一处：归档时标记引用（R03）
 services/knowledge-core/src/http/research.ts|router.ts  P5-B（P5-C 追加 6 条，P6 再追加 5 条）
-services/knowledge-core/test/research*.ts              P5-B（`research-archive.test.ts` 是 R03 的跨域面）
-apps/desktop/**                                        P5-D（研究工作台面板，prop 驱动、纯展示可测）
+services/knowledge-core/test/research*.ts              P5-B（`research-archive.test.ts` 是 R03 的跨域面；`research-restart.test.ts` 是 P5-E 的 R08 往返）
+apps/desktop/**                                        P5-D（研究工作台面板，prop 驱动、纯展示可测；六个视图已落地，研究地图等 P6 再开）
 docs/research-contract.md                              本文件
 ```
 
@@ -227,5 +227,5 @@ docs/research-contract.md                              本文件
 | R02 | 五种证据关系可表示，反证与限定不被当作支持 | ✅ P5-C1：`RELATION_PAIRINGS` 钉住方向，domain 与 schema 两侧有测试 |
 | R03 | 来源删除／修改／合并安全，原始版本与复核提示可追溯 | ✅ P5-C2＋P5-C3：出处指针可空不重绑、`GET /api/research/references` 只读检查、归档时对证据与其论点打 `source_archived` 标记、恢复不误清、未接 research 不阻断归档。V1 只有「归档」，没有删除／合并，所以那两条路径尚无代码可挂（`rawSourceId` 已预留，删除落地时同一套标记即可复用） |
 | R06 | 批准章程修订：历史保留、影响对象被标记、后续检查绑定新基线 | ✅ P5-C2（append-only 版本 + 快照不可变 + 按名标记）；「后续检查绑定新基线」等 P6 的 drift-check 读 `findCharterBaseline` |
-| R08 | 重启／导出恢复后关系完整 | P5-E（sqlite 往返） |
+| R08 | 重启／导出恢复后关系完整 | ✅ P5-E（`research-restart.test.ts`：桌面 profile 的双句柄布局关掉再开，13 条关系五元组、首个基线快照、pending/cleared 两种标记与出处指针逐项读回；文件复制到新路径后同样完整） |
 | R04 / R05 / R07 | 六类偏移 fixture、无 AI 诚实、上下文包给 Agent | P6 |
