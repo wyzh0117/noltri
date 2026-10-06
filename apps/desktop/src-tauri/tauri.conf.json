@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm exec vite",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run build",
+    "beforeBuildCommand": "pnpm run build:runtime && pnpm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -50,12 +50,28 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
     "category": "Productivity",
     "publisher": "知序 Noltri",
     "copyright": "© 知序 Noltri",
     "shortDescription": "macOS 选区捕获与知识收纳引导",
     "longDescription": "知序 Companion 在 macOS 上用系统辅助功能读取选区，把值得复用的内容一键归纳进知识树，并引导 ChatGPT / Claude / Cursor 等 MCP 客户端完成连接。",
-    "icon": []
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/noltri-runtime"],
+    "resources": [
+      "resources/core-server.mjs",
+      "resources/mcp-server.mjs",
+      "resources/host.mjs",
+      "resources/install-cli.mjs"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }

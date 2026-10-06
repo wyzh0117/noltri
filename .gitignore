@@ -13,3 +13,5 @@ target/
 *.log
 coverage/
 apps/extension/.output/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/resources/

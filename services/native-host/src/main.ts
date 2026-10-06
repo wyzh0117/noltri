@@ -137,7 +137,7 @@ export function createNodeManifestFs(): ManifestFs {
   };
 }
 
-const isDirectRun = process.argv[1] !== undefined && /(?:^|\/)(?:main|host)\.(?:ts|mts|js)$/.test(path.resolve(process.argv[1]));
+const isDirectRun = process.argv[1] !== undefined && /(?:^|\/)(?:main|host)\.(?:mjs|ts|mts|js)$/.test(path.resolve(process.argv[1]));
 
 if (isDirectRun) {
   const onFatal = (reason: string) => (error: unknown): void => {

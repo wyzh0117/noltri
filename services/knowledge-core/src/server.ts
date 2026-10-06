@@ -144,7 +144,7 @@ export async function startServer(options: { port?: number } = {}): Promise<Runn
 }
 
 const isDirectRun =
-  process.argv[1] !== undefined && /server\.(ts|js)$/.test(path.resolve(process.argv[1]));
+  process.argv[1] !== undefined && /server\.(?:mjs|ts|js)$/.test(path.resolve(process.argv[1]));
 
 if (isDirectRun) {
   const running = await startServer();

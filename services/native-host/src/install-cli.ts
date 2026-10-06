@@ -135,7 +135,8 @@ export async function runCli(argv: readonly string[]): Promise<CliOutcome> {
   }
 }
 
-const isDirectRun = process.argv[1] !== undefined && /install-cli\.(?:ts|mts|js)$/.test(path.resolve(process.argv[1]));
+// `.mjs` is the packaged name (see apps/desktop/scripts/build-runtime.mjs).
+const isDirectRun = process.argv[1] !== undefined && /install-cli\.(?:mjs|mts|ts|js)$/.test(path.resolve(process.argv[1]));
 
 if (isDirectRun) {
   runCli(process.argv.slice(2))
