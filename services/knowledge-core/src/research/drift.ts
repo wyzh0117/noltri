@@ -33,6 +33,8 @@ export interface DriftFindingDraft {
 }
 
 export interface DriftCheckInput {
+  /** The reference charter the rules compare against: the latest approved baseline's snapshot when one
+   *  exists, otherwise the draft row (R06「后续检查绑定新基线」— the wrapper makes that choice). */
   charter: ResearchCharter | null;
   questions: ResearchQuestion[];
   evidence: Evidence[];

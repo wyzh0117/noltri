@@ -370,4 +370,33 @@ describe('drift persistence wrapper (contract §5: 去重并入返回)', () => {
     // A finding is per-project: another user's project answers not_found, not an empty list.
     await expectCode(domain.listDriftFindings(project.id, 'user-2', {}), 'not_found');
   });
+
+  it('binds subsequent checks to the latest approved baseline, not the draft (R06)', async () => {
+    const { domain } = harness();
+    const project = await domain.createProject('user-1', { name: '碳定价研究' });
+    const aligned = '深度学习加速器的能效优化方法';
+    await domain.upsertCharter(project.id, 'user-1', {
+      workingTitle: '碳定价与工业排放',
+      coreContribution: 'A large-sample study of carbon pricing effects on industrial emissions.',
+    });
+    await domain.approveCharter(project.id, 'user-1', { revisionReason: '首个基线' });
+    await domain.createClaim(project.id, 'user-1', {
+      claimCode: 'CN1',
+      claimText: aligned,
+      claimType: 'contribution',
+      status: 'proposed',
+    });
+
+    // 草稿已同步到与新论点一致，但还没有批准：对照仍是 v1 基线的快照 → 偏移照旧生成。
+    await domain.upsertCharter(project.id, 'user-1', { workingTitle: '碳定价与工业排放', coreContribution: aligned });
+    const beforeApproval = await domain.runDriftCheck(project.id, 'user-1', {});
+    const finding = beforeApproval.findings.find((item) => item.driftType === 'contribution_drift');
+    expect(finding).toBeDefined();
+
+    // 先处理掉这条（否则去重会把它并入下一轮的返回），再批准 v2 —— 检查从此以新基线为对照。
+    await domain.updateDriftFinding(finding!.id, 'user-1', { status: 'dismissed' });
+    await domain.approveCharter(project.id, 'user-1', { revisionReason: '同步贡献表述' });
+    const afterApproval = await domain.runDriftCheck(project.id, 'user-1', {});
+    expect(afterApproval.findings.some((item) => item.driftType === 'contribution_drift')).toBe(false);
+  });
 });

@@ -14,7 +14,8 @@
  * because a 出处 may be cited by more than one 研究项目, and they never re-bind a pointer.
  *
  * P6 (R04/R05/R07) 接上归档 façade 的五个方法：`runDriftCheck` 先跑 `drift.ts` 的纯规则、再按
- * `(driftType, sourceEntityId, targetEntityId)` 对既有 open finding 去重后落库；`buildMap` /
+ * `(driftType, sourceEntityId, targetEntityId)` 对既有 open finding 去重后落库 —— 规则对照的章程取
+ * **最新已批准基线**的快照（R06「后续检查绑定新基线」），尚无基线时回退到草稿行；`buildMap` /
  * `buildContextPack` 分别交给 `map.ts` / `context-pack.ts` 的纯装配，`generatedAt` 由这一层盖戳。
  */
 import type {
@@ -196,6 +197,10 @@ export function createResearchDomain(repo: ResearchRepository): ResearchDomain {
  * Drift persistence wrapper (contract §5): run the pure rules over a fresh snapshot, skip drafts
  * whose `(driftType, sourceEntityId, targetEntityId)` already has an `open` finding, persist the
  * rest, and return everything (existing open findings included) with a summary of what is returned.
+ *
+ * R06「后续检查绑定新基线」: the charter the rules compare against is the latest approved baseline's
+ * snapshot; before the first 批准 there is no baseline, so the draft row is the only reference there is.
+ * A draft edit alone therefore does not move the reference — only approving a revision does.
  */
 async function runDriftCheck(
   repo: ResearchRepository,
@@ -206,9 +211,10 @@ async function runDriftCheck(
   await requireProject(repo, projectId, userId);
   const request = validateRequest(driftCheckRequestSchema, body ?? {}, 'drift check');
 
-  const [charter, questionsSnapshot, evidenceSnapshot, claimsSnapshot, relationsSnapshot, changesSnapshot, existingOpen] =
+  const [charterDraft, baseline, questionsSnapshot, evidenceSnapshot, claimsSnapshot, relationsSnapshot, changesSnapshot, existingOpen] =
     await Promise.all([
       repo.findCharter(projectId, userId),
+      repo.findCharterBaseline(projectId, userId),
       repo.listResearchQuestions(projectId, userId),
       repo.listEvidence(projectId, userId),
       repo.listClaims(projectId, userId),
@@ -216,6 +222,7 @@ async function runDriftCheck(
       repo.listResearchChanges(projectId, userId),
       repo.listDriftFindings(projectId, userId, { status: 'open' }),
     ]);
+  const charter = baseline?.charter ?? charterDraft;
 
   const drafts = runDriftChecks({
     charter,
