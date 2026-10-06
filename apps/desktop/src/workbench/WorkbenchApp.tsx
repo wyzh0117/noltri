@@ -5,19 +5,21 @@ import { summarizeTree } from '@noltri/shared';
 import TopBar from './TopBar';
 import KnowledgeWorkspace from './KnowledgeWorkspace';
 import InboxWorkspace from './InboxWorkspace';
+import ResearchWorkspace from './ResearchWorkspace';
 import ConnectionPanel from './ConnectionPanel';
 import { aiIsOffline, describeError } from './api';
 import type { WorkbenchApi } from './api';
 
-type WorkbenchView = 'inbox' | 'tree' | 'connection';
+type WorkbenchView = 'inbox' | 'tree' | 'research' | 'connection';
 
 const TAB_LABELS: Record<WorkbenchView, string> = {
   inbox: '收件箱',
   tree: '知识库',
+  research: '研究',
   connection: '连接与设置',
 };
 
-const TAB_ORDER: readonly WorkbenchView[] = ['inbox', 'tree', 'connection'];
+const TAB_ORDER: readonly WorkbenchView[] = ['inbox', 'tree', 'research', 'connection'];
 
 export interface WorkbenchAppProps {
   api: WorkbenchApi;
@@ -28,8 +30,8 @@ export interface WorkbenchAppProps {
 }
 
 /**
- * The desktop workbench shell (V1_DEVELOPMENT §08 navigation). 研究项目 is deliberately missing: Research
- * lands in P5, and a dead tab would be a promise the build cannot keep.
+ * The desktop workbench shell (V1_DEVELOPMENT §08 navigation). 研究 lands with P5-D's 研究工作台; 研究地图／
+ * 偏移检查／上下文包 still wait for P6, so the tab shows what the Core of this build can actually answer.
  *
  * It owns what both tabs need — the Core health line and the full tree — and keeps the selected node here
  * so a search hit can move the user from 收件箱 into the knowledge tree.
@@ -138,6 +140,8 @@ export default function WorkbenchApp({
           <InboxWorkspace api={api} nodes={fullNodes} onChanged={refresh} />
         </div>
       ) : null}
+
+      {view === 'research' ? <ResearchWorkspace api={api} /> : null}
 
       {view === 'connection' ? (
         <div className="workbench-column">
