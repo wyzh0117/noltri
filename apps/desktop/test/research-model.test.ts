@@ -6,10 +6,13 @@
 import { describe, expect, it } from 'vitest';
 import type {
   Claim,
+  DriftFinding,
   EntityRelation,
   Evidence,
   ManuscriptSection,
   ResearchCharter,
+  ResearchContextPackResponse,
+  ResearchMapResponse,
   ResearchQuestion,
   ResearchReferenceMatch,
   ResearchReviewMark,
@@ -30,15 +33,22 @@ import {
   draftPayload,
   emptyDraft,
   evidenceProvenanceLines,
+  findingIsActionable,
   groupReferences,
   impactKey,
   impactOptions,
+  mapIncomingLinks,
+  mapSummaryLine,
   markLine,
+  packMetaLine,
   pendingMarks,
   referenceSummary,
   relationIsSendable,
   relationPayload,
   sectionClaims,
+  severityBadgeClass,
+  severityLine,
+  sortFindings,
   stamp,
   timelineRows,
   unsupportedClaims,
@@ -347,5 +357,122 @@ describe('时间线 rows', () => {
     expect(rows[0]).toEqual({ id: 'tl-1', when: '2026-10-06 08:30', typeLabel: '里程碑', title: '开题', summary: null });
     expect(stamp('2026-10-06T08:30:00.000Z')).toBe('2026-10-06 08:30');
     expect(stamp('写于 2026 年秋')).toBe('写于 2026 年秋');
+  });
+});
+
+// --- P6: 偏移检查 / 研究地图 / 上下文包 -----------------------------------------
+
+function findingOf(overrides: Partial<DriftFinding> = {}): DriftFinding {
+  return {
+    id: 'df-1',
+    projectId: 'rp-1',
+    userId: 'user-1',
+    driftType: 'evidence_drift',
+    severity: 'warning',
+    description: '论点 C-2 没有任何 supports／partially_supports 关系',
+    sourceEntityType: 'claim',
+    sourceEntityId: 'cl-2',
+    targetEntityType: null,
+    targetEntityId: null,
+    reason: null,
+    recommendedAction: '补充证据或弱化论点表述',
+    status: 'open',
+    createdAt: ISO,
+    updatedAt: ISO,
+    ...overrides,
+  };
+}
+
+function mapOf(overrides: Partial<ResearchMapResponse> = {}): ResearchMapResponse {
+  return {
+    project: { id: 'rp-1', name: '碳定价与工业排放', status: 'active' },
+    charter: {
+      workingTitle: '碳定价与工业排放',
+      coreContribution: '边境调节的证据',
+      researchBoundary: null,
+      claimBoundary: null,
+      currentStage: '写作',
+    },
+    questions: [{ id: 'rq-1', questionCode: 'RQ1', questionText: '碳价如何影响排放？', status: 'open' }],
+    evidence: [
+      { id: 'ev-1', type: 'dataset', title: '排放数据' },
+      { id: 'ev-2', type: 'interview', title: '访谈记录' },
+    ],
+    claims: [
+      { id: 'cl-1', claimCode: 'C-1', claimText: '碳价降低了排放。', claimType: 'empirical', status: 'confirmed', supported: true },
+      { id: 'cl-2', claimCode: 'C-2', claimText: '企业会转移排放。', claimType: 'empirical', status: 'draft', supported: false },
+    ],
+    sections: [{ id: 'sec-1', sectionName: '引言', sectionReference: '§1' }],
+    edges: [
+      { id: 'e-1', sourceType: 'evidence', sourceId: 'ev-1', relationType: 'supports', targetType: 'claim', targetId: 'cl-1' },
+      { id: 'e-2', sourceType: 'evidence', sourceId: 'ev-2', relationType: 'contradicts', targetType: 'claim', targetId: 'cl-1' },
+      { id: 'e-3', sourceType: 'claim', sourceId: 'cl-1', relationType: 'answers', targetType: 'research_question', targetId: 'rq-1' },
+      { id: 'e-4', sourceType: 'claim', sourceId: 'cl-2', relationType: 'appears_in', targetType: 'manuscript_section', targetId: 'sec-1' },
+    ],
+    unsupportedClaimIds: ['cl-2'],
+    ...overrides,
+  };
+}
+
+describe('偏移发现的排序与徽章', () => {
+  it('reports the run in severity order, from the very counts the Core returned', () => {
+    expect(severityLine({ total: 3, info: 1, warning: 1, critical: 1 })).toBe('共 3 条 · 严重 1 · 警告 1 · 提示 1');
+  });
+
+  it('opens the list on the worst item and breaks ties by recency', () => {
+    const rows = sortFindings([
+      findingOf({ id: 'df-info', severity: 'info' }),
+      findingOf({ id: 'df-critical', severity: 'critical', createdAt: '2026-01-01T00:00:00.000Z' }),
+      findingOf({ id: 'df-warning', severity: 'warning', createdAt: '2026-02-01T00:00:00.000Z' }),
+      findingOf({ id: 'df-warning-new', severity: 'warning', createdAt: '2026-03-01T00:00:00.000Z' }),
+    ]);
+    expect(rows.map((finding) => finding.id)).toEqual(['df-critical', 'df-warning-new', 'df-warning', 'df-info']);
+  });
+
+  it('paints 严重 红色 and gives buttons only to the two live statuses', () => {
+    expect(severityBadgeClass('critical')).toBe('badge badge-danger');
+    expect(severityBadgeClass('warning')).toBe('badge badge-warn');
+    expect(severityBadgeClass('info')).toBe('badge badge-quiet');
+    expect(findingIsActionable(findingOf({ status: 'open' }))).toBe(true);
+    expect(findingIsActionable(findingOf({ status: 'acknowledged' }))).toBe(true);
+    expect(findingIsActionable(findingOf({ status: 'resolved' }))).toBe(false);
+    expect(findingIsActionable(findingOf({ status: 'dismissed' }))).toBe(false);
+  });
+});
+
+describe('研究地图的层与边', () => {
+  it('summarizes the layers with the dangling count inside', () => {
+    expect(mapSummaryLine(mapOf())).toBe('1 个研究问题 · 2 条证据 · 2 个论点（1 个未被支撑）· 1 个章节 · 4 条关系边');
+  });
+
+  it('names every edge into a 论点 in the map vocabulary — 反证 included', () => {
+    expect(mapIncomingLinks('claim', 'cl-1', mapOf())).toEqual(['支持「排放数据」', '反证「访谈记录」']);
+    expect(mapIncomingLinks('claim', 'cl-2', mapOf())).toEqual([]);
+  });
+
+  it('walks the other two directions, falling back to the raw id when a name is missing', () => {
+    expect(mapIncomingLinks('research_question', 'rq-1', mapOf())).toEqual(['回答「C-1 碳价降低了排放。」']);
+    expect(mapIncomingLinks('manuscript_section', 'sec-1', mapOf())).toEqual(['出现于「C-2 企业会转移排放。」']);
+
+    const danglingEdge = mapOf({
+      edges: [
+        { id: 'e-9', sourceType: 'evidence', sourceId: 'ev-9', relationType: 'supports', targetType: 'claim', targetId: 'cl-1' },
+      ],
+    });
+    expect(mapIncomingLinks('claim', 'cl-1', danglingEdge)).toEqual(['支持「ev-9」']);
+  });
+});
+
+describe('上下文包 meta', () => {
+  it('counts the blocks and stamps the generation time', () => {
+    const pack: ResearchContextPackResponse = {
+      markdown: '## PROJECT\n碳定价与工业排放',
+      blocks: [
+        { heading: 'PROJECT', body: '碳定价与工业排放' },
+        { heading: 'Core Contribution', body: '（未填写）' },
+      ],
+      generatedAt: '2026-10-06T08:30:00.000Z',
+    };
+    expect(packMetaLine(pack)).toBe('2 个区块 · 生成于 2026-10-06 08:30');
   });
 });

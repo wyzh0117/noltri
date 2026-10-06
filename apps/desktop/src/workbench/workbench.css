@@ -1244,3 +1244,11 @@ a:hover {
 }
 
 
+
+/* P6: 上下文包的区块正文 —— 保留用户/服务端写下的换行，但跟随面板的字体与颜色。 */
+.pack-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+}

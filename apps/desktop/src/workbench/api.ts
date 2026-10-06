@@ -47,6 +47,11 @@ export type WorkbenchApi = Pick<
   | 'researchDecisions'
   | 'researchChanges'
   | 'researchTimeline'
+  | 'researchDriftCheck'
+  | 'researchDriftFindings'
+  | 'patchResearchDriftFinding'
+  | 'researchMap'
+  | 'researchContextPack'
 >;
 
 export interface WorkbenchEndpoint {

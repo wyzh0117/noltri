@@ -3,12 +3,17 @@ import type { ReactElement } from 'react';
 import type {
   CharterVersion,
   Claim,
+  DriftFinding,
+  DriftFindingStatus,
+  DriftSummary,
   EntityRelation,
   Evidence,
   ManuscriptSection,
   ResearchChange,
   ResearchCharter,
+  ResearchContextPackResponse,
   ResearchDecision,
+  ResearchMapResponse,
   ResearchProject,
   ResearchQuestion,
   ResearchReferenceMatch,
@@ -24,6 +29,9 @@ import QuestionPanel from './QuestionPanel';
 import EvidencePanel, { type ReferenceQuery } from './EvidencePanel';
 import ClaimPanel, { type RelationDraft } from './ClaimPanel';
 import TimelinePanel from './TimelinePanel';
+import DriftPanel from './DriftPanel';
+import MapPanel from './MapPanel';
+import ContextPackPanel from './ContextPackPanel';
 import {
   approvalEntities,
   approvalIsSendable,
@@ -34,10 +42,11 @@ import {
   impactOptions,
   relationMode,
   relationPayload,
+  severityLine,
   type CharterDraft,
 } from './research-model';
 
-type ResearchView = 'overview' | 'charter' | 'questions' | 'evidence' | 'claims' | 'timeline';
+type ResearchView = 'overview' | 'charter' | 'questions' | 'evidence' | 'claims' | 'timeline' | 'drift' | 'map' | 'pack';
 
 const VIEW_LABELS: Record<ResearchView, string> = {
   overview: '研究总览',
@@ -46,9 +55,22 @@ const VIEW_LABELS: Record<ResearchView, string> = {
   evidence: '证据工作台',
   claims: '论点与章节',
   timeline: '决策与时间线',
+  drift: '偏移检查',
+  map: '研究地图',
+  pack: '上下文包',
 };
 
-const VIEW_ORDER: readonly ResearchView[] = ['overview', 'charter', 'questions', 'evidence', 'claims', 'timeline'];
+const VIEW_ORDER: readonly ResearchView[] = [
+  'overview',
+  'charter',
+  'questions',
+  'evidence',
+  'claims',
+  'timeline',
+  'drift',
+  'map',
+  'pack',
+];
 
 interface ProjectData {
   readonly charter: ResearchCharter | null;
@@ -63,6 +85,7 @@ interface ProjectData {
   readonly decisions: readonly ResearchDecision[];
   readonly changes: readonly ResearchChange[];
   readonly events: readonly TimelineEvent[];
+  readonly findings: readonly DriftFinding[];
 }
 
 const EMPTY_RELATION: RelationDraft = {
@@ -77,9 +100,10 @@ export interface ResearchWorkspaceProps {
 }
 
 /**
- * State owner for 研究工作台 (P5-D): it holds which project is open, one loaded snapshot of that project's
- * objects, and the form state of every write — the panels only draw. 研究地图／偏移检查／上下文包 are absent
- * on purpose: their endpoints arrive in P6, and a tab that cannot load would be a promise this build can't keep.
+ * State owner for 研究工作台 (P5-D + P6): it holds which project is open, one loaded snapshot of that
+ * project's objects, and the form state of every write — the panels only draw. 偏移检查 folds into the
+ * snapshot (its findings list is as cheap as any other list); 研究地图 and 上下文包 are aggregates the
+ * server builds on demand, so they load when their view opens instead of on every reload.
  */
 export default function ResearchWorkspace({ api }: ResearchWorkspaceProps): ReactElement {
   const [view, setView] = useState<ResearchView>('overview');
@@ -101,8 +125,19 @@ export default function ResearchWorkspace({ api }: ResearchWorkspaceProps): Reac
   const [relationDraft, setRelationDraft] = useState<RelationDraft>(EMPTY_RELATION);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [manuscriptText, setManuscriptText] = useState('');
+  const [driftSummary, setDriftSummary] = useState<DriftSummary | null>(null);
+  const [map, setMap] = useState<ResearchMapResponse | null>(null);
+  const [pack, setPack] = useState<ResearchContextPackResponse | null>(null);
 
   const reload = useCallback(() => setReloadToken((token) => token + 1), []);
+
+  useEffect(() => {
+    setManuscriptText('');
+    setDriftSummary(null);
+    setMap(null);
+    setPack(null);
+  }, [activeProjectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +179,7 @@ export default function ResearchWorkspace({ api }: ResearchWorkspaceProps): Reac
           decisions,
           changes,
           events,
+          findings,
         ] = await Promise.all([
           api.researchCharter(activeProjectId),
           api.researchCharterBaseline(activeProjectId),
@@ -157,9 +193,24 @@ export default function ResearchWorkspace({ api }: ResearchWorkspaceProps): Reac
           api.researchDecisions(activeProjectId),
           api.researchChanges(activeProjectId),
           api.researchTimeline(activeProjectId),
+          api.researchDriftFindings(activeProjectId),
         ]);
         if (cancelled) return;
-        setData({ charter, baseline, versions, questions, evidence, claims, sections, relations, marks, decisions, changes, events });
+        setData({
+          charter,
+          baseline,
+          versions,
+          questions,
+          evidence,
+          claims,
+          sections,
+          relations,
+          marks,
+          decisions,
+          changes,
+          events,
+          findings,
+        });
         setDraft(draftFrom(charter));
         setError(null);
       } catch (failure) {
@@ -177,6 +228,44 @@ export default function ResearchWorkspace({ api }: ResearchWorkspaceProps): Reac
     () => projects.find((project) => project.id === activeProjectId) ?? null,
     [projects, activeProjectId],
   );
+
+  useEffect(() => {
+    if (activeProjectId === null || view !== 'map') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.researchMap(activeProjectId);
+        if (!cancelled) {
+          setMap(result);
+          setError(null);
+        }
+      } catch (failure) {
+        if (!cancelled) setError(describeError(failure));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, activeProjectId, view, reloadToken]);
+
+  useEffect(() => {
+    if (activeProjectId === null || view !== 'pack') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.researchContextPack(activeProjectId);
+        if (!cancelled) {
+          setPack(result);
+          setError(null);
+        }
+      } catch (failure) {
+        if (!cancelled) setError(describeError(failure));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, activeProjectId, view, reloadToken]);
 
   const impacts = useMemo(
     () =>
@@ -284,6 +373,37 @@ export default function ResearchWorkspace({ api }: ResearchWorkspaceProps): Reac
       setError(describeError(failure));
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function runDriftCheck(): Promise<void> {
+    if (activeProjectId === null) return;
+    setBusy(true);
+    try {
+      const text = manuscriptText.trim();
+      const result = await api.researchDriftCheck(activeProjectId, text === '' ? {} : { manuscriptText: text });
+      setDriftSummary(result.summary);
+      setFeedback(`偏移检查完成：${severityLine(result.summary)}。`);
+      setError(null);
+      reload();
+    } catch (failure) {
+      setError(describeError(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function patchFinding(findingId: string, status: DriftFindingStatus): Promise<void> {
+    setBusy(true);
+    try {
+      await api.patchResearchDriftFinding(findingId, { status });
+      setFeedback(status === 'resolved' ? '这条偏移已解决，记录仍留在台账里。' : '这条偏移已确认；处理结果仍由你决定。');
+      setError(null);
+      reload();
+    } catch (failure) {
+      setError(describeError(failure));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -414,6 +534,24 @@ export default function ResearchWorkspace({ api }: ResearchWorkspaceProps): Reac
         {view === 'timeline' ? (
           <TimelinePanel decisions={data?.decisions ?? []} changes={data?.changes ?? []} events={data?.events ?? []} />
         ) : null}
+
+        {view === 'drift' ? (
+          <DriftPanel
+            findings={data?.findings ?? []}
+            summary={driftSummary}
+            manuscriptText={manuscriptText}
+            busy={busy}
+            error={error}
+            feedback={feedback}
+            onManuscriptText={setManuscriptText}
+            onRun={() => void runDriftCheck()}
+            onPatch={(findingId, status) => void patchFinding(findingId, status)}
+          />
+        ) : null}
+
+        {view === 'map' ? <MapPanel map={map} error={error} /> : null}
+
+        {view === 'pack' ? <ContextPackPanel pack={pack} error={error} /> : null}
       </div>
     </div>
   );

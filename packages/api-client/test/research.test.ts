@@ -4,8 +4,10 @@
  * maps to, and which envelope each read unwraps. The paths below are spelled as literals rather than
  * `apiRoutes.*` on purpose — the table has to be able to disagree with the route constants.
  *
- * 33 endpoints, 38 rows: 复核标记 / 证据 / 论点 / 变更 / 关系 each appear twice, once unfiltered and once
- * with a filter, because the empty-query and filtered branches are built by different code paths.
+ * 38 endpoints, 45 rows: 复核标记 / 证据 / 论点 / 偏移发现 / 变更 / 关系 each appear twice, once unfiltered
+ * and once with a filter, because the empty-query and filtered branches are built by different code paths
+ * (drift-check also gets a second row for its optional 正文 body).
+ * P6 added the last five endpoints (drift-check / 偏移发现列表 / 偏移发现 PATCH / 地图 / 上下文包).
  * Fixtures are 测试造数 — a 测试项目, not a real study.
  */
 import { describe, expect, it } from 'vitest';
@@ -217,6 +219,68 @@ const EVENT = {
   sourceId: null,
   relatedEntities: {},
   createdAt: ISO,
+} as const;
+
+const FINDING = {
+  id: 'df 1',
+  projectId: 'rp 1',
+  userId: 'user-1',
+  driftType: 'evidence_drift',
+  severity: 'warning',
+  description: '论点 C-03 没有任何 supports／partially_supports 关系',
+  sourceEntityType: 'claim',
+  sourceEntityId: 'cl 3',
+  targetEntityType: null,
+  targetEntityId: null,
+  reason: null,
+  recommendedAction: '补充证据或弱化论点表述',
+  status: 'open',
+  createdAt: ISO,
+  updatedAt: ISO,
+} as const;
+
+const MAP = {
+  project: { id: 'rp 1', name: '测试项目：碳定价与工业排放', status: 'active' },
+  charter: {
+    workingTitle: '碳定价与工业排放',
+    coreContribution: null,
+    researchBoundary: null,
+    claimBoundary: null,
+    currentStage: '开题',
+  },
+  questions: [{ id: 'rq 1', questionCode: 'RQ1', questionText: '碳价如何影响短期排放？', status: 'open' }],
+  evidence: [{ id: 'ev 1', type: 'dataset', title: '排放数据摘录' }],
+  claims: [
+    {
+      id: 'cl 1',
+      claimCode: 'C-01',
+      claimText: '碳价上升降低了试点地区的短期排放',
+      claimType: 'empirical',
+      status: 'draft',
+      supported: true,
+    },
+  ],
+  sections: [{ id: 'sec 1', sectionName: '引言', sectionReference: '§1' }],
+  edges: [
+    {
+      id: 'rel 1',
+      sourceType: 'evidence',
+      sourceId: 'ev 1',
+      relationType: 'supports',
+      targetType: 'claim',
+      targetId: 'cl 1',
+    },
+  ],
+  unsupportedClaimIds: [],
+} as const;
+
+const PACK = {
+  markdown: '## PROJECT\n测试项目：碳定价与工业排放（开题）',
+  blocks: [
+    { heading: 'PROJECT', body: '测试项目：碳定价与工业排放（开题）' },
+    { heading: 'Core Contribution', body: '（未填写）' },
+  ],
+  generatedAt: ISO,
 } as const;
 
 interface WireCase {
@@ -522,6 +586,58 @@ const WIRE: readonly WireCase[] = [
     payload: EVENT,
     body: `"occurredAt":"${ISO}"`,
   },
+  {
+    name: 'run 偏移检查',
+    call: (api) => api.researchDriftCheck('p 1'),
+    method: 'POST',
+    url: '/api/research/projects/p%201/drift-check',
+    payload: { findings: [FINDING], summary: { total: 1, info: 0, warning: 1, critical: 0 } },
+    body: '{}',
+  },
+  {
+    name: 'run 偏移检查 with 正文',
+    call: (api) => api.researchDriftCheck('p 1', { manuscriptText: '我们是否高估了碳价效应？' }),
+    method: 'POST',
+    url: '/api/research/projects/p%201/drift-check',
+    payload: { findings: [], summary: { total: 0, info: 0, warning: 0, critical: 0 } },
+    body: '"manuscriptText":"我们是否高估了碳价效应？"',
+  },
+  {
+    name: 'list 偏移发现',
+    call: (api) => api.researchDriftFindings('p 1'),
+    method: 'GET',
+    url: '/api/research/projects/p%201/drift-findings',
+    payload: { findings: [FINDING] },
+  },
+  {
+    name: 'filter 偏移发现 by status',
+    call: (api) => api.researchDriftFindings('p 1', { status: 'open' }),
+    method: 'GET',
+    url: '/api/research/projects/p%201/drift-findings?status=open',
+    payload: { findings: [FINDING] },
+  },
+  {
+    name: 'patch 偏移发现',
+    call: (api) => api.patchResearchDriftFinding('df 1', { status: 'acknowledged' }),
+    method: 'PATCH',
+    url: '/api/research/drift-findings/df%201',
+    payload: { ...FINDING, status: 'acknowledged' },
+    body: '"status":"acknowledged"',
+  },
+  {
+    name: 'read 研究地图',
+    call: (api) => api.researchMap('p 1'),
+    method: 'GET',
+    url: '/api/research/projects/p%201/map',
+    payload: MAP,
+  },
+  {
+    name: 'read 上下文包',
+    call: (api) => api.researchContextPack('p 1'),
+    method: 'GET',
+    url: '/api/research/projects/p%201/context-pack',
+    payload: PACK,
+  },
 ];
 
 describe('research routes', () => {
@@ -611,6 +727,45 @@ describe('research envelopes', () => {
   });
 });
 
+describe('the P6 envelopes', () => {
+  it('keeps the drift summary counts and the severity the Core assigned', async () => {
+    const { fetchImpl } = stub({
+      status: 200,
+      payload: {
+        findings: [{ ...FINDING, driftType: 'causality_drift', severity: 'critical' }],
+        summary: { total: 1, info: 0, warning: 0, critical: 1 },
+      },
+    });
+    const result = await clientFor(fetchImpl).researchDriftCheck('p 1', {});
+    expect(result.summary.critical).toBe(1);
+    expect(result.findings[0]?.driftType).toBe('causality_drift');
+  });
+
+  it('filters 偏移发现 and sends the acknowledgement back as a PATCH', async () => {
+    const { calls, fetchImpl } = stub({ status: 200, payload: { findings: [FINDING] } });
+    const findings = await clientFor(fetchImpl).researchDriftFindings('p 1', { status: 'open' });
+    expect(calls[0]?.url).toBe('http://127.0.0.1:8787/api/research/projects/p%201/drift-findings?status=open');
+    expect(findings[0]?.recommendedAction).toContain('补充证据');
+
+    const patched = stub({ status: 200, payload: { ...FINDING, status: 'acknowledged' } });
+    const finding = await clientFor(patched.fetchImpl).patchResearchDriftFinding('df 1', { status: 'acknowledged' });
+    expect(patched.calls[0]?.method).toBe('PATCH');
+    expect(finding.status).toBe('acknowledged');
+  });
+
+  it('reads the map and the context pack as the Core built them', async () => {
+    const mapStub = stub({ status: 200, payload: MAP });
+    const map = await clientFor(mapStub.fetchImpl).researchMap('p 1');
+    expect(map.edges[0]?.relationType).toBe('supports');
+    expect(map.unsupportedClaimIds).toEqual([]);
+
+    const packStub = stub({ status: 200, payload: PACK });
+    const pack = await clientFor(packStub.fetchImpl).researchContextPack('p 1');
+    expect(pack.blocks[0]?.heading).toBe('PROJECT');
+    expect(pack.markdown).toContain('## PROJECT');
+  });
+});
+
 describe('research writes refuse locally what the contract refuses', () => {
   it('reports the zod issues for an unsendable 证据 payload', () => {
     const { calls, fetchImpl } = stub({ status: 200, payload: EVIDENCE });
@@ -636,5 +791,13 @@ describe('research writes refuse locally what the contract refuses', () => {
     expect(calls[0]?.body).not.toContain('userId');
     expect(calls[0]?.body).not.toContain('projectId');
     expect(calls[0]?.body).not.toContain('createdAt');
+  });
+
+  it('refuses a finding status the contract does not have', () => {
+    const { calls, fetchImpl } = stub({ status: 200, payload: FINDING });
+    expect(() => clientFor(fetchImpl).patchResearchDriftFinding('df 1', { status: 'done' } as never)).toThrow(
+      ApiClientError,
+    );
+    expect(calls).toEqual([]);
   });
 });

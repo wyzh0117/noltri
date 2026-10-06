@@ -25,6 +25,10 @@ import {
   createSectionRequestSchema,
   createTimelineEventRequestSchema,
   deleteRelationResponseSchema,
+  driftCheckRequestSchema,
+  driftCheckResponseSchema,
+  driftFindingListResponseSchema,
+  driftFindingSchema,
   entityRelationSchema,
   evidenceListResponseSchema,
   evidenceSchema,
@@ -40,6 +44,7 @@ import {
   nodeContextSchema,
   nodeDetailSchema,
   patchClaimRequestSchema,
+  patchDriftFindingRequestSchema,
   patchEvidenceRequestSchema,
   patchResearchProjectRequestSchema,
   patchResearchQuestionRequestSchema,
@@ -50,8 +55,10 @@ import {
   researchChangeListResponseSchema,
   researchChangeSchema,
   researchCharterSchema,
+  researchContextPackResponseSchema,
   researchDecisionListResponseSchema,
   researchDecisionSchema,
+  researchMapResponseSchema,
   researchProjectListResponseSchema,
   researchProjectSchema,
   researchQuestionListResponseSchema,
@@ -88,6 +95,10 @@ import {
   type CreateSectionRequest,
   type CreateTimelineEventRequest,
   type DeleteRelationResponse,
+  type DriftCheckRequest,
+  type DriftCheckResponse,
+  type DriftFinding,
+  type DriftFindingListQuery,
   type EntityRelation,
   type Evidence,
   type EvidenceListQuery,
@@ -105,6 +116,7 @@ import {
   type NodeContextRequest,
   type NodeDetail,
   type PatchClaimRequest,
+  type PatchDriftFindingRequest,
   type PatchEvidenceRequest,
   type PatchNodeRequest,
   type PatchResearchProjectRequest,
@@ -115,7 +127,9 @@ import {
   type RelationListQuery,
   type ResearchChange,
   type ResearchCharter,
+  type ResearchContextPackResponse,
   type ResearchDecision,
+  type ResearchMapResponse,
   type ResearchProject,
   type ResearchQuestion,
   type ResearchReferenceMatch,
@@ -183,6 +197,12 @@ export const apiRoutes = {
   researchDecisions: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/decisions`,
   researchChanges: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/changes`,
   researchTimeline: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/timeline`,
+  /** P6: 六类偏移检查与人工处理（R04/R05）+ 研究地图 / 上下文包（R07）。 */
+  researchDriftCheck: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/drift-check`,
+  researchDriftFindings: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/drift-findings`,
+  researchDriftFinding: (id: string) => `/api/research/drift-findings/${encodeURIComponent(id)}`,
+  researchMap: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/map`,
+  researchContextPack: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/context-pack`,
 } as const;
 
 export class ApiClientError extends Error {
@@ -633,6 +653,42 @@ export class ApiClient {
     return this.request('POST', apiRoutes.researchTimeline(projectId), timelineEventSchema, {
       body: validatedRequest(createTimelineEventRequestSchema, request, 'timeline event'),
     });
+  }
+
+  // --- P6: 六类偏移检查 / 研究地图 / 上下文包 --------------------------------------------------------
+
+  /** Deterministic rules, no model call (contract §5); a re-run merges into the still-open findings. */
+  researchDriftCheck(projectId: string, request: DriftCheckRequest = {}): Promise<DriftCheckResponse> {
+    return this.request('POST', apiRoutes.researchDriftCheck(projectId), driftCheckResponseSchema, {
+      body: validatedRequest(driftCheckRequestSchema, request, 'drift check'),
+    });
+  }
+
+  async researchDriftFindings(projectId: string, query: DriftFindingListQuery = {}): Promise<DriftFinding[]> {
+    const suffix = searchSuffix(query);
+    return (
+      await this.request('GET', `${apiRoutes.researchDriftFindings(projectId)}${suffix}`, driftFindingListResponseSchema)
+    ).findings;
+  }
+
+  /**
+   * Only `status` moves — a finding is closed by acknowledging it, never by deleting the row
+   * (`drift_findings` 与 knowledge 侧一样是台账).
+   */
+  patchResearchDriftFinding(findingId: string, request: PatchDriftFindingRequest): Promise<DriftFinding> {
+    return this.request('PATCH', apiRoutes.researchDriftFinding(findingId), driftFindingSchema, {
+      body: validatedRequest(patchDriftFindingRequestSchema, request, 'drift finding patch'),
+    });
+  }
+
+  /** Layers + edges only: the server never lays the graph out, the UI decides how to draw it (§12). */
+  researchMap(projectId: string): Promise<ResearchMapResponse> {
+    return this.request('GET', apiRoutes.researchMap(projectId), researchMapResponseSchema);
+  }
+
+  /** The twelve-block snapshot (contract §5). `markdown` carries the same content as `blocks`. */
+  researchContextPack(projectId: string): Promise<ResearchContextPackResponse> {
+    return this.request('GET', apiRoutes.researchContextPack(projectId), researchContextPackResponseSchema);
   }
 
   private async request<Output>(

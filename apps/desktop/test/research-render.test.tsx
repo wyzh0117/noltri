@@ -8,12 +8,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type {
   CharterVersion,
   Claim,
+  DriftFinding,
   EntityRelation,
   Evidence,
   ManuscriptSection,
   ResearchChange,
   ResearchCharter,
+  ResearchContextPackResponse,
   ResearchDecision,
+  ResearchMapResponse,
   ResearchProject,
   ResearchQuestion,
   ResearchReviewMark,
@@ -25,6 +28,9 @@ import QuestionPanel from '../src/workbench/QuestionPanel';
 import EvidencePanel from '../src/workbench/EvidencePanel';
 import ClaimPanel from '../src/workbench/ClaimPanel';
 import TimelinePanel from '../src/workbench/TimelinePanel';
+import DriftPanel from '../src/workbench/DriftPanel';
+import MapPanel from '../src/workbench/MapPanel';
+import ContextPackPanel from '../src/workbench/ContextPackPanel';
 import { draftFrom, emptyDraft, impactOptions, relationMode } from '../src/workbench/research-model';
 
 const NOW = '2026-10-01T08:00:00.000Z';
@@ -606,5 +612,183 @@ describe('关系表格的三种形状都是可构造的', () => {
     expect(relationMode('evidence_claim').types).toHaveLength(5);
     expect(relationMode('claim_question').types).toEqual(['answers']);
     expect(relationMode('claim_section').types).toEqual(['appears_in']);
+  });
+});
+
+// --- P6: 偏移检查 / 研究地图 / 上下文包 -----------------------------------------
+
+const FINDING_CRITICAL: DriftFinding = {
+  id: 'df-1',
+  projectId: 'p-1',
+  userId: 'u-1',
+  driftType: 'causality_drift',
+  severity: 'critical',
+  description: '论点 C1 用了强因果词「决定」但缺少统计证据，「边界」还是空的',
+  sourceEntityType: 'claim',
+  sourceEntityId: 'cl-1',
+  targetEntityType: null,
+  targetEntityId: null,
+  reason: null,
+  recommendedAction: '弱化因果表述，或在边界里写清适用条件',
+  status: 'open',
+  createdAt: NOW,
+  updatedAt: NOW,
+};
+
+const FINDING_ACKNOWLEDGED: DriftFinding = {
+  ...FINDING_CRITICAL,
+  id: 'df-2',
+  driftType: 'evidence_drift',
+  severity: 'warning',
+  description: '论点 C2 没有任何支持证据',
+  recommendedAction: null,
+  status: 'acknowledged',
+};
+
+const FINDING_RESOLVED: DriftFinding = {
+  ...FINDING_ACKNOWLEDGED,
+  id: 'df-3',
+  status: 'resolved',
+};
+
+const MAP: ResearchMapResponse = {
+  project: { id: 'p-1', name: '测试项目：平台治理', status: 'active' },
+  charter: {
+    workingTitle: '平台治理',
+    coreContribution: null,
+    researchBoundary: '全国范围',
+    claimBoundary: null,
+    currentStage: '数据收集',
+  },
+  questions: [{ id: 'rq-1', questionCode: 'RQ1', questionText: '平台规则如何影响执行者的自由裁量？', status: 'open' }],
+  evidence: [
+    { id: 'ev-1', type: 'interview', title: '实验记录 A' },
+    { id: 'ev-2', type: 'literature', title: '文献摘录 B' },
+  ],
+  claims: [
+    { id: 'cl-1', claimCode: 'C1', claimText: '规则越细，裁量空间越小。', claimType: 'empirical', status: 'draft', supported: true },
+    { id: 'cl-2', claimCode: 'C2', claimText: '执行者会创造性地规避规则。', claimType: 'empirical', status: 'proposed', supported: false },
+  ],
+  sections: [{ id: 'sec-1', sectionName: '引言', sectionReference: '§1' }],
+  edges: [
+    { id: 'e-1', sourceType: 'evidence', sourceId: 'ev-1', relationType: 'contradicts', targetType: 'claim', targetId: 'cl-1' },
+    { id: 'e-2', sourceType: 'evidence', sourceId: 'ev-2', relationType: 'supports', targetType: 'claim', targetId: 'cl-1' },
+    { id: 'e-3', sourceType: 'claim', sourceId: 'cl-1', relationType: 'answers', targetType: 'research_question', targetId: 'rq-1' },
+    { id: 'e-4', sourceType: 'claim', sourceId: 'cl-2', relationType: 'appears_in', targetType: 'manuscript_section', targetId: 'sec-1' },
+  ],
+  unsupportedClaimIds: ['cl-2'],
+};
+
+const PACK: ResearchContextPackResponse = {
+  markdown: '## PROJECT\n测试项目：平台治理（数据收集）\n\n## Core Contribution\n（未填写）',
+  blocks: [
+    { heading: 'PROJECT', body: '测试项目：平台治理（数据收集）' },
+    { heading: 'Core Contribution', body: '（未填写）' },
+    { heading: 'Current Drift Warnings', body: '- [warning] 论点 C2 没有任何支持证据' },
+  ],
+  generatedAt: NOW,
+};
+
+describe('偏移检查面板 (P6)', () => {
+  function driftPanel(overrides: Partial<Parameters<typeof DriftPanel>[0]> = {}) {
+    return renderToStaticMarkup(
+      <DriftPanel
+        findings={[FINDING_RESOLVED, FINDING_ACKNOWLEDGED, FINDING_CRITICAL]}
+        summary={{ total: 3, info: 0, warning: 1, critical: 1 }}
+        manuscriptText=""
+        busy={false}
+        error={null}
+        feedback={null}
+        onManuscriptText={NOOP}
+        onRun={NOOP}
+        onPatch={NOOP}
+        {...overrides}
+      />,
+    );
+  }
+
+  it('opens on 严重, keeps the run summary and offers moves only on live findings', () => {
+    const html = driftPanel();
+    expect(html).toContain('共 3 条 · 严重 1 · 警告 1 · 提示 0');
+    expect(html).toContain('偏移发现（待处理 1 条）');
+    expect(html).toContain('badge badge-danger">严重');
+    expect(html).toContain('badge badge-warn">警告');
+    expect(html).toContain('因果偏移');
+    expect(html).toContain('证据偏移');
+    expect(html).toContain('待处理');
+    expect(html).toContain('已确认');
+    expect(html).toContain('已解决');
+    expect(html).toContain('建议：弱化因果表述，或在边界里写清适用条件');
+    // 待处理 gets both moves, 已确认 only 解决, 已解决 none — the status is the record, not the buttons.
+    expect(html.match(/>确认</g)?.length).toBe(1);
+    expect(html.match(/>解决</g)?.length).toBe(2);
+    expect(html).toContain('不调用模型');
+    expect(html).toContain('粘贴摘要或讨论段落');
+  });
+
+  it('withholds 运行 while a run is in flight and speaks before the first one', () => {
+    const running = driftPanel({ busy: true, summary: null, findings: [] });
+    expect(running).toContain('disabled="">运行偏移检查');
+    expect(running).toContain('还没有偏移发现。运行一次检查，或继续往下写。');
+
+    const failed = driftPanel({ error: 'Core 连不上', feedback: '偏移检查完成：共 3 条 · 严重 1 · 警告 1 · 提示 0。' });
+    expect(failed).toContain('Core 连不上');
+    expect(failed).toContain('偏移检查完成');
+  });
+});
+
+describe('研究地图面板 (P6)', () => {
+  it('draws the layers with every edge as a sentence', () => {
+    const html = renderToStaticMarkup(<MapPanel map={MAP} error={null} />);
+    expect(html).toContain('1 个研究问题 · 2 条证据 · 2 个论点（1 个未被支撑）· 1 个章节 · 4 条关系边');
+    expect(html).toContain('未被支撑的论点：C2 执行者会创造性地规避规则。 —— 地图上它们是悬空的。');
+    expect(html).toContain('badge badge-accent">有支撑');
+    expect(html).toContain('badge badge-warn">未被支撑');
+    expect(html).toContain('反证「实验记录 A」');
+    expect(html).toContain('支持「文献摘录 B」');
+    expect(html).toContain('回答「C1 规则越细，裁量空间越小。」');
+    expect(html).toContain('出现于「C2 执行者会创造性地规避规则。」');
+    expect(html).toContain('访谈');
+    expect(html).toContain('文献');
+  });
+
+  it('is honest while it loads and when a project has no map content', () => {
+    expect(renderToStaticMarkup(<MapPanel map={null} error={null} />)).toContain('正在载入研究地图…');
+
+    const empty: ResearchMapResponse = {
+      ...MAP,
+      questions: [],
+      evidence: [],
+      claims: [],
+      sections: [],
+      edges: [],
+      unsupportedClaimIds: [],
+    };
+    const html = renderToStaticMarkup(<MapPanel map={empty} error="Core 连不上" />);
+    expect(html).toContain('还没有研究问题。');
+    expect(html).toContain('还没有证据。');
+    expect(html).toContain('还没有论点。');
+    expect(html).toContain('还没有章节。');
+    expect(html).toContain('Core 连不上');
+    expect(html).not.toContain('未被支撑的论点：');
+  });
+});
+
+describe('上下文包面板 (P6)', () => {
+  it('draws the blocks in order and keeps the markdown one fold away', () => {
+    const html = renderToStaticMarkup(<ContextPackPanel pack={PACK} error={null} />);
+    expect(html).toContain('3 个区块 · 生成于 2026-10-01 08:00');
+    expect(html).toContain('PROJECT');
+    expect(html).toContain('测试项目：平台治理（数据收集）');
+    expect(html).toContain('Core Contribution');
+    expect(html).toContain('（未填写）');
+    expect(html).toContain('Current Drift Warnings');
+    expect(html).toContain('- [warning] 论点 C2 没有任何支持证据');
+    expect(html).toContain('Markdown 原文（与上面的区块同内容）');
+    expect(html.indexOf('PROJECT')).toBeLessThan(html.indexOf('Core Contribution'));
+  });
+
+  it('is honest while it loads', () => {
+    expect(renderToStaticMarkup(<ContextPackPanel pack={null} error={null} />)).toContain('正在载入上下文包…');
   });
 });

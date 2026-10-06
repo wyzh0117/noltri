@@ -24,13 +24,18 @@ import {
   type ClaimStatus,
   type ClaimType,
   type CreateEntityRelationRequest,
+  type DriftFinding,
+  type DriftSeverity,
+  type DriftSummary,
   type EntityRelation,
   type Evidence,
   type EvidenceType,
   type ManuscriptSection,
   type ResearchCharter,
+  type ResearchContextPackResponse,
   type ResearchEntityRef,
   type ResearchEntityType,
+  type ResearchMapResponse,
   type ResearchProject,
   type ResearchQuestion,
   type ResearchQuestionStatus,
@@ -45,6 +50,7 @@ import {
   evidenceLocationOriginLabels,
   researchEntityTypeLabels,
   researchProjectStatusLabels,
+  researchRelationLabel,
   reviewMarkRaisedByLabels,
   timelineEventTypeLabels,
 } from '@noltri/shared';
@@ -382,4 +388,63 @@ export function timelineRows(events: readonly TimelineEvent[]): readonly Timelin
     title: event.title,
     summary: event.summary,
   }));
+}
+
+// --- 偏移检查（P6，contract §5） ----------------------------------------------
+
+/** Display order: 严重 first — a list that opens on the worst item is a list someone can act on. */
+const SEVERITY_ORDER: readonly DriftSeverity[] = ['critical', 'warning', 'info'];
+
+/** The run report line, from the very counts the Core returned. */
+export function severityLine(summary: DriftSummary): string {
+  return `共 ${String(summary.total)} 条 · 严重 ${String(summary.critical)} · 警告 ${String(summary.warning)} · 提示 ${String(summary.info)}`;
+}
+
+export function sortFindings(findings: readonly DriftFinding[]): readonly DriftFinding[] {
+  return [...findings].sort(
+    (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || b.createdAt.localeCompare(a.createdAt),
+  );
+}
+
+export function severityBadgeClass(severity: DriftSeverity): string {
+  if (severity === 'critical') return 'badge badge-danger';
+  if (severity === 'warning') return 'badge badge-warn';
+  return 'badge badge-quiet';
+}
+
+/** 待处理 and 已确认 are the two live statuses; 已解决／已忽略 means nobody has to look again. */
+export function findingIsActionable(finding: DriftFinding): boolean {
+  return finding.status === 'open' || finding.status === 'acknowledged';
+}
+
+// --- 研究地图（P6，contract §5：服务端不排版，列表与图同信息） --------------------
+
+export function mapSummaryLine(map: ResearchMapResponse): string {
+  return `${String(map.questions.length)} 个研究问题 · ${String(map.evidence.length)} 条证据 · ${String(map.claims.length)} 个论点（${String(map.unsupportedClaimIds.length)} 个未被支撑）· ${String(map.sections.length)} 个章节 · ${String(map.edges.length)} 条关系边`;
+}
+
+/**
+ * The 论点 a map object is joined to, named in the map's own vocabulary — a 反证 is as much a link as a
+ * 支持, and every list drawn from this is the accessible twin of the same edge (V1_DEVELOPMENT §12).
+ */
+export function mapIncomingLinks(
+  targetType: Extract<ResearchEntityType, 'claim' | 'research_question' | 'manuscript_section'>,
+  targetId: string,
+  map: ResearchMapResponse,
+): readonly string[] {
+  const claims = new Map(map.claims.map((claim) => [claim.id, `${claim.claimCode} ${claim.claimText}`]));
+  const evidence = new Map(map.evidence.map((row) => [row.id, row.title]));
+  return map.edges
+    .filter((edge) => edge.targetType === targetType && edge.targetId === targetId)
+    .map((edge) => {
+      const source =
+        edge.sourceType === 'evidence' ? (evidence.get(edge.sourceId) ?? edge.sourceId) : (claims.get(edge.sourceId) ?? edge.sourceId);
+      return `${researchRelationLabel(edge.relationType)}「${source}」`;
+    });
+}
+
+// --- 上下文包（P6，contract §5） ----------------------------------------------
+
+export function packMetaLine(pack: ResearchContextPackResponse): string {
+  return `${String(pack.blocks.length)} 个区块 · 生成于 ${stamp(pack.generatedAt)}`;
 }

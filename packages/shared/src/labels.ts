@@ -3,6 +3,9 @@ import type {
   ClaimStatus,
   ClaimType,
   ContextScope,
+  DriftFindingStatus,
+  DriftSeverity,
+  DriftType,
   EdgeRelation,
   EvidenceLocationOrigin,
   EvidenceType,
@@ -198,6 +201,30 @@ export const timelineEventTypeLabels: Record<TimelineEventType, string> = {
   decision: '决策',
   change: '变更',
   milestone: '里程碑',
+};
+
+/** The six §5 drift rules as a reader sees them; `driftTypeLabels` keys come straight from `driftTypeSchema`. */
+export const driftTypeLabels: Record<DriftType, string> = {
+  rq_drift: '研究问题偏移',
+  contribution_drift: '贡献偏移',
+  evidence_drift: '证据偏移',
+  causality_drift: '因果偏移',
+  method_drift: '方法偏移',
+  journal_drift: '期刊偏移',
+};
+
+export const driftSeverityLabels: Record<DriftSeverity, string> = {
+  info: '提示',
+  warning: '警告',
+  critical: '严重',
+};
+
+/** A finding is closed by moving `status`, never by deleting the row — these are the four moves. */
+export const driftFindingStatusLabels: Record<DriftFindingStatus, string> = {
+  open: '待处理',
+  acknowledged: '已确认',
+  resolved: '已解决',
+  dismissed: '已忽略',
 };
 
 /** Same pass-through rule as `relationLabel`: an unknown token is shown as-is, never blanked. */

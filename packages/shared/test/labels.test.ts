@@ -9,6 +9,9 @@ import {
   claimStatusSchema,
   claimTypeSchema,
   contextScopeSchema,
+  driftFindingStatusSchema,
+  driftSeveritySchema,
+  driftTypeSchema,
   edgeRelationSchema,
   evidenceLocationOriginSchema,
   evidenceTypeSchema,
@@ -29,6 +32,9 @@ import {
   captureActionLabels,
   claimStatusLabels,
   claimTypeLabels,
+  driftFindingStatusLabels,
+  driftSeverityLabels,
+  driftTypeLabels,
   evidenceLocationOriginLabels,
   evidenceTypeLabels,
   matchedByLabels,
@@ -76,6 +82,9 @@ const MAPS: readonly (readonly [string, Readonly<Record<string, string>>, readon
   ['reviewMarkRaisedByLabels', reviewMarkRaisedByLabels, keysOf(reviewMarkRaisedBySchema)],
   ['reviewMarkStatusLabels', reviewMarkStatusLabels, keysOf(reviewMarkStatusSchema)],
   ['timelineEventTypeLabels', timelineEventTypeLabels, keysOf(timelineEventTypeSchema)],
+  ['driftTypeLabels', driftTypeLabels, keysOf(driftTypeSchema)],
+  ['driftSeverityLabels', driftSeverityLabels, keysOf(driftSeveritySchema)],
+  ['driftFindingStatusLabels', driftFindingStatusLabels, keysOf(driftFindingStatusSchema)],
 ];
 
 describe('label maps cover their schema enums', () => {
