@@ -6,8 +6,6 @@ import type { CreateRawSourceInput, KnowledgeItem, KnowledgeNode } from '@noltri
 import type { KnowledgeRepository, MoveNodeRecordResult } from '../src/types';
 
 export interface RepositoryContractOptions {
-  /** Applies the longer timeouts a networked driver needs; asserts nothing Postgres-specific. */
-  requiresServer?: boolean;
   /** Vector width the repository accepts; every fixture vector is padded to it. */
   embeddingDim?: number;
 }
@@ -65,7 +63,7 @@ export function describeKnowledgeRepository(
   options: RepositoryContractOptions = {},
 ): void {
   const dim = options.embeddingDim ?? 3;
-  const timeout = options.requiresServer === true ? 30_000 : 5_000;
+  const timeout = 5_000;
   const vector = makeVector(dim);
   const foreignUser = () => `${USER_PREFIX}-foreign-${randomUUID()}`;
 

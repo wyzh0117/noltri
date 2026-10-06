@@ -5,11 +5,6 @@ import type { KnowledgeError } from '@noltri/shared';
 import type { ResearchProject } from '@noltri/schema';
 import type { CharterFields, ResearchRepository } from '../src/research-types';
 
-export interface ResearchContractOptions {
-  /** Applies the longer timeouts a networked driver needs; asserts nothing Postgres-specific. */
-  requiresServer?: boolean;
-}
-
 type MaybeRepository = ResearchRepository | Promise<ResearchRepository>;
 
 const USER_PREFIX = 'research-contract-user';
@@ -46,9 +41,8 @@ function pause(): Promise<void> {
 export function describeResearchRepository(
   name: string,
   factory: () => MaybeRepository,
-  options: ResearchContractOptions = {},
 ): void {
-  const timeout = options.requiresServer === true ? 30_000 : 5_000;
+  const timeout = 5_000;
   const foreignUser = () => `${USER_PREFIX}-foreign-${randomUUID()}`;
 
   async function scope<T>(work: (repository: ResearchRepository, userId: string) => Promise<T>): Promise<T> {

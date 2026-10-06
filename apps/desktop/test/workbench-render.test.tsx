@@ -3,20 +3,16 @@
  * no WebView, no jsdom and no running Core: every component here takes its state as props, so static
  * markup shows exactly what the panel would draw.
  *
- * The first half compares the desktop port against the still-live `apps/web` component for identical
- * props. That is migration scaffolding — when apps/web is deleted in P7 these cases go with it.
+ * The parity half that compared against the live `apps/web` components went with apps/web in the P7
+ * cleanup; the cases below pin the desktop markup itself.
  */
 import { describe, expect, it } from 'vitest';
 import type { ComponentProps } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { HealthResponse, InboxEntry, InboxResponse, NodeDetail, TreeNode } from '@noltri/schema';
-import { flattenTree, initialExpandedIds, toExpandedSet } from '@noltri/shared';
-import DesktopDomainRail from '../src/workbench/DomainRail';
+import { flattenTree, toExpandedSet } from '@noltri/shared';
 import DesktopTreeView from '../src/workbench/KnowledgeTreeView';
 import DesktopDetail from '../src/workbench/NodeDetailPanel';
-import WebDomainRail from '../../web/components/DomainRail';
-import WebTreeView from '../../web/components/KnowledgeTreeView';
-import WebDetail from '../../web/components/NodeDetailPanel';
 import InboxPanel from '../src/workbench/InboxPanel';
 import EmptyState from '../src/workbench/EmptyState';
 import TopBar from '../src/workbench/TopBar';
@@ -153,86 +149,8 @@ function feedOf(...entries: InboxEntry[]): InboxResponse {
   };
 }
 
-describe('desktop workbench draws the same markup as the web 工作台', () => {
-  const noop = (): void => undefined;
-
-  it('知识领域 rail: empty state and populated state', () => {
-    expect(renderToStaticMarkup(<DesktopDomainRail domains={[]} activeRootId={null} onSelectDomain={noop} />)).toBe(
-      renderToStaticMarkup(<WebDomainRail domains={[]} activeRootId={null} onSelectDomain={noop} />),
-    );
-    expect(
-      renderToStaticMarkup(<DesktopDomainRail domains={TREE} activeRootId="domain-writing" onSelectDomain={noop} />),
-    ).toBe(renderToStaticMarkup(<WebDomainRail domains={TREE} activeRootId="domain-writing" onSelectDomain={noop} />));
-  });
-
-  it('知识树: expanded, collapsed and selected rows', () => {
-    for (const selectedId of [null, 'concept-tuple']) {
-      for (const ids of [toExpandedSet(initialExpandedIds(TREE)), new Set<string>()]) {
-        const flat = flattenTree(TREE, ids);
-        expect(
-          renderToStaticMarkup(
-            <DesktopTreeView
-              nodes={TREE}
-              flat={flat}
-              expanded={ids}
-              selectedId={selectedId}
-              loading={false}
-              onToggle={noop}
-              onSelect={noop}
-            />,
-          ),
-        ).toBe(
-          renderToStaticMarkup(
-            <WebTreeView
-              nodes={TREE}
-              flat={flat}
-              expanded={ids}
-              selectedId={selectedId}
-              loading={false}
-              onToggle={noop}
-              onSelect={noop}
-            />,
-          ),
-        );
-      }
-    }
-  });
-
-  it('节点详情: placeholder and full detail', () => {
-    for (const detail of [null, DETAIL]) {
-      expect(
-        renderToStaticMarkup(
-          <DesktopDetail
-            detail={detail}
-            error={null}
-            loading={false}
-            treeNodes={TREE}
-            versionRecordId={null}
-            onOpenNode={noop}
-            onRename={async () => undefined}
-            onMove={async () => undefined}
-            onOpenChat={noop}
-          />,
-        ),
-      ).toBe(
-        renderToStaticMarkup(
-          <WebDetail
-            detail={detail}
-            error={null}
-            loading={false}
-            treeNodes={TREE}
-            versionRecordId={null}
-            onOpenNode={noop}
-            onRename={async () => undefined}
-            onMove={async () => undefined}
-            onOpenChat={noop}
-          />,
-        ),
-      );
-    }
-  });
-
-  it('the shared tree markup still carries the V1 vocabulary', () => {
+describe('the 知识树 markup keeps the V1 vocabulary', () => {
+  it('renders tree rows with the tree roles and the selection marker', () => {
     const ids = toExpandedSet(['domain-python', 'topic-structures', 'domain-writing']);
     const html = renderToStaticMarkup(
       <DesktopTreeView
