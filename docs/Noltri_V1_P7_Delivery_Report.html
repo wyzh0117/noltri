@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知序 Noltri · 本轮开发交付报告（P7 云依赖清理）</title>
+<style>
+  :root{--bg:#f6f6f4;--panel:#fff;--ink:#1c1d1f;--muted:#5f6469;--line:#dcdcd6;
+    --accent:#2f5d50;--accent-soft:#e4efe9;--warn:#8a5a11;--warn-soft:#fbf1dd;
+    --bad:#8f2f2f;--bad-soft:#fbe9e9;--ok:#1f6b45;--ok-soft:#e2f0e8;--code:#f1f1ec;}
+  html[data-theme="dark"]{--bg:#14161a;--panel:#1b1e23;--ink:#e6e8ea;--muted:#9aa1a9;--line:#2c3138;
+    --accent:#8fc0ad;--accent-soft:#1f2a26;--warn:#e0b070;--warn-soft:#2a2418;
+    --bad:#f0a0a0;--bad-soft:#2a1c1c;--ok:#8fd0ac;--ok-soft:#1a2620;--code:#22262c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 96px}
+  header.top{padding:44px 0 20px;border-bottom:1px solid var(--line)}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:31px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+  h2{font-size:22px;margin:44px 0 12px;padding-top:18px;border-top:1px solid var(--line);scroll-margin-top:64px}
+  h3{font-size:16.5px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:14.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:16px;font-size:13.5px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+  .chip{font-size:12.5px;padding:3px 11px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--line)}
+  .grid{display:grid;gap:14px}.grid.c3{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .grid.c4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .n{font-size:24px;font-weight:650;letter-spacing:-.02em}
+  .card .l{font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft);font-weight:600;font-size:13.5px}
+  tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 92%,var(--bg))}
+  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:6px;white-space:nowrap;border:1px solid var(--line)}
+  .t-ok{background:var(--ok-soft);color:var(--ok)}
+  .t-part{background:var(--warn-soft);color:var(--warn)}
+  .t-no{background:var(--bad-soft);color:var(--bad)}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:38px 14px 12px;overflow:auto;font-size:12.8px;line-height:1.62;margin:12px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  p code,li code,td code{background:var(--code);padding:1.5px 5px;border-radius:5px;font-size:13px;border:1px solid var(--line)}
+  .copy{position:absolute;top:8px;right:8px;font-size:11.5px;padding:3px 9px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .copy:hover{color:var(--ink);border-color:var(--accent)}
+  ul,ol{padding-left:22px;margin:10px 0}li{margin:5px 0}
+  nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:9px 0}
+  nav ol{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;padding-left:0;list-style:none;font-size:13px}
+  nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--accent);text-decoration:underline}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .warnbox{border-left:3px solid var(--warn);background:var(--warn-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .badbox{border-left:3px solid var(--bad);background:var(--bad-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .themer{font-size:12.5px;padding:4px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .themer:hover{color:var(--ink)}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  details{margin:10px 0}summary{cursor:pointer;font-size:14px;color:var(--accent);font-weight:600}
+  .muted{color:var(--muted)}
+  .phase{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+  .ph{font-size:12.5px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted)}
+  .ph.done{background:var(--ok-soft);color:var(--ok);border-color:var(--ok)}
+  .ph.now{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);font-weight:650}
+</style>
+</head>
+<body>
+<nav><div class="wrap bar" style="padding-bottom:0">
+  <ol>
+    <li><a href="#summary">结论</a></li>
+    <li><a href="#done">已完成工作总结</a></li>
+    <li><a href="#scope">范围与验收口径</a></li>
+    <li><a href="#commits">提交清单</a></li>
+    <li><a href="#gate">门禁与用例</a></li>
+    <li><a href="#delete">三批删除的边界</a></li>
+    <li><a href="#audit">审计线索词与允许清单</a></li>
+    <li><a href="#clone">干净 clone 验证</a></li>
+    <li><a href="#docs">文档回写</a></li>
+    <li><a href="#gaps">未验证</a></li>
+    <li><a href="#method">环境与方法</a></li>
+    <li><a href="#next">下一步</a></li>
+  </ol>
+  <button class="themer" id="themer" type="button">切换主题</button>
+</div></nav>
+
+<div class="wrap">
+<header class="top">
+  <div class="kicker">知序 Noltri · 本地桌面版与 Research 整合</div>
+  <h1>P7 云依赖清理 · 本轮交付报告</h1>
+  <div class="sub">把 Web／Supabase／Remote Bridge 从正式依赖、运行入口与工作流里删干净：PG 驱动与 7 个迁移 SQL、Core 的云身份模式与云配置、<code>apps/web</code> 与 workspace／锁文件引用，分三批删除（净删 <b>−7 879</b> 行、<b>47</b> 个文件整体删除）；审计线索词只剩允许清单（归档引用／拒绝样例／历史文档）；§664 干净 clone 安装／测试／构建全链通过；文档回写与 X01 验收。</div>
+  <div class="meta">
+    <span>日期 <b>2026-10-07</b></span>
+    <span>分支 <b>v1_research&amp;modify</b></span>
+    <span>提交范围 <b>d047a14..7c396c7</b>（4 个提交；P7-C 的文档提交在范围之后）</span>
+    <span>平台 <b>macOS 26.6.2 / Darwin 25.6.0 / arm64</b></span>
+  </div>
+  <div class="phase">
+    <span class="ph done">P0 基线</span><span class="ph done">P1 纵向切片</span>
+    <span class="ph done">P2 工作台迁移</span><span class="ph done">P3 本地接入</span>
+    <span class="ph done">P4 Agent Setup</span><span class="ph done">P5 Research 整合</span>
+    <span class="ph done">P6 偏移检查与地图</span><span class="ph now">P7 云依赖清理</span>
+    <span class="ph">P8 安装包</span>
+  </div>
+  <div class="grid c4" style="margin-top:20px">
+    <div class="card"><div class="n">4 · 74</div><div class="l">提交 · 文件（区间净值 <b>+135 / −7 879</b>，取 <code>git diff --stat d047a14..7c396c7</code>）</div></div>
+    <div class="card"><div class="n">22 / 22</div><div class="l">全量门禁任务（11 包 × typecheck＋test，P7-C 回写后完整重跑，GATE_EXIT=0）</div></div>
+    <div class="card"><div class="n">68 / 1110 / 0</div><div class="l">文件 / 通过 / 跳过（P6 为 71 / 1152 / 21；减少的 42 项正是被删的云侧测试）</div></div>
+    <div class="card"><div class="n">47</div><div class="l">整体删除的文件（37 个 <code>apps/web</code> ＋ 10 个 PG 驱动／迁移／迁移测试）</div></div>
+  </div>
+  <div class="chips">
+    <span class="chip">锁文件里 0 处 supabase／postgres／pg（此前 7 处“命中”是 base64 哈希串里的字母）</span>
+    <span class="chip">运行入口已无 apps/web；turbo 任务图与 workspace 清单同步收窄到 11 包</span>
+    <span class="chip">storage 从三驱动收成两个（memory | sqlite），枚举对齐断言搬进 SQLite 测试</span>
+    <span class="chip">审计线索词回写后 16 个文件、全部在允许清单内（归档引用／拒绝样例／历史文档）</span>
+    <span class="chip">删除三步证据：替代已存在 × 回归通过 × 引用已清理</span>
+    <span class="chip">干净 clone：安装 3.3s → 68 文件 1110 项 → 桌面构建 977ms</span>
+  </div>
+</header>
+
+<h2 id="summary">一 结论</h2>
+<p>P7 的验收口径是开发文档 §19–20 的 X01：<b>「正式依赖、运行入口、工作流中不再有 Web／Supabase／Remote Bridge」</b>。本轮把这句话拆成三批删除，每批都先跑全量门禁再提交：<code>3da7dd1</code> 删掉 storage 的 Postgres 驱动（<code>supabase.ts</code> 1 397 行）、它的契约／迁移测试与 7 个迁移 SQL；<code>280ad51</code> 删掉 Core 的 Supabase 身份模式与云配置字段；<code>7c396c7</code> 删掉 <code>apps/web</code> 整个应用（37 个文件）与 workspace／锁文件／turbo 里的引用（锁文件 −622 行、<code>turbo.json</code> 任务图收窄）。夹在中间的 <code>13df0f2</code> 把扩展测试固件、api-client 注释、schema 注释与 mcp-server 注释里最后一批评述指回本地栈。区间净值：<b>74 文件 · +135 / −7 879</b>；47 个文件整体删除。</p>
+<p>删除遵守三步证据，不是机械清扫。其一 <b>替代已存在</b>：知识域契约在 SQLite 真库上照跑，PG 迁移测试里的枚举对齐断言（drift 类型／severity 等词汇）搬进 <code>sqlite-schema.test.ts</code>（+71 行），断言一条不少；其二 <b>回归通过</b>：每一步删除后 11 包 typecheck＋test 全绿、桌面构建通过；其三 <b>引用已清理</b>：审计线索词（supabase／vercel／NOLTRI_PG_TEST_URL／DIRECT_URL／NEXT_PUBLIC_／@noltri/web／remote-mcp／cloud-bridge）在主组从 47 个文件降到 15 个、env 组从 19 降到 8——剩下的 16 个文件全部逐条列进允许清单（归档指针 <code>ad1d0c6</code>、拒绝样例、历史交付报告、P0 基线记录、审计线索词的出处文档本身）。</p>
+<p>Kill 边界的诚实说明：<code>apps/web</code> 的删除是 −5 312 行的整体移除（它自己带着 28 项 <code>node:test</code> 与 next build），这些测试随应用一起退出（不再有文件），是本轮测试规模从 71 文件 1 152 项收成 68 文件 1 110 项的三分之二来源；另外两项是 storage 的 PG 迁移测试（−11 项，含 21 个缺 <code>NOLTRI_PG_TEST_URL</code> 的跳过——跳过随驱动消失归零）与桌面 Web-parity 测试（−3 项）。P7 完整证据链：全量门禁（<code>GATE_EXIT=0</code>）＋ 桌面构建 ＋ <a href="#audit">审计扫描</a> ＋ <a href="#clone">§664 干净 clone</a>（<code>CLEAN_CLONE_OK</code>，HEAD <code>7c396c7</code>）。</p>
+
+<h2 id="done">二 已完成工作总结</h2>
+<p class="sub">按惯例，每轮交付把「已完成的工作」单独汇总一次。以下是 P7 全部完成项，与 <a href="#commits">§四</a> 的 4 个提交一一对应。</p>
+<table>
+  <thead><tr><th>片</th><th>完成了什么</th><th>证据</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>P7-A</b><br>只读清点</td>
+      <td>按开发文档 §20 的线索词把所有命中分五类：<b>正式依赖</b>（package.json／锁文件）／<b>运行入口</b>（apps/web、core auth、storage 出口）／<b>工作流</b>（turbo、workspace 清单、env 样例）／<b>拒绝样例</b>（架构门禁的 FORBIDDEN 串、组件不得渲染 Supabase 的断言——必须保留）／<b>历史文档</b>（P0 记录、P1–P6 报告）。为每一项定义「替代已存在 × 回归通过 × 引用已清理」的删除前提；产出允许清单的初稿</td>
+      <td>清点结果直接固化为 <a href="#audit">§七</a> 的允许清单表；删除范围在三个删除提交中逐条兑现</td>
+    </tr>
+    <tr>
+      <td><b>P7-B1</b><br>storage</td>
+      <td>删 <code>supabase.ts</code>（1 397 行）与 <code>supabase/migrations/</code> 7 个 SQL；删 <code>supabase.contract.test.ts</code>（50 项）与 <code>migrations.test.ts</code>（236 行）；PG 迁移里的枚举对齐断言搬进 <code>sqlite-schema.test.ts</code>（+71 行）后删除迁移测试；<code>requiresServer</code> 等只服务 PG 的测试选项与依赖一并移除；<code>StorageDriverName</code> 只剩 <code>memory｜sqlite</code>，锁文件 −122 行</td>
+      <td><code>3da7dd1</code>：20 文件 +90 / −2 448；storage 包 8 文件 150 项（含 21 跳过）→ <b>6 文件 118 项 0 跳过</b></td>
+    </tr>
+    <tr>
+      <td><b>P7-B2</b><br>core</td>
+      <td>删 core 的 Supabase 身份模式（<code>auth.ts</code> −92 行），identity 只剩 grant／dev-token／dev-open；删 <code>config.ts</code> 云配置字段（<code>SUPABASE_URL</code> 一族）；<code>http/index.ts</code> 与 <code>router.ts</code> 同步收窄；架构门禁的 FORBIDDEN 串保留（拒绝样例）</td>
+      <td><code>280ad51</code>：7 文件 +22 / −114；core 18 文件 224 项全绿</td>
+    </tr>
+    <tr>
+      <td><b>P7-B3</b><br>web 与 workspace</td>
+      <td>删 <code>apps/web</code> 整个应用（37 文件：三栏工作台、<code>/api/web/*</code> 代理、会话／cookie、fake-core 测试、proxy 测试 326 行）；<code>turbo.json</code> 任务图 / <code>pnpm-workspace.yaml</code> / <code>.env.example</code> / 锁文件同步收窄（−622 行）；桌面 Web-parity 测试半边切除后保留「不得渲染 Supabase」的拒绝断言</td>
+      <td><code>7c396c7</code>：44 文件 +18 / −5 312；全量门禁 + 桌面构建 + 干净 clone（<a href="#clone">§八</a>）</td>
+    </tr>
+    <tr>
+      <td><b>13df0f2</b><br>收尾指回本地</td>
+      <td>最后一批「提到云但说的是本地」的评述与固件：扩展 <code>api-client.test.ts</code> 的期望文案、<code>packages/api-client/src/client.ts</code> 与 <code>packages/schema/src/enums.ts</code> 的注释、<code>services/mcp-server/src/index.ts</code> 的注释，全部指回本地栈</td>
+      <td><code>13df0f2</code>：4 文件 +5 / −5；四包测试全绿</td>
+    </tr>
+    <tr>
+      <td><b>P7-C</b><br>回写与报告</td>
+      <td>文档回写：README（描述、快速开始、env、命令、验证状态）、FUNCTION_MAP（storage 两驱动、Web App 删除节、P7 交付项）、PROJECT_MASTER（§7.2 runtime 与 Database）、V1_DEVELOPMENT（历史横幅，原文保留）、docs/research-contract.md（两驱动口径与归档指针）；本报告；全量门禁重跑</td>
+      <td>5 个文档文件 + 本报告（详见 <a href="#docs">§九</a>）；<code>/tmp/p7c-gate-final.txt</code> · <code>/tmp/p7c-gate-test-full.txt</code></td>
+    </tr>
+  </tbody>
+</table>
+<p class="sub">测试规模：P6 的 71 文件／1 152 通过／21 跳过 → P7 的 <b>68 文件／1 110 通过／0 跳过</b>（净变化 −3 文件、−42 项、−21 跳过：web −28、storage −11、desktop −3；跳过全部来自被删的 PG 用例）。</p>
+
+<h2 id="scope">三 范围与验收口径</h2>
+<p>开发文档 §19–20 的 X01 验收与 §664 的干净 clone 验证，逐行口径与结论：</p>
+<table>
+  <thead><tr><th>行</th><th>验收口径</th><th>本轮状态</th><th>证据在</th></tr></thead>
+  <tbody>
+    <tr><td><code>X01</code>·正式依赖</td><td>package.json 与锁文件里不再有 Web／Supabase／Remote Bridge</td><td><span class="tag t-ok">通过</span></td><td>锁文件里 <code>supabase</code> 0 处、<code>postgres|vercel</code> 0 处、无 <code>pg</code> 包名；storage <code>package.json</code> 依赖只剩 schema／shared／zod；<code>@types/pg</code> 与 <code>pg</code> devDeps 已随 <code>3da7dd1</code> 移除</td></tr>
+    <tr><td><code>X01</code>·运行入口</td><td>运行入口不再经过 Web／Supabase／Remote Bridge</td><td><span class="tag t-ok">通过</span></td><td><code>apps/web</code> 删除（37 文件）；core auth 无 supabase 模式（identity = grant／dev-token／dev-open）；storage 出口只 <code>memory｜sqlite</code>；<code>STORAGE_DRIVER</code> 默认 memory、样例 sqlite</td></tr>
+    <tr><td><code>X01</code>·工作流</td><td>工作流（构建、env、脚本）不再引用云</td><td><span class="tag t-ok">通过</span></td><td><code>turbo.json</code> 只剩 11 包任务；<code>pnpm-workspace.yaml</code> 无 web 行；<code>.env.example</code> 本地栈（SQLite 文件路径 + Core 端口）；README 快速开始无 web 步骤；仓库无 CI（无 <code>.github/</code>），不存在需同步收窄的 CI 定义</td></tr>
+    <tr><td><code>§664</code></td><td>干净 clone 后能安装、测试、构建桌面包</td><td><span class="tag t-ok">通过</span></td><td><code>git clone</code> → <code>pnpm install --frozen-lockfile</code>（3.3s）→ 68 文件 1 110 项 0 skip → 桌面 <code>vite build</code>（977ms）→ <code>CLEAN_CLONE_OK</code>；HEAD <code>7c396c7cb6a0d659369de1eff46ba6d55ccde584</code>（<a href="#clone">§八</a>）</td></tr>
+    <tr><td>归档</td><td>被删内容有可复原的归档指针</td><td><span class="tag t-ok">通过</span></td><td><code>ad1d0c6</code>（<code>origin/feature/research-v1</code>）含 <code>apps/web/</code> 与 <code>packages/storage/src/supabase.ts</code>、<code>research-supabase.ts</code>（<code>git ls-tree</code> 复核）；README／FUNCTION_MAP／PROJECT_MASTER／research-contract 的删除记录都指向它</td></tr>
+  </tbody>
+</table>
+<div class="warnbox">口径边界：<b>没有任何外部系统在本轮被触碰</b>。删的是仓库内的一切；Vercel 上的历史部署记录与 Supabase 上的历史项目不在本仓库管辖，也没有被去动过（README 的验证状态段已写明）。「工作流」一项的依据是仓库内文件；仓库没有 CI 定义，所以这一项没有 CI 可删、也没有 CI 需要改绿。</div>
+
+<h2 id="commits">四 提交清单（按提交范围统计，不由工作区反推）</h2>
+<p class="sub">范围 <code>d047a14..7c396c7</code>，基线 <code>d047a14</code> 是 P6 的收尾（P6 交付报告提交）。下表由 <code>git show --shortstat</code> 逐提交取。</p>
+<table>
+  <thead><tr><th>提交</th><th>内容</th><th>规模</th></tr></thead>
+  <tbody>
+    <tr><td><code>3da7dd1</code></td><td>refactor(storage): delete the Postgres driver, keeping its enum check on SQLite</td><td>20 文件 +90 / −2 448</td></tr>
+    <tr><td><code>280ad51</code></td><td>refactor(core): remove the Supabase identity mode and the cloud config fields</td><td>7 文件 +22 / −114</td></tr>
+    <tr><td><code>13df0f2</code></td><td>docs: point remaining comments and fixtures at the local stack</td><td>4 文件 +5 / −5</td></tr>
+    <tr><td><code>7c396c7</code></td><td>chore(workspace): delete the web app and its cloud entry points</td><td>44 文件 +18 / −5 312</td></tr>
+    <tr><td colspan="2"><b>区间净值（<code>git diff --stat d047a14..7c396c7</code>）</b></td><td><b>74 文件 · +135 · −7 879</b></td></tr>
+  </tbody>
+</table>
+<p class="sub">逐提交相加是 75 文件次、+135 / −7 879：<code>pnpm-lock.yaml</code> 被 <code>3da7dd1</code> 与 <code>7c396c7</code> 先后改动（−122 与 −622），区间 diffstat 只计一次，因此是 74 个文件；行数两口径恰好一致。以区间净值为规模结论。</p>
+<p class="sub">分片：三个删除批次对应三个提交（storage → core → web＋workspace），中间一个是注释／固件收尾；P7-C 的文档回写提交（5 个文档＋本报告）在范围之后，与 P5 的 <code>f27212c</code>、P6 的 <code>d047a14</code> 同例。</p>
+
+<h2 id="gate">五 门禁与用例分布（实测）</h2>
+<table>
+  <thead><tr><th>包</th><th>测试文件</th><th>通过</th><th>跳过</th><th>P6 时</th></tr></thead>
+  <tbody>
+    <tr><td><code>apps/desktop</code></td><td>12</td><td>183</td><td>0</td><td>12 文件／186</td></tr>
+    <tr><td><code>services/knowledge-core</code></td><td>18</td><td>224</td><td>0</td><td>18 文件／224</td></tr>
+    <tr><td><code>services/native-host</code></td><td>7</td><td>135</td><td>0</td><td>7 文件／135</td></tr>
+    <tr><td><code>apps/extension</code></td><td>9</td><td>134</td><td>0</td><td>9 文件／134</td></tr>
+    <tr><td><code>packages/storage</code></td><td>6</td><td><b>118</b></td><td><b>0</b></td><td>8 文件／129／21</td></tr>
+    <tr><td><code>packages/shared</code></td><td>3</td><td>107</td><td>0</td><td>3 文件／107</td></tr>
+    <tr><td><code>packages/api-client</code></td><td>4</td><td>88</td><td>0</td><td>4 文件／88</td></tr>
+    <tr><td><code>packages/schema</code></td><td>3</td><td>31</td><td>0</td><td>3 文件／31</td></tr>
+    <tr><td><code>services/mcp-server</code></td><td>3</td><td>27</td><td>0</td><td>3 文件／27</td></tr>
+    <tr><td><code>packages/ai-provider</code></td><td>2</td><td>48</td><td>0</td><td>2 文件／48</td></tr>
+    <tr><td><code>services/ai</code></td><td>1</td><td>15</td><td>0</td><td>1 文件／15</td></tr>
+    <tr><td><code>apps/web</code>（<code>node:test</code>）</td><td colspan="3"><span class="tag t-no">已删除</span>（随应用移除）</td><td>1 文件／28</td></tr>
+    <tr><td><b>合计</b></td><td><b>68</b></td><td><b>1 110</b></td><td><b>0</b></td><td>71 文件／1 152／21</td></tr>
+  </tbody>
+</table>
+<p>净变化的三个来源：<code>apps/web</code>（−1 文件 −28 项 0 跳过，连同 <code>node:test</code> 独立脚本消失）、<code>packages/storage</code>（−2 文件 −11 项 −21 跳过：<code>supabase.contract.test.ts</code> 50 项与 <code>migrations.test.ts</code> 整体删除后，SQLite 契约 41＋research 契约 34＋schema／枚举对齐 43 = 118 项承接；21 个缺 <code>NOLTRI_PG_TEST_URL</code> 的跳过归零）、<code>apps/desktop</code>（−3 项：Web-parity 半边切除，保留词汇与拒绝断言）。其余八包数字与 P6 完全一致。</p>
+<pre><code># 全量门禁（P7-C 文档回写后在当前提交树上的完整重跑）
+pnpm -w typecheck &amp;&amp; pnpm -w test --force --concurrency=1
+# → typecheck 11/11 · test 11/11 · GATE_EXIT=0 · Tasks 22 successful, 22 total（11.69s，0 cached）
+# 日志：/tmp/p7c-gate-final.txt · /tmp/p7c-gate-test-full.txt
+
+# 桌面构建
+pnpm --filter @noltri/desktop build
+# → ✓ built in 162ms（四入口）
+#    workbench 82.33 kB JS（gzip 21.96）／overlay 2.40 kB／main 28.05 kB／jsx-runtime 344.31 kB
+# 日志：/tmp/p7c-desktop-build.txt</code></pre>
+
+<h2 id="delete">六 三批删除的边界与保留理由</h2>
+<h3>批次一 · storage 的 PG 驱动（<code>3da7dd1</code>）</h3>
+<p>删除物：<code>packages/storage/src/supabase.ts</code>（1 397 行）、<code>supabase.contract.test.ts</code>、<code>migrations.test.ts</code>（236 行）、<code>supabase/migrations/</code> 7 个 SQL（extensions／core tables／indexes／vector match／keyword search／RLS／capture idempotency）、<code>pg</code> 与 <code>@types/pg</code> 依赖、<code>requiresServer</code> 测试选项（经调用点核查确认零引用后移除）。保留承接：枚举对齐断言（drift 类型／severity／review status 等词汇与 SQLite 建表的对齐）搬进 <code>sqlite-schema.test.ts</code>（+71 行）；知识域行为断言由 SQLite 真库契约继续执行（41 项）＋ research 契约（34 项）。<code>StorageDriverName</code> 只剩 <code>memory</code> 与 <code>sqlite</code>。</p>
+<h3>批次二 · Core 的云身份与云配置（<code>280ad51</code>）</h3>
+<p>删除物：<code>auth.ts</code> 的 Supabase JWT 身份模式（+6 / −86）、<code>config.ts</code> 的云配置字段、<code>http/index.ts</code> 与 <code>router.ts</code> 的对应分支。identity 唯一来源收敛为 grant／dev-token／dev-open 三路，与 P4 的授权体系一致。架构门禁的 <code>FORBIDDEN_IN_CORE</code>（含 <code>'pg'</code>、<code>'@supabase/'</code>）<b>保留不动</b>——那是拒绝样例：门禁要防的正是这些依赖重新回来。</p>
+<h3>批次三 · web 与 workspace（<code>7c396c7</code>）</h3>
+<p>删除物：<code>apps/web</code> 全部 37 个文件（App Router 页面与 <code>/api/web/*</code> 代理、登录／会话／cookie、三栏工作台组件、<code>fake-core.ts</code> 与 proxy 测试）、<code>pnpm-workspace.yaml</code> 的 web 行、<code>turbo.json</code> 的 web 任务、<code>.env.example</code> 的云变量、锁文件 −622 行。桌面 <code>workbench-render.test.tsx</code> 中依赖 <code>apps/web</code> 组件的 parity 半边切除（−3 项），<b>保留</b>「渲染结果不得出现 Supabase 字样」的拒绝断言（<code>expect(markup).not.toContain('Supabase')</code>）。<code>13df0f2</code> 随后把四个包的注释／固件里最后一批评述指回本地栈。</p>
+<div class="note">删的是什么、没删的是什么：<code>apps/extension</code>、<code>services/native-host</code>、<code>services/mcp-server</code>、<code>services/ai</code> 的行为逻辑<b>零改动</b>（仅 <code>13df0f2</code> 的评述与固件行：扩展测试 2 行次＋三处注释各 1 行次）；<code>apps/desktop</code> 除测试半边切除外零改动；core 的 Research 与知识域逻辑零改动。本轮就是外科手术式的减法——10 个 PG 文件与 37 个 web 文件整体离场，其余 11 包原地保持全绿。</div>
+
+<h2 id="audit">七 审计线索词与允许清单（回写后扫描结果）</h2>
+<p>扫描方法：对 tracked 文件做两组并查（主组 <code>supabase|vercel|remote-mcp|cloud-bridge|@noltri/web</code>；env 组 <code>NOLTRI_PG_TEST_URL|DIRECT_URL|NEXT_PUBLIC_</code>，大小写不敏感），逐文件人工定类。对照：清理前（<code>d047a14</code>）主组 47 个文件、env 组 19 个文件；清理与回写后主组 <b>15</b> 个、env 组 <b>8</b> 个，并集 <b>16</b> 个——全部在允许清单内，逐条列明留下理由：</p>
+<table>
+  <thead><tr><th>文件</th><th>命中规模</th><th>为什么允许留下</th></tr></thead>
+  <tbody>
+    <tr><td><code>Noltri_Local_Desktop_Research_V1_Development.md</code></td><td>23 处 supabase ＋ PG env 词</td><td><b>线索词的出处</b>：审计词表本身就是这份开发基准文档定义的；改掉它等于改掉审计基准</td></tr>
+    <tr><td><code>docs/P0-baseline-and-recovery.md</code></td><td>15 处 ＋ PG env 词</td><td>P0 基线核查的历史证据：记录的就是当时 Web 栈的实况与恢复过程</td></tr>
+    <tr><td><code>docs/Noltri_V1_P1..P6_Delivery_Report.html</code>（6 份）</td><td>各 2–19 处</td><td>历史交付报告：写的是当时的真实状态（P6 报告里的 <code>NOLTRI_PG_TEST_URL</code> 讲的正是那 21 个跳过）；已提交的历史不改写</td></tr>
+    <tr><td><code>V1_DEVELOPMENT.md</code></td><td>10 处 ＋ PG env 词</td><td>Web 时代的历史计划书：顶部加「历史文档」横幅、原文保留（§666 的口径——归档要可复原）</td></tr>
+    <tr><td><code>README.md</code></td><td>3 处</td><td>删除记录：storage 行归档说明、铁律行（gate 检查 pg/supabase）、P7 边界段</td></tr>
+    <tr><td><code>FUNCTION_MAP.md</code></td><td>4 处</td><td>删除记录 ＋ 门禁说明 ＋ 「Web App（P7 已删除）」节</td></tr>
+    <tr><td><code>PROJECT_MASTER.md</code></td><td>2 处</td><td>§7.2 与 Runtime 的归档指针（指向 <code>ad1d0c6</code>）</td></tr>
+    <tr><td><code>docs/research-contract.md</code></td><td>4 处</td><td>两驱动口径（「<code>StorageDriverName</code> 里已无 supabase」）与归档指针</td></tr>
+    <tr><td><code>packages/storage/src/index.ts</code></td><td>1 处</td><td>归档注释（英文）：说明 <code>research-supabase.ts</code> 与两个 migration 留在 <code>ad1d0c6</code></td></tr>
+    <tr><td><code>services/knowledge-core/test/architecture-gate.test.ts</code></td><td>3 处</td><td><b>拒绝样例</b>：<code>FORBIDDEN_IN_CORE</code> 的 <code>'pg'</code>／<code>'@supabase/'</code> 字符串——门禁要拦的就是它们回归</td></tr>
+    <tr><td><code>apps/desktop/test/workbench-render.test.tsx</code></td><td>1 处</td><td><b>拒绝样例</b>：<code>expect(markup).not.toContain('Supabase')</code> 的断言文本</td></tr>
+  </tbody>
+</table>
+<p class="sub">本报告自身在叙述删除时也含线索词，提交后归入允许清单（历史交付报告类）；此后新增的扫描若再发现清单外文件，即视为回归。回写后的全库匹配共 16 文件、119 行，全部为上述允许项。</p>
+
+<h2 id="clone">八 §664 干净 clone 验证（在 <code>7c396c7</code> 上实测）</h2>
+<p>开发文档 §664 要求「clone → install → test → 桌面构建」全链在干净环境里通过。实测（克隆到 <code>/tmp/noltri-clean-clone-p7</code>，只含已提交内容，不含工作区任何未提交文件）：</p>
+<pre><code>=== HEAD: 7c396c7cb6a0d659369de1eff46ba6d55ccde584 ===
+pnpm install --frozen-lockfile
+# → Done in 3.3s（11 包 + 根依赖，无云包解析）
+pnpm test
+# → schema 31 · shared 107 · native-host 135 · api-client 88 · ai-service 15
+#   ai-provider 48 · extension 134 · storage 118 · mcp-server 27
+#   knowledge-core 224 · desktop 183 —— 68 文件 / 1110 项 / 0 skip / 0 fail
+pnpm --filter @noltri/desktop build
+# → dist/assets/workbench-xefyH0Lj.js 82.33 kB（gzip 21.96）… ✓ built in 977ms
+=== TEST OK ===
+=== CLEAN_CLONE_OK ===
+# 日志：/tmp/p7-clean-clone.log（克隆目录保留在 /tmp/noltri-clean-clone-p7 供复查）</code></pre>
+<p>这一步的意义：锁文件里已无任何云依赖，<code>--frozen-lockfile</code> 在没有任何本机缓存假设的克隆里解析成功、全部测试与桌面构建通过——X01 的三个「不再有」在「陌生人第一次拿到仓库」的路径上也成立。</p>
+
+<h2 id="docs">九 文档回写情况（P7-C）</h2>
+<table>
+  <thead><tr><th>文档</th><th>改了什么</th></tr></thead>
+  <tbody>
+    <tr><td><code>README.md</code></td><td>目录表 storage 行改为两驱动＋归档说明、删 apps/web 与 supabase/migrations 行；快速开始步骤 2 改为 Core＋MCP 双进程（<code>KNOWLEDGE_API_URL</code>／<code>MCP_PORT</code>）、删 web 步骤；env 表删 SUPABASE／AUTH_MODE、<code>STORAGE_DRIVER</code> 只 <code>memory|sqlite</code>、<code>MCP_HTTP_TOKEN/PORT</code> → <code>MCP_PORT</code>＋<code>AUTH_REQUIRED</code>（按 <code>loadMcpConfig</code> 实况）；命令段 11 包／68 文件／1 110 项；BYOK 云段落改本地 SQLite 表述；验证状态删「真实 Supabase 实例」、加 P7 边界段</td></tr>
+    <tr><td><code>FUNCTION_MAP.md</code></td><td>幂等行 PG 迁移引用 → SQLite <code>user_version=2</code>＋删除记录；Core 标题 133→224；identity 去掉 JWT；storageHealth 三驱动→两驱动；storage 测试口径改成「118 项全绿：知识契约 41／research 契约 34／schema 枚举对齐 43，原 PG 迁移测试随 P7 删除」；新增 P7 移除记录（<code>ad1d0c6</code>、<code>requiresServer</code>）；Web App 节改为「P7 已删除」；desktop 183 项；P7 交付项＋本报告指针</td></tr>
+    <tr><td><code>PROJECT_MASTER.md</code></td><td>§7.2 实现改 <code>SQLiteRepository</code>＋<code>InMemoryRepository</code>（仅测试）＋归档说明；非重复原则「Web App」措辞改「桌面工作台」；技术栈删 Web App／Vercel/Supabase／PostgreSQL+pgvector 三节，改为本地 runtime 与 SQLite（FTS5＋Float32 BLOB）描述</td></tr>
+    <tr><td><code>V1_DEVELOPMENT.md</code></td><td>顶部加历史横幅：「本文件是 Web 时代的 V1 计划；正文提到的 Vercel／Supabase／Web App 均未进入本地桌面版本（已于 P7 删除，归档 <code>ad1d0c6</code>）；当前基准是本地桌面开发文档」——原文保留（§666：归档可复原）</td></tr>
+    <tr><td><code>docs/research-contract.md</code></td><td>驱动口径改「只有 memory 与 sqlite（<code>StorageDriverName</code> 已无 supabase，归档留在 <code>ad1d0c6</code>）」；门禁字面量改 <code>driver === 'memory' | 'sqlite'</code>；<code>apps/web</code> 容忍说明标注「该应用已在 P7 删除」</td></tr>
+    <tr><td><code>docs/Noltri_V1_P7_Delivery_Report.html</code></td><td>本报告</td></tr>
+  </tbody>
+</table>
+<p class="sub">未改写的：<code>docs/P0-baseline-and-recovery.md</code>（P0 历史记录）、P1–P6 交付报告、开发基准文档本身——这三类按 §666 口径作为历史证据保持原样，其线索词已在 <a href="#audit">§七</a> 允许清单中备案。</p>
+
+<h2 id="gaps">十 未验证与明确没做的事</h2>
+<ul>
+  <li><b>外部系统未被触碰、也未验证</b>：Vercel 部署记录、Supabase 历史项目、任何云端的回收站——本轮只删仓库内文件；「云上还有什么」不在本轮范围，也没有去查（README 的边界段已写明）。</li>
+  <li><b>没有 CI 可改</b>：仓库无 <code>.github/</code>，工作流项的结论是「仓库内没有引用云的工作流」，不是「改绿了某条流水线」。</li>
+  <li><b>归档分支未动</b>：<code>ad1d0c6</code> 只是既有分支上的指针（<code>origin/feature/research-v1</code>），本轮没有向它推任何东西，也没有在验证时做全量 checkout（只 <code>ls-tree</code> 复核了文件在不在）。</li>
+  <li><b>本机数据未动</b>：<code>~/.noltri</code> 下的 SQLite 文件与 native-host 凭据不是仓库内容，未做任何迁移或清理。</li>
+  <li><b>测试规模收缩是预期而非损失</b>：web 28 项与 storage 11 项的测试文件随被删代码离场（承接见 §六）；21 个跳过归零。P6 的 1152 项里因此少了 42 项，这 42 项不是被改坏的。</li>
+  <li><b>未做</b>：P8 的安装包／签名／M05；桌面三视图与 Setup Manager 的实机窗口操作（延续 P5/P6 的边界，P8 阶段一并处理）。</li>
+</ul>
+
+<h2 id="method">十一 环境、命令与临时产物</h2>
+<ul>
+  <li>环境：macOS 26.6.2（Darwin 25.6.0，arm64）；Node v24.18.0；pnpm 11.21.0；vitest 5.0.3；turbo（11.69s 全量测试）。</li>
+  <li>门禁：<code>pnpm -w typecheck &amp;&amp; pnpm -w test --force --concurrency=1</code> → <code>GATE_EXIT=0</code>（22/22 任务）。</li>
+  <li>构建：<code>pnpm --filter @noltri/desktop build</code> → 162ms（工作区）／977ms（干净 clone）。</li>
+  <li>审计：<code>git ls-files | xargs grep -ilE '&lt;线索词&gt;'</code> 两组并查；锁文件另查 <code>supabase</code>／<code>postgres|vercel</code>／<code>pg</code> 包名（全 0）。</li>
+  <li>干净 clone：<code>git clone &lt;repo&gt; /tmp/noltri-clean-clone-p7</code> → frozen install → test → build。</li>
+  <li>临时产物（保留供复查）：<code>/tmp/p7c-gate-final.txt</code>、<code>/tmp/p7c-gate-test-full.txt</code>、<code>/tmp/p7c-desktop-build.txt</code>、<code>/tmp/p7-clean-clone.log</code>、<code>/tmp/noltri-clean-clone-p7/</code>（克隆目录）、<code>/tmp/p7b-full-test.log</code>（B4 提交前门禁）。</li>
+</ul>
+
+<h2 id="next">十二 下一步</h2>
+<ul>
+  <li><b>推送</b>：本轮 4 个提交＋P7-C 文档提交尚未推 GitHub（等确认；<code>origin/v1_research&amp;modify</code> 上次同步停在 <code>d047a14</code>）。</li>
+  <li><b>P8</b>：安装包与签名（.dmg／公证）、M05、Setup Manager 与桌面三视图／Research 面板的实机窗口检查——P5–P7 全部「未实机运行」的界面证据在 P8 一并补。</li>
+</ul>
+
+<div class="foot">
+  知序 Noltri · 本地桌面版 V1 · P7 云依赖清理交付报告 · 2026-10-07 · 分支 <code>v1_research&amp;modify</code> · 提交范围 <code>d047a14..7c396c7</code>（P7-C 文档提交在范围之后）· 报告文件本身归入审计允许清单
+</div>
+</div>
+
+<script>
+(function(){
+  var KEY='noltri-report-theme';
+  var root=document.documentElement;
+  var saved=null;try{saved=localStorage.getItem(KEY)}catch(e){}
+  if(saved){root.setAttribute('data-theme',saved)}
+  var btn=document.getElementById('themer');
+  btn.addEventListener('click',function(){
+    var next=root.getAttribute('data-theme')==='dark'?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem(KEY,next)}catch(e){}
+  });
+  document.querySelectorAll('pre').forEach(function(pre){
+    var b=document.createElement('button');
+    b.className='copy';b.type='button';b.textContent='复制';
+    b.addEventListener('click',function(){
+      var t=pre.querySelector('code');var text=t?t.innerText:pre.innerText;
+      navigator.clipboard.writeText(text).then(function(){b.textContent='已复制';setTimeout(function(){b.textContent='复制'},1200)});
+    });
+    pre.appendChild(b);
+  });
+})();
+</script>
+</body>
+</html>

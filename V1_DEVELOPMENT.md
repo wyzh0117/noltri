@@ -1,8 +1,11 @@
 # V1 开发文档：核心闭环
 
-> 适用范围：第一次大迭代。  
-> 开发 Agent 开始工作前必须先阅读 `PROJECT_MASTER.md`，再阅读本文件。  
-> 本文件描述 V1 的具体实现目标、模块、数据流、接口和开发顺序。
+> **历史文档（2026-10 标注）**：本文件是 Web 时代的 V1 计划；正文提到的 Vercel／Supabase／Web App
+> 均未进入本地桌面版本（已于 P7 云依赖清理中删除，归档 `ad1d0c6`）。当前开发基准是
+> `Noltri_Local_Desktop_Research_V1_Development.md`，落实情况见 `FUNCTION_MAP.md` 与
+> `docs/Noltri_V1_P7_Delivery_Report.html`。本文件仅作历史与背景参考，不再作为实施依据。
+>
+> 原文保留如下：第一次大迭代的适用范围、实现目标、模块、数据流、接口与开发顺序。
 
 ---
 

@@ -10,7 +10,7 @@
 - MCP `capture_knowledge`（Streamable HTTP ＋ **P4 stdio 双transport**；SDK 真实客户端端到端验证：initialize → tools/list → tools/call，捕获结果落库并在知识树可见。stdio 进程只代理本机 Core，且**在 Core 自证身份之前拒绝开始服务**）
 - **每客户端一份可撤销的授权凭据（P4-D）**：连接中心以设备凭据签发／列出／撤销客户端授权（`capture`／`read` 两类 scope、可限定项目、可限定返回片段），明文只显示一次、库里只存 SHA-256 摘要，Core 每个请求重新读授权——撤销后同一条已建立的 MCP 连接立刻被拒（实测见 `docs/P0-baseline-and-recovery.md` §15.5）
 - **统一 CaptureRequest（P3-A）**：`requestId`（8–64 位）＋ `source`（内容来自哪里）＋ `capture`（谁在什么设备采集）三段分离，四个入口共用 `packages/api-client` 的键生成与 zod 契约；**payload 里没有用户身份字段**，多带的键被 schema 剥掉，身份只取自凭证。`apps/extension/src/capture/build-request.ts` 保证一条采集的键只生成一次，重发沿用同一个键（`packages/api-client/test/capture-request.test.ts` 7 项、`apps/extension/test/capture-payload.test.ts` 9 项）
-- **按键幂等回放（P3-A）**：Core 以 `(userId, clientId, requestId)` 认键。同键重复提交返回**同一个** `rawSourceId` 且 `duplicate=true`、不再写入第二条原文；**内容相同但键不同（或客户端／设备不同）则各占一条原文行，来源关系不丢弃**。落库由 `raw_sources.request_id / client_id` 两列＋一条 partial unique index 保证（SQLite `user_version=2`，Postgres 迁移 `20261005000100_capture_idempotency.sql`，向前-only，历史行的 null 键不入索引）。`services/knowledge-core/test/idempotency.test.ts` 12 项锁定键控与阶段判定，跨驱动的落库行为由 `packages/storage/test/repository-contract.ts` 逐驱动断言；实测见 `docs/P0-baseline-and-recovery.md` §14.2
+- **按键幂等回放（P3-A）**：Core 以 `(userId, clientId, requestId)` 认键。同键重复提交返回**同一个** `rawSourceId` 且 `duplicate=true`、不再写入第二条原文；**内容相同但键不同（或客户端／设备不同）则各占一条原文行，来源关系不丢弃**。落库由 `raw_sources.request_id / client_id` 两列＋一条 partial unique index 保证（SQLite `user_version=2`；历史行的 null 键不入索引。原 Postgres 版迁移已随 P7 云依赖清理删除）。`services/knowledge-core/test/idempotency.test.ts` 12 项锁定键控与阶段判定，跨驱动的落库行为由 `packages/storage/test/repository-contract.ts` 逐驱动断言；实测见 `docs/P0-baseline-and-recovery.md` §14.2
 - **阶段回报（P3-A）**：`CaptureResult.stage ∈ saved｜processing｜completed｜needs_review｜failed` ＋ `duplicate` ＋ `processingStatus`，客户端不再靠「HTTP 200」猜结果。扩展浮层据此分开显示「已落盘，等待归纳」「已存入 Noltri，正在归纳」「已存入 Noltri，需要你复核」「这条已经在 Noltri 里，没有重复写入」（`apps/extension/test/toast-render.test.ts` 17 项）
 - **结构化错误（P3-A）**：错误信封固定携带 `code` / 人类可读 message / `retryable` / `traceId`；`RETRYABLE_ERROR_CODES`（`packages/shared/src/errors.ts`）是全仓唯一的可重试判定来源，`ApiClientError.retryable` 只从信封或服务端分类码得出
 - 浏览器插件选区浮动「归纳知识点」按钮（MV3 content script；134 项测试、`pnpm --filter @noltri/extension run build` 通过；**未在真实 Chrome 加载实测**）
@@ -28,7 +28,7 @@
 - 桌面 Companion 全局快捷键 → 粘贴式迷你捕获窗降级（Rust 快捷键注册 + paste 窗口；同上，**未实机运行**）
 - 桌面 Companion 捕获管线前端流 `runCaptureFlow`：契约校验 → ApiClient 捕获 → 结果/失败文案 → `recordCaptureOutcome`（`apps/desktop/test/capture-contract.test.ts` 5 项覆盖：payload 无身份字段、短文本本地拒绝不发包、原文已保存的 AI 失败提示、成功路径节点路径展示）
 
-### Knowledge Core（133 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片 + 真实 stdio Agent 实测）
+### Knowledge Core（224 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片 + 真实 stdio Agent 实测）
 - RawSource **先保存**再 AI 处理（全文唯一 `createRawSource` 调用点，`pnpm gate` 机器检查）
 - 原子知识点提取（offline 确定性提供方 + OpenAI 兼容 BYOK 提供方）
 - 文本归一化
@@ -42,38 +42,33 @@
 - 语义 + 关键词混合搜索
 - 节点上下文装载（current_node / section / tree / whole_library）
 - 节点级 AI 对话（会话 + 消息持久化）
-- REST API 契约校验（zod）、健康检查、错误信封；身份仅取自凭证（grant / JWT / dev-token / dev-open），绝不来自请求体
+- REST API 契约校验（zod）、健康检查、错误信封；身份仅取自凭证（grant / dev-token / dev-open），绝不来自请求体
 - `/api/health` 是**产品身份声明**：除状态外必须返回 `productId='noltri-knowledge-core'`、`instanceId`（进程实例号，重启即变，供客户端识别「App 换了一个」）、`protocolVersion='1'`、`version`、`storageDriver` 与真实 `storage` 自检结果。「端口上有 JSON」或「`ok:true`」都不构成判定依据（§7.6）；Native Host 在**每一次**转发前重新核验这三项
 - **采集幂等**：`POST /api/capture` 认 `(userId, clientId, requestId)` 键，同键第二次提交直接返回第一条的 `rawSourceId` ＋ `duplicate=true` ＋ 已到达的 `stage`，不重跑 AI、不写第二条原文；无键（缺 `requestId`）请求在契约层 400 拒绝（`invalid_request`、`retryable=false`、带 `traceId`）。归纳失败后 `POST /api/capture/:id/retry` 成功重跑并返回 `stage='completed'`
 - 错误信封统一为 `{error:{code,message,retryable,traceId,details?}}`，`retryable` 由 `RETRYABLE_ERROR_CODES` 单点决定，客户端不必再各自猜（`services/knowledge-core/test/http.test.ts` 15 项：按码标注可重试＋带 traceId 的信封、400／401／404 与 405 的区分、意外失败不回显内部）
 - **本地客户端授权（P4-D，`services/knowledge-core/src/authorization.ts`，取代 §569 里作为用户入口的 `NOLTRI_DEV_TOKEN`）**：`NOLTRI_GRANT_FILE`（或 `NOLTRI_DATA_DIR/grants.json`）存在才启用，未启用的部署行为与今天完全一致。一份授权＝`label`＋`client`＋`scopes ⊆ {capture, read}`＋可选 `nodeIds`＋可选 `snippetChars`＋`revokedAt`；**`mutate` 永不由授权界面提供**。凭据明文 32 字节 base64url、只在签发响应里出现一次，落盘的是 SHA-256 摘要；bearer 先查授权表，命中即 `via='grant'` 并携带授权，未命中才回落到旧的设备凭据／开放模式
 - **scope 与撤销在每个请求上生效**：授权表每次请求重读，因此撤销能杀死一条**已经建立**的 MCP 连接（M04）；`requireScope` 按动作表拒绝越权（`capture` 不能读、`read` 不能改），管理端点对 grant 调用者一律关闭，未配置设备凭据的 Core（`dev-open`）**不能签发任何长期凭据**（§569）。拒绝复用 `unauthorized` ＋ `details.reason`，不改 `apiErrorCodes` 冻结枚举
 - **限制返回片段（P4-D5，§435）**：`ActorContext.snippetChars` 由授权带入读取服务，裁剪发生在**服务层内部**而非路由出口，因此 `search`、节点详情、上下文包（`markdown`／`items`／`sources`／`estimatedTokens` 自洽）、收件箱预览与 `GET /api/inbox/:id` 原文说的是同一份被裁过的文本，无法绕过。**标题与树结构不裁剪，只裁正文**；设备凭据与开放模式**不裁剪**（收件箱复核与桌面工作台需要全文），因此「片段上限」只约束 Agent 客户端。上下限 20–4000 由 schema 单点决定，越界在连接中心就拒绝，不落库
-- `/api/health` 报告**真实存储状态**：驱动自检 `storageHealth()` 由三个驱动各自实现并纳入契约测试，返回文件名（不返回绝对路径）、journal mode、schema 版本、SQLite 版本、FTS5 可用性与本库数量；storage 自报不可用时整体状态降为 `degraded`
+- `/api/health` 报告**真实存储状态**：驱动自检 `storageHealth()` 由两个驱动各自实现并纳入契约测试，返回文件名（不返回绝对路径）、journal mode、schema 版本、SQLite 版本、FTS5 可用性与本库数量；storage 自报不可用时整体状态降为 `degraded`
 - 本地零云配置纵向切片实测：仅设 `STORAGE_DRIVER=sqlite` / `NOLTRI_SQLITE_FILE` / `AI_PROVIDER=offline` / `NOLTRI_DEV_USER_ID` 四个环境变量，即可 capture → 落盘 → 关闭句柄 → 重开同一文件 → 读回原文/知识/树/关键词搜索/节点详情（`services/knowledge-core/test/local-storage-slice.test.ts`，5 项）；profile 路径由 `resolveSqliteFile()` 统一解析（`NOLTRI_SQLITE_FILE` > `NOLTRI_DATA_DIR` > `~/.noltri/data`），Core 内不再出现驱动名分支
 - 崩溃安全实测：子进程（`services/knowledge-core/test/crash-writer.ts`）经 `createRepository` 提交一条原文后立刻 `SIGKILL` 自身，不执行 `close()` 也不做 checkpoint；父进程重开同一文件读回该条，干净关闭后 `-wal` 侧文件不存在——即「写入返回成功」等于「进程被杀后仍可读回」在 Node 侧已验证（安装版内未实机复现）
 
 ### 数据与架构
-- StorageRepository 统一抽象 + 三个驱动（InMemory / SQLite / Supabase-Postgres）：同一份契约 `packages/storage/test/repository-contract.ts` 逐驱动执行，作用域隔离、幂等 upsert、错误码（`not_found` / `conflict` / `storage_error`）、时间戳与 rowid tie-break 排序、关键词相关性、向量维度不混用在三者间语义一致
-- **SQLite 本地文件仓储**（`packages/storage/src/sqlite.ts` + `sqlite-schema.ts` + `sqlite-vectors.ts`）：Node 内置 `node:sqlite`（不需要随包携带原生模块）、WAL + `synchronous=FULL` + `busy_timeout` + `foreign_keys=ON`、`PRAGMA user_version` 分步迁移、FTS5 + CJK bigram 关键词索引（原始文本仍存实体表，可原样回显）、Float32 BLOB 精确余弦向量（登记 model / 维度 / 归一化 / 源文本 sha256 / builder 版本；查询宽度与存储宽度不一致的行绝不参与打分）、`integrity_check` + `foreign_key_check`、SQLite backup API 一致性快照；P3 在 `user_version=2` 给 `raw_sources` 加 `request_id`／`client_id` 两列、一条「键必须成对」的 CHECK 与 partial unique index（21 项契约测试 + 22 项 schema／落盘／中文检索／备份专项测试 + 11 项迁移测试）
-- 本地知识表 8 张 + 2 个本地检索结构（`vectors` / `keyword_index`）：raw_sources / knowledge_items / knowledge_nodes / knowledge_edges / item_node_links / version_records / conversations / conversation_messages；单用户本机工作区不设 `users` 表，但 `user_id` 列保留，使三个驱动共用同一套查询与契约
+- StorageRepository 统一抽象 + 两个驱动（InMemory / SQLite）：同一份契约 `packages/storage/test/repository-contract.ts` 逐驱动执行，作用域隔离、幂等 upsert、错误码（`not_found` / `conflict` / `storage_error`）、时间戳与 rowid tie-break 排序、关键词相关性、向量维度不混用在两者间语义一致
+- **SQLite 本地文件仓储**（`packages/storage/src/sqlite.ts` + `sqlite-schema.ts` + `sqlite-vectors.ts`）：Node 内置 `node:sqlite`（不需要随包携带原生模块）、WAL + `synchronous=FULL` + `busy_timeout` + `foreign_keys=ON`、`PRAGMA user_version` 分步迁移、FTS5 + CJK bigram 关键词索引（原始文本仍存实体表，可原样回显）、Float32 BLOB 精确余弦向量（登记 model / 维度 / 归一化 / 源文本 sha256 / builder 版本；查询宽度与存储宽度不一致的行绝不参与打分）、`integrity_check` + `foreign_key_check`、SQLite backup API 一致性快照；P3 在 `user_version=2` 给 `raw_sources` 加 `request_id`／`client_id` 两列、一条「键必须成对」的 CHECK 与 partial unique index（storage 包 118 项全绿：知识契约 41、research 契约 34、schema／枚举对齐 43；原 Postgres 迁移测试已随 P7 删除，其枚举对齐断言并入 `sqlite-schema.test.ts`）
+- 本地知识表 8 张 + 2 个本地检索结构（`vectors` / `keyword_index`）：raw_sources / knowledge_items / knowledge_nodes / knowledge_edges / item_node_links / version_records / conversations / conversation_messages；单用户本机工作区不设 `users` 表，但 `user_id` 列保留，使两个驱动共用同一套查询与契约
 - InMemory 驱动（20 项契约测试全绿）—— 仅用于测试与明确标注的临时演示，**不作为生产本地存储**
-- Supabase(Postgres) 仓储实现 + 迁移 SQL（`supabase/migrations/`，含 pgvector 向量列；storage 包实测 75 项通过 / 21 项跳过，跳过项全部是缺少 `NOLTRI_PG_TEST_URL` 时的 PG 集成用例，**不计通过**；P3 新增的幂等列／约束／partial unique index 迁移 `20261005000100_capture_idempotency.sql` 同样**通过静态审查，未在真实数据库执行**）
+- **P7（2026-10）移除 Supabase(Postgres) 驱动与 `supabase/migrations/`**：知识域的跨驱动行为断言由 SQLite 真库契约与枚举对齐测试承接后删除，`requiresServer` 等只服务于 PG 的测试选项一并移除；归档留在 `ad1d0c6`（`origin/feature/research-v1`），本地桌面构建不含任何托管存储，storage 包与锁文件已无 pg／@supabase 依赖
 - AI Provider Adapter 抽象 + `offline`（确定性）与 `openai`（BYOK，OpenAI 兼容 chat + embeddings）两个实现（48 项测试；**未发起真实模型调用**）
 - 结构变化版本记录与可逆基础（move/重命名均落 VersionRecord）
 - 架构门禁 `pnpm gate`：core 无 pg/supabase/openai/express 依赖、四入口共用同一 ApiClient、MCP 不碰数据库、**浏览器 Native Host 不引用存储／AI 层且只在 `host.ts` 一处经 `@noltri/api-client` 触达 Core（不允许手写 fetch）**
-- **`@noltri/shared` 领域视图模型层**（P2 UI 与业务拆分的落点）：树扁平化／展开折叠／键盘导航／子树计数、节点详情视图模型与移动目标选项、中文标签字典（归纳状态、来源类型、作用域、关系、匹配方式）、阈值与 env 解析；60 项测试。标签字典以「键集合必须等于 schema 枚举」的契约测试锁定，新增枚举值未翻译即测试失败，Web 与桌面共用同一份
+- **`@noltri/shared` 领域视图模型层**（P2 UI 与业务拆分的落点）：树扁平化／展开折叠／键盘导航／子树计数、节点详情视图模型与移动目标选项、中文标签字典（归纳状态、来源类型、作用域、关系、匹配方式）、阈值与 env 解析；107 项测试。标签字典以「键集合必须等于 schema 枚举」的契约测试锁定，新增枚举值未翻译即测试失败，工作台各视图共用同一份
 
-### Web App（28 项测试 + next build + 代理实测；P2 后仍可运行，尚未删除）
-- 登录（dev-token 策略已实测：401 信封、307→/login、写 cookie 后取得会话；**Supabase Auth 策略已实现但未连真实 Supabase 项目实测**）
-- 首屏知识树三栏布局（键盘导航、展开/折叠、拖拽移动目标选项；树视图 27 项测试已随视图模型迁入 `@noltri/shared`）
-- 节点详情：摘要 / 知识点数 / 来源数 / 关联节点 / 与 AI 讨论
-- 搜索（走 `/api/web/*` 代理 → core）
-- 节点 AI 对话界面（上下文携带截断至最近消息；offline 提供方回环验证，**未用真实模型**）
-- `/api/web/*` 代理层 28 项测试直连真实 Next 路由处理器 + 独立 fake core
-- P2 迁移后与桌面端的对等性由 `apps/desktop/test/workbench-render.test.tsx` 机器锁定：同一份 props 分别渲染 Web 与桌面的领域栏／知识树／节点详情，断言 `renderToStaticMarkup` 输出逐字节相同。该测试是迁移期脚手架，P7 删除 `apps/web` 时一并删除
+### Web App（P7 已删除）
+- `apps/web`（Next.js 16 三栏知识树 + `/api/web/*` 代理，28 项测试 + next build）与 Web 时代的 Supabase 装配（登录、cookie 会话、SSR）已随 P7 云依赖清理整体删除；归档留在 `ad1d0c6`（`origin/feature/research-v1`）。迁入桌面工作台的功能见上一节。
+- P2 的 Web↔桌面对等脚手架（`apps/desktop/test/workbench-render.test.tsx` 前半）随删除一并移除；该文件保留「V1 词汇」断言（树行文案、`role="treeitem"`、选中态类名），仍是桌面工作台渲染的回归证据。
 
-### Desktop Companion、Setup Manager 与知识工作台（137 项前端测试 + 23 项 Rust 测试；Companion/Setup GUI 未实机运行，工作台已用浏览器驱动 dist 产物实机回归）
+### Desktop Companion、Setup Manager 与知识工作台（183 项前端测试 + 23 项 Rust 测试；Companion/Setup GUI 未实机运行，工作台已用浏览器驱动 dist 产物实机回归）
 - Tauri 2 壳与原生能力层（29 个 `#[tauri::command]` 全部注册；TS 侧 `lib/tauri.ts` 调用其中 27 个，`get_selection_preview` 与 `runtime_info` 已注册但前端尚未调用；2 个事件名 `selection-changed`／`capture-result`，共 3 处 `emit`；`cargo check` 与 `cargo test`（23 项全通过）实测）
 - macOS Accessibility 权限状态检测与引导（状态展示 + 打开系统设置 + 「我已授权」重新检查）
 - Setup Manager Capture 状态区：观察者状态、捕获总开关、最小长度、测试选区捕获、按应用退出（opt-out chips）、不兼容应用列表与重试、最近收纳记录
@@ -128,13 +123,10 @@
 - 桌面打包与签名（dmg / notarization）
 - SQLite 本地库在安装版内的实机闭环：Tauri 启动、冷启动、异常退出后重启、磁盘不足／目录只读（当前只有 Node 侧文件库测试，异常退出已由 `SIGKILL` 用例覆盖 WAL 重放，但**未打包、未双击运行**，磁盘不足／只读目录未测）
 - `node:sqlite` 为实验性 API：打包时携带的 Node 版本、`ExperimentalWarning` 的处理与 `better-sqlite3` 替代路径**均未实测**
-- Supabase 真实项目接入：迁移执行、pgvector 相似检索、RLS 用户隔离实测（`NOLTRI_PG_TEST_URL` 就绪后 20 项集成测试自动启用）
-- Web Supabase Auth 策略对真实 Supabase 项目的登录实测
 - 真实模型调用（BYOK 网关）下的抽取/嵌入/对话质量验证
-- Supabase SQL 在真实库的执行（当前仅静态审查）
 - 知识工作台未进 WebView 截图：本轮以浏览器驱动 **dist 构建产物**（`vite preview`，非 `tauri dev`）完成 P2 实机回归，页面与 Tauri 加载的是同一份 bundle，但**窗口显示/隐藏、`close` 拦截、设置持久化等 Tauri 专有路径仍未实机运行**
 - 工作台「重试归纳」「移动节点（拖拽）」「写摘要」三条写路径本轮**只在契约与单元测试层验证**，实机回归未触发（实机场景已覆盖重复归档的 conflict 提示与重命名）
-- `apps/web` 尚未删除：P2 的验收口径是「桌面场景回归通过后」才删，删除动作排到 P7 云依赖清理，届时同步删除 `apps/desktop/test/workbench-render.test.tsx` 中的 Web 对等断言
+- `apps/web` 已随 P7 云依赖清理删除（归档 `ad1d0c6`）；`apps/desktop/test/workbench-render.test.tsx` 中的 Web 对等断言同步移除，保留「V1 词汇」断言
 - 桌面端错误文案仍为英文：`packages/api-client` 抛出的网络/服务端错误字符串直接进入工作台错误提示，与 `apps/web/lib/client-api.ts` 的 `describeError` 行为一致，因此**不构成对等性缺口**，但中文界面下会混现英文，属于已知体验缺口
 
 ### V1 收尾项
@@ -142,7 +134,7 @@
 - **P3 已交付（协议、幂等、降级队列、Native Host、身份门禁、安装器）；仍欠的一步是扩展的 `nativeMessaging` 权限与 host 路径接线**——它替用户向浏览器领新权限，必须用户点头后单独完成，随后才谈得上真实 Chrome 加载验收
 - **P4 已交付（stdio 握手、Agent 矩阵、备份／幂等／可撤销卸载、每客户端授权与 scope、写入验证探针、§435 隐私边界与三项授权选项）；仍欠的是 M05 打包路径与在真实 Agent 客户端／真实应用窗口里的点验**（见上两条）
 - **P5／P6 已交付（Research 整合与偏移检查）**：schema、双驱动 storage、39 方法门面、**38 条端点**、api-client 38 个类型化调用、桌面九视图、demo 种子与 R08 往返；六类偏移检查（确定性、不调模型）、研究地图与上下文包落地 —— R01／R02／R03／R06／R08 之外，R04／R05／R07 补齐。仍欠：研究端点对 Agent 客户端的授权面按设计关闭 —— 开启前必须先让 §435 的片段上限覆盖研究文本（契约 §4）
-- P7 云依赖清理：删除 Web／Supabase／Remote Bridge 的启动入口、env 示例、脚本与 CI 配置；`packages/storage/test/*supabase*` 的行为断言已由 SQLite 契约覆盖，**删除动作仍需按「替代已存在＋回归通过＋引用已清理」三项证据执行**
+- **P7 已交付（云依赖清理）**：`apps/web`、Supabase 驱动与迁移 SQL、云 env、workspace／锁文件引用全部删除；审计线索词只剩允许清单（归档引用／拒绝样例／历史文档）；干净 clone 安装／测试／构建桌面包通过（68 文件 / 1110 项，0 skip）。报告：`docs/Noltri_V1_P7_Delivery_Report.html`
 - P8 安装包、签名／notarization 与最终实机验收
 
 ### V2（已确认，未开始）

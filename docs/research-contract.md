@@ -127,13 +127,13 @@ zod 的 issues，而不是一次注定被 Core 拒掉的往返；`userId`／`pro
 靠 WAL 让第二个句柄在第一个写的时候仍可读。这是设计，不是意外，所以 **`close()` 必须关两次**；
 Core 自己只监听 `127.0.0.1`，这两个句柄都不对外。
 
-- research 只有 `memory` 与 `sqlite` 两个驱动；`supabase` 会抛错（归档的 `research-supabase.ts` 与它的
-  两个 migration 留在 `ad1d0c6`，没有带进本地桌面构建）。
+- research 只有 `memory` 与 `sqlite` 两个驱动（`StorageDriverName` 里已无 `supabase`；归档的
+  `research-supabase.ts` 与它的两个 migration 留在 `ad1d0c6`，没有带进本地桌面构建）。
 - **选驱动的只有一处**：`packages/storage`。架构门禁禁止 core `src/` 出现
-  `driver === 'memory' | 'supabase'` 这类字面量比较。宿主问的是
+  `driver === 'memory' | 'sqlite'` 这类字面量比较。宿主问的是
   `supportsResearchDriver(driver)`，而不是自己比对驱动名 —— 这样「哪些驱动支持 research」只写在实现它们的那个文件里。
 - `buildHandler` 在驱动不支持时把 `research` 置为 `null` 并记 `'not wired'`，而不是让 bundle 构造失败
-  （`apps/web` 的 supabase 装配在 P7 之前仍然要能起来）。
+  （这条容忍在 Web 时代的 `apps/web` supabase 装配上起过作用；该应用已在 P7 删除）。
 - `KnowledgeCoreOptions.research` 是**可选**的：只嵌知识域的宿主（MCP bundle、测试 harness）
   不必为了构造 Core 而开第二个它永远用不到的数据库句柄。请求打到未装配的 Core 时返回
   `internal_error` + `reason: 'research_not_wired'`。

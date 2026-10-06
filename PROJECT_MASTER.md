@@ -59,7 +59,7 @@ App 打开后，用户应立即确认“这个软件的主体就是我的知识�
 
 ### 2.3 Knowledge Core 是唯一知识逻辑源
 
-浏览器插件、桌面选区捕获、Web App、MCP、Skill 均不得各自实现一套分类、去重、合并或知识树逻辑。
+浏览器插件、桌面选区捕获、桌面工作台、MCP、Skill 均不得各自实现一套分类、去重、合并或知识树逻辑。
 
 所有入口统一调用 Knowledge Core。
 
@@ -399,19 +399,14 @@ EdgeRepository
 VersionRepository
 ```
 
-V1 实现：
+V1 实现（2026-10 本地桌面化后）：
 
 ```text
-SupabaseRepository
-```
-
-未来增加：
-
-```text
-LocalPostgresRepository
-或
 SQLiteRepository
+InMemoryRepository（仅测试）
 ```
+
+SupabaseRepository 已随 P7 云依赖清理删除，归档留在 `ad1d0c6`（`origin/feature/research-v1`）。
 
 ### 7.3 后续 Local-first
 
@@ -454,12 +449,6 @@ SQLiteRepository
 - pnpm
 - Turborepo
 
-### Web App
-
-- Next.js
-- React
-- TypeScript
-
 ### Browser Extension
 
 - TypeScript
@@ -480,18 +469,17 @@ SQLiteRepository
 - 独立 domain / service 层
 - 可作为 API 服务调用，也可未来嵌入 Desktop Local Core
 
-### Cloud Runtime
+### Runtime（2026-10 本地桌面化后）
 
-V1 默认：
+- 无托管平台：Knowledge Core 以独立进程跑在 `127.0.0.1`，随桌面 App 分发
+- 存储与身份均在本机：SQLite 文件库 ＋ 操作系统单用户；不引入云 Auth／云数据库
 
-- Web / API / Remote MCP：Vercel
-- Database / Auth / Storage：Supabase
+（Web 时代的 Cloud Runtime——Vercel ＋ Supabase——已随 P7 云依赖清理删除，归档 `ad1d0c6`。）
 
 ### Database
 
-- PostgreSQL
-- pgvector
-- 不在 V1 引入 Neo4j
+- SQLite（`node:sqlite` 本机文件库）：FTS5 关键词索引 ＋ Float32 BLOB 精确余弦向量
+- 不引入 PostgreSQL／pgvector／Neo4j（pgvector 仅存在于归档提交）
 
 ### AI Layer
 
