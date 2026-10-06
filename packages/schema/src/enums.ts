@@ -79,7 +79,7 @@ export type SearchMode = z.infer<typeof searchModeSchema>;
 
 /**
  * Forward-compatible fields: V1 only stores them, the UI appears in V3. The labels are the single
- * source of truth for the matching Postgres CHECK constraints (see supabase/migrations).
+ * source of truth for the matching CHECK constraints in `packages/storage/src/sqlite-schema.ts`.
  */
 export const masteryLevelSchema = z.enum([
   'collected',

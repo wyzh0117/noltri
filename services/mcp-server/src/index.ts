@@ -96,7 +96,7 @@ function healthBody(config: McpHttpConfig): Record<string, unknown> {
 
 /**
  * V1 serves MCP over stateless Streamable HTTP: a fresh Server + transport per POST /mcp request,
- * so no mcp-session-id and no SSE GET stream are needed, which keeps remote deploy (Vercel) simple.
+ * so no mcp-session-id and no SSE GET stream are needed — one POST carries a whole request.
  */
 async function handleMcpPost(
   req: IncomingMessage,

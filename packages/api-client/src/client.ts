@@ -270,7 +270,7 @@ function validatedRequest<Output>(schema: z.ZodType<Output>, request: unknown, l
 
 export interface ApiClientOptions {
   baseUrl: string;
-  /** Bearer token: Supabase JWT in the web app, device token for extension/desktop. */
+  /** Bearer token: a 本地客户端授权 credential, or the dev token. */
   token?: string;
   /**
    * Which entry point is calling. The core writes it onto version records for provenance; it is a
