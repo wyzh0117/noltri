@@ -13,11 +13,9 @@
  * 复核标记 write the knowledge side calls when a node it owns is archived. They reach across projects
  * because a 出处 may be cited by more than one 研究项目, and they never re-bind a pointer.
  *
- * The archived façade also carried `runDriftCheck`, `listDriftFindings`, `updateDriftFinding`,
- * `buildMap` and `buildContextPack`. They are deliberately absent here: 六类偏移检查、研究地图与上下文包
- * is phase P6 of the local-desktop plan, and shipping the storage rows for a finding is not the same as
- * shipping the rule that produces one. `research_projects` … `research_timeline_events` all persist
- * today, including the drift-finding table, so P6 extends this file rather than reshaping it.
+ * P6 (R04/R05/R07) 接上归档 façade 的五个方法：`runDriftCheck` 先跑 `drift.ts` 的纯规则、再按
+ * `(driftType, sourceEntityId, targetEntityId)` 对既有 open finding 去重后落库；`buildMap` /
+ * `buildContextPack` 分别交给 `map.ts` / `context-pack.ts` 的纯装配，`generatedAt` 由这一层盖戳。
  */
 import type {
   ApproveCharterRequest,
@@ -38,11 +36,16 @@ import type {
   CreateSectionRequest,
   CreateTimelineEventRequest,
   DeleteRelationResponse,
+  DriftCheckRequest,
+  DriftCheckResponse,
+  DriftFinding,
+  DriftFindingListQuery,
   EntityRelation,
   Evidence,
   EvidenceListQuery,
   ManuscriptSection,
   PatchClaimRequest,
+  PatchDriftFindingRequest,
   PatchEvidenceRequest,
   PatchResearchProjectRequest,
   PatchResearchQuestionRequest,
@@ -50,7 +53,9 @@ import type {
   RelationListQuery,
   ResearchChange,
   ResearchCharter,
+  ResearchContextPackResponse,
   ResearchDecision,
+  ResearchMapResponse,
   ResearchProject,
   ResearchQuestion,
   ResearchReferenceMatch,
@@ -59,17 +64,23 @@ import type {
   ReviewMarkListQuery,
   TimelineEvent,
 } from '@noltri/schema';
+import { driftCheckRequestSchema } from '@noltri/schema';
+import { knowledgeError, nowIso } from '@noltri/shared';
 import type { ResearchRepository } from '@noltri/storage';
 import * as baselines from './baselines';
 import * as changes from './changes';
-import * as references from './references';
 import * as claims from './claims';
+import { buildContextPack } from './context-pack';
 import * as decisions from './decisions';
+import { driftFindingKey, runDriftChecks } from './drift';
 import * as evidence from './evidence';
+import { buildResearchMap } from './map';
 import * as projects from './projects';
 import * as questions from './questions';
+import * as references from './references';
 import * as relations from './relations';
 import * as sections from './sections';
+import { requireProject, validateRequest } from './support';
 import * as timeline from './timeline';
 
 export interface ResearchDomain {
@@ -107,6 +118,11 @@ export interface ResearchDomain {
   listChanges(projectId: string, userId: string, query: ChangeListQuery): Promise<ResearchChange[]>;
   listTimeline(projectId: string, userId: string): Promise<TimelineEvent[]>;
   createMilestone(projectId: string, userId: string, body: CreateTimelineEventRequest): Promise<TimelineEvent>;
+  runDriftCheck(projectId: string, userId: string, body: DriftCheckRequest): Promise<DriftCheckResponse>;
+  listDriftFindings(projectId: string, userId: string, query: DriftFindingListQuery): Promise<DriftFinding[]>;
+  updateDriftFinding(findingId: string, userId: string, body: PatchDriftFindingRequest): Promise<DriftFinding>;
+  buildMap(projectId: string, userId: string): Promise<ResearchMapResponse>;
+  buildContextPack(projectId: string, userId: string): Promise<ResearchContextPackResponse>;
 }
 
 export function createResearchDomain(repo: ResearchRepository): ResearchDomain {
@@ -164,5 +180,158 @@ export function createResearchDomain(repo: ResearchRepository): ResearchDomain {
     // --- timeline ---
     listTimeline: (projectId, userId) => timeline.listTimeline(repo, projectId, userId),
     createMilestone: (projectId, userId, body) => timeline.createMilestone(repo, projectId, userId, body),
+
+    // --- drift (P6: R04/R05 六类偏移检查与人工处理) ---
+    runDriftCheck: (projectId, userId, body) => runDriftCheck(repo, projectId, userId, body),
+    listDriftFindings: (projectId, userId, query) => listDriftFindings(repo, projectId, userId, query),
+    updateDriftFinding: (findingId, userId, body) => updateDriftFinding(repo, findingId, userId, body),
+
+    // --- aggregates (P6: R07 研究地图与上下文包) ---
+    buildMap: (projectId, userId) => buildMap(repo, projectId, userId),
+    buildContextPack: (projectId, userId) => buildContextPackOf(repo, projectId, userId),
   };
+}
+
+/**
+ * Drift persistence wrapper (contract §5): run the pure rules over a fresh snapshot, skip drafts
+ * whose `(driftType, sourceEntityId, targetEntityId)` already has an `open` finding, persist the
+ * rest, and return everything (existing open findings included) with a summary of what is returned.
+ */
+async function runDriftCheck(
+  repo: ResearchRepository,
+  projectId: string,
+  userId: string,
+  body: DriftCheckRequest,
+): Promise<DriftCheckResponse> {
+  await requireProject(repo, projectId, userId);
+  const request = validateRequest(driftCheckRequestSchema, body ?? {}, 'drift check');
+
+  const [charter, questionsSnapshot, evidenceSnapshot, claimsSnapshot, relationsSnapshot, changesSnapshot, existingOpen] =
+    await Promise.all([
+      repo.findCharter(projectId, userId),
+      repo.listResearchQuestions(projectId, userId),
+      repo.listEvidence(projectId, userId),
+      repo.listClaims(projectId, userId),
+      repo.listEntityRelations(projectId, userId),
+      repo.listResearchChanges(projectId, userId),
+      repo.listDriftFindings(projectId, userId, { status: 'open' }),
+    ]);
+
+  const drafts = runDriftChecks({
+    charter,
+    questions: questionsSnapshot,
+    evidence: evidenceSnapshot,
+    claims: claimsSnapshot,
+    relations: relationsSnapshot,
+    changes: changesSnapshot,
+    manuscriptText: request.manuscriptText,
+  });
+
+  const openKeys = new Set(existingOpen.map((finding) => driftFindingKey(finding)));
+  const created: DriftFinding[] = [];
+  for (const draft of drafts) {
+    if (openKeys.has(driftFindingKey(draft))) continue; // already open: merged into the result as-is
+    const finding = await repo.createDriftFinding({
+      userId,
+      projectId,
+      driftType: draft.driftType,
+      severity: draft.severity,
+      description: draft.description,
+      sourceEntityType: draft.sourceEntityType,
+      sourceEntityId: draft.sourceEntityId,
+      targetEntityType: draft.targetEntityType,
+      targetEntityId: draft.targetEntityId,
+      reason: draft.reason,
+      recommendedAction: draft.recommendedAction,
+    });
+    created.push(finding);
+  }
+
+  const findings = [...existingOpen, ...created];
+  const summary = {
+    total: findings.length,
+    info: findings.filter((finding) => finding.severity === 'info').length,
+    warning: findings.filter((finding) => finding.severity === 'warning').length,
+    critical: findings.filter((finding) => finding.severity === 'critical').length,
+  };
+  return { findings, summary };
+}
+
+async function listDriftFindings(
+  repo: ResearchRepository,
+  projectId: string,
+  userId: string,
+  query: DriftFindingListQuery,
+): Promise<DriftFinding[]> {
+  await requireProject(repo, projectId, userId);
+  return repo.listDriftFindings(projectId, userId, query);
+}
+
+async function updateDriftFinding(
+  repo: ResearchRepository,
+  findingId: string,
+  userId: string,
+  body: PatchDriftFindingRequest,
+): Promise<DriftFinding> {
+  const existing = await repo.findDriftFinding(findingId, userId);
+  if (existing === null) {
+    throw knowledgeError('not_found', 'drift finding 不存在或无权访问 / drift finding not found');
+  }
+  return repo.updateDriftFindingStatus(findingId, userId, body.status);
+}
+
+async function buildMap(
+  repo: ResearchRepository,
+  projectId: string,
+  userId: string,
+): Promise<ResearchMapResponse> {
+  const project = await requireProject(repo, projectId, userId);
+  const [charter, questionRows, evidenceRows, claimRows, sectionRows, relationRows] = await Promise.all([
+    repo.findCharter(projectId, userId),
+    repo.listResearchQuestions(projectId, userId),
+    repo.listEvidence(projectId, userId),
+    repo.listClaims(projectId, userId),
+    repo.listManuscriptSections(projectId, userId),
+    repo.listEntityRelations(projectId, userId),
+  ]);
+  return buildResearchMap({
+    project,
+    charter,
+    questions: questionRows,
+    evidence: evidenceRows,
+    claims: claimRows,
+    sections: sectionRows,
+    relations: relationRows,
+  });
+}
+
+async function buildContextPackOf(
+  repo: ResearchRepository,
+  projectId: string,
+  userId: string,
+): Promise<ResearchContextPackResponse> {
+  const project = await requireProject(repo, projectId, userId);
+  const [charter, questionRows, claimRows, evidenceRows, relationRows, decisionRows, changeRows, openFindings] =
+    await Promise.all([
+      repo.findCharter(projectId, userId),
+      repo.listResearchQuestions(projectId, userId),
+      repo.listClaims(projectId, userId),
+      repo.listEvidence(projectId, userId),
+      repo.listEntityRelations(projectId, userId),
+      repo.listResearchDecisions(projectId, userId),
+      repo.listResearchChanges(projectId, userId),
+      repo.listDriftFindings(projectId, userId, { status: 'open' }),
+    ]);
+  const { blocks, markdown } = buildContextPack({
+    project,
+    charter,
+    questions: questionRows,
+    claims: claimRows,
+    evidence: evidenceRows,
+    relations: relationRows,
+    decisions: decisionRows,
+    changes: changeRows,
+    openFindings,
+  });
+  return { markdown, blocks, generatedAt: nowIso() };
 }

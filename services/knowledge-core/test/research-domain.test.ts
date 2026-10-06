@@ -3,8 +3,9 @@
  *
  * Covers what P5 promises: identity and ownership (`not_found`, never a leak), payload rules
  * (`invalid_request`), per-project isolation on every list, the append-only Decision/Change → timeline
- * coupling, and relation validation plus idempotency. Drift rules, the map and the context pack are P6,
- * so the façade has no such method to test yet.
+ * coupling, and relation validation plus idempotency. P6's façade additions live beside this file:
+ * drift rules and their persistence wrapper in `research-drift.test.ts`, the map and the context pack
+ * in `research-map-context.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
 import type {

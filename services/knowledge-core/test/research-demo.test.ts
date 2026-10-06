@@ -7,8 +7,9 @@
  *  2. the demo seed's shape, and the honesty of the fixture (marked as test data, gaps left in on purpose);
  *  3. the same chain over the real router with the frozen response schemas.
  *
- * Map, drift checks and the context pack are not asserted here: they are P6, and this branch's façade does
- * not have those methods yet.
+ * Map, drift checks and the context pack ride on the same seed in the last case: the gaps the seed
+ * leaves in on purpose are exactly what the P6 rules report (C-03 无证据 → evidence_drift、
+ * C-05 强因果 → causality_drift、journal 变更晚于章程 → journal_drift)。
  */
 import { describe, expect, it } from 'vitest';
 import { createOfflineProvider } from '@noltri/ai-provider';
@@ -180,6 +181,46 @@ describe('Noltri Research Demo seed', () => {
     );
     expect(targets.has('$C3')).toBe(false);
     expect(data.claims[4]?.boundary).toBeUndefined();
+  });
+
+  it('reports the seeded gaps as drift findings, and the map / pack read the same seed (P6)', async () => {
+    const domain = domainOf();
+    const seed = await seedResearchDemo(domain, 'user-demo-drift');
+    const run = await domain.runDriftCheck(seed.project.id, 'user-demo-drift', {});
+
+    const byType = new Map(run.findings.map((finding) => [finding.driftType, finding]));
+    expect([...byType.keys()].sort()).toEqual(['causality_drift', 'evidence_drift', 'journal_drift']);
+
+    const evidenceGap = byType.get('evidence_drift');
+    expect(evidenceGap?.severity).toBe('warning');
+    expect(evidenceGap?.sourceEntityId).toBe(seed.claims[2]?.id); // C-03
+
+    const causalGap = byType.get('causality_drift');
+    expect(causalGap?.severity).toBe('critical');
+    expect(causalGap?.sourceEntityId).toBe(seed.claims[4]?.id); // C-05
+    expect(causalGap?.recommendedAction).toContain('弱化'); // 或限定 boundary
+
+    const journalGap = byType.get('journal_drift');
+    expect(journalGap?.severity).toBe('warning');
+    expect(journalGap?.sourceEntityId).toBe(seed.changes[1]?.id);
+
+    expect(run.summary).toEqual({ total: 3, info: 0, warning: 2, critical: 1 });
+
+    // A rerun merges into the same open findings instead of duplicating them.
+    const rerun = await domain.runDriftCheck(seed.project.id, 'user-demo-drift', {});
+    expect(rerun.findings.map((finding) => finding.id).sort()).toEqual(
+      run.findings.map((finding) => finding.id).sort(),
+    );
+
+    const map = await domain.buildMap(seed.project.id, 'user-demo-drift');
+    expect(map.unsupportedClaimIds).toEqual([seed.claims[2]?.id]);
+
+    const pack = await domain.buildContextPack(seed.project.id, 'user-demo-drift');
+    expect(pack.blocks).toHaveLength(12);
+    expect(pack.blocks[0]?.heading).toBe('PROJECT');
+    expect(pack.blocks[11]?.body).toContain('C-03');
+    const warnings = pack.blocks[11]?.body ?? '';
+    expect(warnings).toContain('C-05');
   });
 });
 

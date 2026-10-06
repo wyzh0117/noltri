@@ -17,7 +17,12 @@ import {
   charterVersionListResponseSchema,
   charterVersionSchema,
   claimSchema,
+  driftCheckResponseSchema,
+  driftFindingListResponseSchema,
+  driftFindingSchema,
   evidenceSchema,
+  researchContextPackResponseSchema,
+  researchMapResponseSchema,
   researchProjectListResponseSchema,
   researchProjectSchema,
   researchQuestionListResponseSchema,
@@ -431,5 +436,98 @@ describe('the research reference route', () => {
     // `?nodeId=` arrives as an empty string, which is 「没指名道」 rather than a search for ''.
     const blank = await call(handle, 'GET', '/api/research/references?nodeId=');
     expect(apiErrorSchema.parse(await jsonOf(blank)).error.code).toBe('invalid_request');
+  });
+});
+
+describe('the drift, map and context-pack routes (P6)', () => {
+  it('runs the deterministic drift check and de-duplicates on reruns', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle, '碳定价研究');
+    const claim = claimSchema.parse(
+      await jsonOf(
+        await call(handle, 'POST', `/api/research/projects/${projectId}/claims`, {
+          claimCode: 'C1',
+          claimText: '观察到排放下降。',
+          claimType: 'empirical',
+          status: 'confirmed',
+        }),
+      ),
+    );
+
+    const first = driftCheckResponseSchema.parse(
+      await jsonOf(await call(handle, 'POST', `/api/research/projects/${projectId}/drift-check`, {})),
+    );
+    expect(first.summary).toEqual({ total: 1, info: 0, warning: 0, critical: 1 });
+    expect(first.findings[0]).toMatchObject({
+      driftType: 'evidence_drift',
+      sourceEntityType: 'claim',
+      sourceEntityId: claim.id,
+      status: 'open',
+    });
+
+    const second = driftCheckResponseSchema.parse(
+      await jsonOf(await call(handle, 'POST', `/api/research/projects/${projectId}/drift-check`, {})),
+    );
+    expect(second.findings.map((finding) => finding.id)).toEqual(first.findings.map((finding) => finding.id));
+  });
+
+  it('lists findings with filters and flips a finding status over PATCH', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle);
+    await call(handle, 'POST', `/api/research/projects/${projectId}/claims`, {
+      claimCode: 'C1',
+      claimText: '观察到排放下降。',
+      claimType: 'empirical',
+    });
+    const run = driftCheckResponseSchema.parse(
+      await jsonOf(await call(handle, 'POST', `/api/research/projects/${projectId}/drift-check`, {})),
+    );
+    const findingId = run.findings[0]!.id;
+    expect(run.findings[0]?.severity).toBe('warning');
+
+    const open = driftFindingListResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/drift-findings?status=open`)),
+    );
+    expect(open.findings.map((finding) => finding.id)).toEqual([findingId]);
+    const critical = driftFindingListResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/drift-findings?severity=critical`)),
+    );
+    expect(critical.findings).toEqual([]);
+
+    const patched = driftFindingSchema.parse(
+      await jsonOf(await call(handle, 'PATCH', `/api/research/drift-findings/${findingId}`, { status: 'acknowledged' })),
+    );
+    expect(patched.status).toBe('acknowledged');
+  });
+
+  it('answers map and context-pack with their contract shapes', async () => {
+    const handle = handlerOf();
+    const projectId = await newProject(handle, '碳定价研究');
+    await call(handle, 'PUT', `/api/research/projects/${projectId}/charter`, {
+      workingTitle: 'W',
+      coreContribution: 'C',
+    });
+
+    const map = researchMapResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/map`)),
+    );
+    expect(map.project).toEqual({ id: projectId, name: '碳定价研究', status: 'active' });
+    expect(map.charter.coreContribution).toBe('C');
+
+    const pack = researchContextPackResponseSchema.parse(
+      await jsonOf(await call(handle, 'GET', `/api/research/projects/${projectId}/context-pack`)),
+    );
+    expect(pack.blocks[0]).toEqual({ heading: 'PROJECT', body: '碳定价研究' });
+    expect(pack.markdown).toContain('## PROJECT');
+    expect(Date.parse(pack.generatedAt)).not.toBeNaN();
+  });
+
+  it('answers not_found for an unknown project and an unknown finding', async () => {
+    const handle = handlerOf();
+    const missingMap = await call(handle, 'GET', '/api/research/projects/nope/map');
+    expect(missingMap.status).toBe(404);
+    const missingPatch = await call(handle, 'PATCH', '/api/research/drift-findings/nope', { status: 'open' });
+    expect(missingPatch.status).toBe(404);
+    expect(apiErrorSchema.parse(await jsonOf(missingPatch)).error.code).toBe('not_found');
   });
 });

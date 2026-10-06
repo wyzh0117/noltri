@@ -112,6 +112,12 @@ const ROUTES: Route[] = [
   { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'changes'] },
   { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'timeline'] },
   { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'timeline'] },
+  // P6: 六类偏移检查与人工处理（R04/R05）+ 研究地图 / 上下文包（R07）。全部沿用单 `:`-段形状。
+  { method: 'POST', segments: ['api', 'research', 'projects', ':projectId', 'drift-check'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'drift-findings'] },
+  { method: 'PATCH', segments: ['api', 'research', 'drift-findings', ':findingId'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'map'] },
+  { method: 'GET', segments: ['api', 'research', 'projects', ':projectId', 'context-pack'] },
 ];
 
 function matchesShape(route: readonly string[], actual: readonly string[]): boolean {

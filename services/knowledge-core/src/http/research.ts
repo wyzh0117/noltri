@@ -1,5 +1,6 @@
 /**
- * `/api/research/*` — the 33 REST endpoints of the Research chain (research contract §1).
+ * `/api/research/*` — the 38 REST endpoints of the Research chain (research contract §1; P5 的 33 +
+ * P6 的 drift-check / drift-findings / drift-findings PATCH / map / context-pack)。
  *
  * They live here instead of inside `router.ts` for the same reason 连接中心 does: the router owns
  * identity, scope, CORS and the error envelope, and a handler module owns one API surface's payload
@@ -33,8 +34,11 @@ import {
   createResearchQuestionRequestSchema,
   createSectionRequestSchema,
   createTimelineEventRequestSchema,
+  driftCheckRequestSchema,
+  driftFindingListQuerySchema,
   evidenceListQuerySchema,
   patchClaimRequestSchema,
+  patchDriftFindingRequestSchema,
   patchEvidenceRequestSchema,
   patchResearchProjectRequestSchema,
   patchResearchQuestionRequestSchema,
@@ -185,6 +189,26 @@ export async function handleResearch(args: ResearchArgs): Promise<unknown> {
       if (args.method === 'GET') return { events: await domain.listTimeline(args.id, userId) };
       const body = await readBody(createTimelineEventRequestSchema, 'create timeline event');
       return domain.createMilestone(args.id, userId, body);
+    }
+    // P6 (R04/R05): 六类偏移检查是确定性规则，无模型调用；findings 的读写照常走领域层守卫。
+    case 'api/research/projects/:projectId/drift-check': {
+      const body = await readBody(driftCheckRequestSchema, 'drift check');
+      return domain.runDriftCheck(args.id, userId, body);
+    }
+    case 'api/research/projects/:projectId/drift-findings': {
+      const query = readQuery(driftFindingListQuerySchema, 'drift finding query');
+      return { findings: await domain.listDriftFindings(args.id, userId, query) };
+    }
+    case 'api/research/drift-findings/:findingId': {
+      const body = await readBody(patchDriftFindingRequestSchema, 'patch drift finding');
+      return domain.updateDriftFinding(args.id, userId, body);
+    }
+    // P6 (R07): 服务端只做纯装配，布局归 UI。
+    case 'api/research/projects/:projectId/map': {
+      return domain.buildMap(args.id, userId);
+    }
+    case 'api/research/projects/:projectId/context-pack': {
+      return domain.buildContextPack(args.id, userId);
     }
     default:
       throw knowledgeError('not_found', `未知的研究端点 ${args.path} / unknown research endpoint`);

@@ -7,9 +7,10 @@
  * object it came from) without sleeping or mocking timers — and the real drivers' contract tests keep
  * testing the real SQL.
  *
- * The drift-finding and stats methods here are not P5 behaviour: they are part of the `ResearchRepository`
- * interface, so an honest fake implements them. Nothing in P5 produces a finding, and the plain entity
- * fixtures the pure drift rules will need arrive with those rules in P6.
+ * The drift-finding and stats methods here are not extra behaviour: they are part of the
+ * `ResearchRepository` interface, so an honest fake implements them. P6 persists findings for real,
+ * and the pure drift / map / context-pack builders work over the plain entity fixtures at the bottom
+ * of this file — no repository involved.
  */
 import type {
   CharterFields,
@@ -667,4 +668,117 @@ function pickDefined<T extends object>(patch: T): Partial<T> {
     if (value !== undefined) out[key] = value;
   }
   return out;
+}
+
+// --- plain fixtures for the pure drift / map / context-pack builders (P6) ----
+
+export function charterFixture(overrides: Partial<ResearchCharter> = {}): ResearchCharter {
+  return {
+    id: 'charter-1',
+    projectId: 'project-1',
+    userId: 'user-1',
+    workingTitle: '工作标题 / Working title',
+    researchTopic: null,
+    researchProblem: null,
+    researchGap: null,
+    researchQuestionsText: null,
+    coreContribution: null,
+    theoreticalLens: null,
+    researchContext: null,
+    unitOfAnalysis: null,
+    researchMethod: null,
+    targetArticleType: null,
+    targetJournal: null,
+    researchBoundary: null,
+    claimBoundary: null,
+    currentStage: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function questionFixture(overrides: Partial<ResearchQuestion> = {}): ResearchQuestion {
+  return {
+    id: 'question-1',
+    projectId: 'project-1',
+    userId: 'user-1',
+    questionCode: 'RQ1',
+    questionText: '研究问题一 / first research question',
+    status: 'open',
+    rationale: null,
+    relatedMethod: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function evidenceFixture(overrides: Partial<Evidence> = {}): Evidence {
+  return {
+    id: 'evidence-1',
+    projectId: 'project-1',
+    userId: 'user-1',
+    type: 'literature',
+    title: '证据标题 / evidence title',
+    description: null,
+    sourceReference: null,
+    sourceLocation: null,
+    rawSourceId: null,
+    nodeId: null,
+    locationOrigin: null,
+    reliabilityNote: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function claimFixture(overrides: Partial<Claim> = {}): Claim {
+  return {
+    id: 'claim-1',
+    projectId: 'project-1',
+    userId: 'user-1',
+    claimCode: 'C1',
+    claimText: '主张文本 / claim text',
+    claimType: 'empirical',
+    status: 'proposed',
+    confidence: 0.6,
+    boundary: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function relationFixture(overrides: Partial<EntityRelation> = {}): EntityRelation {
+  return {
+    id: 'relation-1',
+    projectId: 'project-1',
+    userId: 'user-1',
+    sourceType: 'evidence',
+    sourceId: 'evidence-1',
+    relationType: 'supports',
+    targetType: 'claim',
+    targetId: 'claim-1',
+    note: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function changeFixture(overrides: Partial<ResearchChange> = {}): ResearchChange {
+  return {
+    id: 'change-1',
+    projectId: 'project-1',
+    userId: 'user-1',
+    changeType: 'method',
+    before: '访谈 / interviews',
+    after: '问卷 / survey',
+    reason: null,
+    impact: null,
+    relatedEntities: {},
+    createdAt: '2026-01-03T00:00:00.000Z',
+    ...overrides,
+  };
 }
