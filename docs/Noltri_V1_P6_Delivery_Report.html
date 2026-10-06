@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知序 Noltri · 本轮开发交付报告（P6 偏移检查与研究地图）</title>
+<style>
+  :root{--bg:#f6f6f4;--panel:#fff;--ink:#1c1d1f;--muted:#5f6469;--line:#dcdcd6;
+    --accent:#2f5d50;--accent-soft:#e4efe9;--warn:#8a5a11;--warn-soft:#fbf1dd;
+    --bad:#8f2f2f;--bad-soft:#fbe9e9;--ok:#1f6b45;--ok-soft:#e2f0e8;--code:#f1f1ec;}
+  html[data-theme="dark"]{--bg:#14161a;--panel:#1b1e23;--ink:#e6e8ea;--muted:#9aa1a9;--line:#2c3138;
+    --accent:#8fc0ad;--accent-soft:#1f2a26;--warn:#e0b070;--warn-soft:#2a2418;
+    --bad:#f0a0a0;--bad-soft:#2a1c1c;--ok:#8fd0ac;--ok-soft:#1a2620;--code:#22262c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 96px}
+  header.top{padding:44px 0 20px;border-bottom:1px solid var(--line)}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  h1{font-size:31px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+  h2{font-size:22px;margin:44px 0 12px;padding-top:18px;border-top:1px solid var(--line);scroll-margin-top:64px}
+  h3{font-size:16.5px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .sub{color:var(--muted);font-size:14.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:16px;font-size:13.5px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+  .chip{font-size:12.5px;padding:3px 11px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--line)}
+  .grid{display:grid;gap:14px}.grid.c3{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .grid.c4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .n{font-size:24px;font-weight:650;letter-spacing:-.02em}
+  .card .l{font-size:13px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.2px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--accent-soft);font-weight:600;font-size:13.5px}
+  tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel) 92%,var(--bg))}
+  .tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:6px;white-space:nowrap;border:1px solid var(--line)}
+  .t-ok{background:var(--ok-soft);color:var(--ok)}
+  .t-part{background:var(--warn-soft);color:var(--warn)}
+  .t-no{background:var(--bad-soft);color:var(--bad)}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;
+    padding:38px 14px 12px;overflow:auto;font-size:12.8px;line-height:1.62;margin:12px 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  p code,li code,td code{background:var(--code);padding:1.5px 5px;border-radius:5px;font-size:13px;border:1px solid var(--line)}
+  .copy{position:absolute;top:8px;right:8px;font-size:11.5px;padding:3px 9px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .copy:hover{color:var(--ink);border-color:var(--accent)}
+  ul,ol{padding-left:22px;margin:10px 0}li{margin:5px 0}
+  nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:9px 0}
+  nav ol{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;padding-left:0;list-style:none;font-size:13px}
+  nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--accent);text-decoration:underline}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .warnbox{border-left:3px solid var(--warn);background:var(--warn-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .badbox{border-left:3px solid var(--bad);background:var(--bad-soft);padding:10px 14px;border-radius:0 10px 10px 0;font-size:14.5px}
+  .themer{font-size:12.5px;padding:4px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+  .themer:hover{color:var(--ink)}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  details{margin:10px 0}summary{cursor:pointer;font-size:14px;color:var(--accent);font-weight:600}
+  .muted{color:var(--muted)}
+  .phase{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+  .ph{font-size:12.5px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted)}
+  .ph.done{background:var(--ok-soft);color:var(--ok);border-color:var(--ok)}
+  .ph.now{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);font-weight:650}
+</style>
+</head>
+<body>
+<nav><div class="wrap bar" style="padding-bottom:0">
+  <ol>
+    <li><a href="#summary">结论</a></li>
+    <li><a href="#done">已完成工作总结</a></li>
+    <li><a href="#scope">范围与验收口径</a></li>
+    <li><a href="#commits">提交清单</a></li>
+    <li><a href="#gate">门禁与用例</a></li>
+    <li><a href="#drift">六类偏移规则</a></li>
+    <li><a href="#map">地图与上下文包</a></li>
+    <li><a href="#workbench">客户端与桌面</a></li>
+    <li><a href="#binding">R06 绑定新基线</a></li>
+    <li><a href="#gaps">未验证</a></li>
+    <li><a href="#method">环境与方法</a></li>
+    <li><a href="#next">下一步</a></li>
+  </ol>
+  <button class="themer" id="themer" type="button">切换主题</button>
+</div></nav>
+
+<div class="wrap">
+<header class="top">
+  <div class="kicker">知序 Noltri · 本地桌面版与 Research 整合</div>
+  <h1>P6 偏移检查与研究地图 · 本轮交付报告</h1>
+  <div class="sub">六类偏移规则的确定性实现（不调模型）、按 <code>(driftType, sourceEntityId, targetEntityId)</code> 去重并入 open finding、研究地图聚合与 12 区块上下文包、五条新端点（研究端点总线 38 条、仍不进授权 scope 表）、api-client 38 个类型化调用、桌面第九视图 —— 以及 R06「后续检查绑定新基线」的落地与修复。</div>
+  <div class="meta">
+    <span>日期 <b>2026-10-07</b></span>
+    <span>分支 <b>v1_research&amp;modify</b></span>
+    <span>提交范围 <b>07e66d7..e52176f</b>（3 个提交；P6-D 的文档提交在范围之后）</span>
+    <span>平台 <b>macOS 26.6.2 / Darwin 25.6.0 / arm64</b></span>
+  </div>
+  <div class="phase">
+    <span class="ph done">P0 基线</span><span class="ph done">P1 纵向切片</span>
+    <span class="ph done">P2 工作台迁移</span><span class="ph done">P3 本地接入</span>
+    <span class="ph done">P4 Agent Setup</span><span class="ph done">P5 Research 整合</span>
+    <span class="ph now">P6 偏移检查与地图</span><span class="ph">P7 云清理</span>
+    <span class="ph">P8 安装包</span>
+  </div>
+  <div class="grid c4" style="margin-top:20px">
+    <div class="card"><div class="n">3 · 26</div><div class="l">提交 · 文件（区间净值 <b>+2 738 / −25</b>，取 <code>git diff --stat 07e66d7..e52176f</code>）</div></div>
+    <div class="card"><div class="n">24 / 24</div><div class="l">全量门禁任务（12 包 × typecheck＋test，R06 修复后完整重跑，GATE_EXIT=0）</div></div>
+    <div class="card"><div class="n">1152 / 21</div><div class="l">通过 / 跳过（P5 为 1082 / 21；跳过全部是缺 <code>NOLTRI_PG_TEST_URL</code> 的 PG 用例，不计通过）</div></div>
+    <div class="card"><div class="n">3 ＋ 1</div><div class="l">验收行：R04 / R05 / R07 补测转绿；R06「后续检查绑定新基线」本轮补齐</div></div>
+  </div>
+  <div class="chips">
+    <span class="chip">六类规则是纯函数：无 IO、无时钟、不生成 id、不调模型</span>
+    <span class="chip">去重按五元组，只对 open 生效</span>
+    <span class="chip">38 条研究端点一条都不进授权 scope 表</span>
+    <span class="chip">map 只装配不排版；context-pack 的 markdown 与 blocks 同源</span>
+    <span class="chip">R06 对照的是最新已批准基线的快照，改草稿不动参照</span>
+    <span class="chip">demo 三个种子缺口逐类断言：{total 3, info 0, warning 2, critical 1}</span>
+  </div>
+</header>
+
+<h2 id="summary">一 结论</h2>
+<p>P6 的验收口径来自开发文档 §19 的 R04／R05／R07 三行与契约 §5（六类偏移、Map 与 Context Pack 的口径，P5 时已冻结存档）。本轮把这三行从契约实现成代码：<code>drift.ts</code> 的六类规则（纯函数，<b>不调模型</b>）＋ 领域包装（并发取快照 → 跑规则 → 按五元组去重落库 → 汇总 summary），<code>map.ts</code> / <code>context-pack.ts</code> 两份纯装配，五条新端点（<code>drift-check</code> / <code>drift-findings</code> 列表 / <code>drift-findings</code> 状态更新 / <code>map</code> / <code>context-pack</code>），研究端点总数到 <b>38 条</b>且架构门禁把条数钉死；客户端侧 api-client 补齐五个类型化方法（33 → <b>38 个调用</b>，45 行 WIRE 表），shared 补三张词表，桌面新增偏移检查／研究地图／上下文包三个视图（六 → <b>九视图</b>）。R04、R05、R07 三行全部转绿。</p>
+<p>两件最容易做假的规则被测试钉死。其一，<b>无 AI 诚实</b>（R05）：<code>drift.ts</code> 只 import schema 类型与 shared 的 <code>tokenize</code>，没有 IO、没有时钟、不生成 id、不调模型——落库与盖戳只发生在领域包装里，纯函数用例断言「同一快照产出同一份草稿」；契约 §5 继续作为规则存档。其二，<b>去重口径</b>：重跑不是又建一遍，而是按 <code>(driftType, sourceEntityId, targetEntityId)</code> 把草稿并入仍处于 <code>open</code> 的既有条目，返回集合同一、id 不变（demo 用例两次运行逐 id 相等）；人工处理（确认／解决）只改 finding 状态，判断永远在规则侧。</p>
+<p>本轮还补齐了 P5 报告 §十三 承诺、却差点落空的 R06 后半句：<b>「后续检查绑定新基线」</b>。审计发现第一版实现（以及被归档的参考构建）只拿草稿行做对照；修复后 <code>runDriftCheck</code> 多取一路 <code>findCharterBaseline</code>，规则对照的最新已批准基线快照、无基线时回退草稿行——<b>只改草稿、不批准，偏移不会消失</b>。新用例把两半都钉住：改草稿不批准 → 发现照旧；批准 v2 之后再跑 → 偏移按新基线消失。</p>
+<div class="note">诚实边界：五条 P6 端点对 grant-scoped 的 Agent 客户端<b>按设计不可达</b>（契约 §4：研究文本尚未被 §435 的片段上限覆盖，一条都不开）；桌面三个新视图只有渲染级测试（<code>renderToStaticMarkup</code>），本轮没有可截的真实窗口操作；R03 仍只有归档路径（没有删除／合并）；21 项 PG 用例照旧跳过、不计通过。详见 <a href="#gaps">§十</a>。</div>
+
+<h2 id="done">二 已完成工作总结</h2>
+<p class="sub">按惯例，每轮交付把「已完成的工作」单独汇总一次。以下是 P6 全部完成项，与 <a href="#commits">§四</a> 的 3 个提交一一对应。</p>
+<table>
+  <thead><tr><th>片</th><th>完成了什么</th><th>证据</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>P6-A</b><br>规则与落库</td>
+      <td><code>drift.ts</code>（381 行）：六类规则一次实现——证据缺失、因果强表述、正文研究问题、贡献脱节、方法／期刊变更；句子切分、归一化匹配、去停用词 token 重合全在文件内本地实现。<code>index.ts</code> 包装：八路快照并发（章程草稿＋基线＋RQ／证据／论点／关系／变更＋既有 open findings）→ 跑纯规则 → 五元组去重 → 落库 → <code>summary{total,info,warning,critical}</code>。HTTP 五路由上线，架构门禁条数改钉 38</td>
+      <td><code>research-drift.test.ts</code> <b>29 项</b>（每类正反例＋纯函数＋去重＋R06 绑定）、<code>research-http.test.ts</code> <b>16 项</b>、<code>architecture-gate.test.ts</code> <b>12 项</b>；<code>research-fakes.ts</code> 扩 120 行（两驱动共享假实现）</td>
+    </tr>
+    <tr>
+      <td><b>P6-B</b><br>地图与上下文包</td>
+      <td><code>map.ts</code>（99 行）：questions／evidence／claims／sections 四层聚合＋七种关系的边集过滤（只画 evidence→claim、claim→RQ、claim→section 三种三元组），<code>unsupportedClaimIds</code> 与「有支撑」口径一致；排版归 UI。<code>context-pack.ts</code>（114 行）：12 区块按契约顺序装配，<code>markdown</code> 与 <code>blocks</code> 由同一批字符串拼接（永不互相矛盾），confirmed 论点、关键证据、近 5 条决策／变更、open findings 警告</td>
+      <td><code>research-map-context.test.ts</code> <b>3 项</b>（聚合与边集、越权 not_found、12 区块内容）；<code>research-demo.test.ts</code> 增至 <b>7 项</b>（三缺口逐类断言）</td>
+    </tr>
+    <tr>
+      <td><b>P6-C</b><br>客户端与桌面</td>
+      <td>api-client 五个方法（<code>researchDriftCheck</code>／<code>researchDriftFindings</code>／<code>patchResearchDriftFinding</code>／<code>researchMap</code>／<code>researchContextPack</code>）—— 38 条端点共 <b>45 行 WIRE 表</b>逐行核对方法、路径与载荷；shared 三张词表（偏移类型／严重度／处理状态）＋实体标签「偏移」；桌面新增 <code>DriftPanel</code>（运行检查、确认／解决）、<code>MapPanel</code>、<code>ContextPackPanel</code>，<code>ResearchWorkspace</code> 接线写入后整页重载</td>
+      <td>api-client <code>research.test.ts</code> <b>59 项</b>；shared <code>labels.test.ts</code> <b>76 项</b>；桌面 <code>research-model.test.ts</code> <b>25 项</b>＋<code>research-render.test.tsx</code> <b>24 项</b>；<code>vite build</code> 137ms 四入口</td>
+    </tr>
+    <tr>
+      <td><b>P6-D</b><br>回写与 R06</td>
+      <td>契约回写：§4（38 条第 5 条边界）、§5（对照取最新基线快照的口径）、§6（文件归属）、§7（R04／R05／R07 转绿、R06 后半句）；FUNCTION_MAP.md 补 Research 节。<b>R06 绑定实现＋用例</b>（<code>e52176f</code>：<code>findCharterBaseline</code> 第八路快照，<code>baseline?.charter ?? charterDraft</code>）；全量门禁重跑；本报告</td>
+      <td>3 文件 +40 / −2；<code>research-drift.test.ts</code> 第 29 项「binds subsequent checks to the latest approved baseline, not the draft (R06)」</td>
+    </tr>
+  </tbody>
+</table>
+<p class="sub">测试规模：P5 的 69 文件／1082 通过／21 跳过 → P6 的 <b>71 文件／1152 通过／21 跳过</b>（净增 70 通过、2 个文件，全部落在 research 相关四包：core ＋37、desktop ＋13、api-client ＋11、shared ＋9）。</p>
+
+<h2 id="scope">三 范围与验收口径</h2>
+<p>开发文档 §19 验收矩阵里属于 P6 的是 R04／R05／R07，加上 P5 交接的 R06 后半句。逐行口径与结论：</p>
+<table>
+  <thead><tr><th>行</th><th>验收口径</th><th>本轮状态</th><th>证据在</th></tr></thead>
+  <tbody>
+    <tr><td><code>R04</code></td><td>六类偏移各有 fixture，检测结果稳定可复现</td><td><span class="tag t-ok">通过</span></td><td><code>research-drift.test.ts</code> 29 项：每类规则的正面与反面用例；demo 三个种子缺口逐类断言——C-03 → <code>evidence_drift</code> warning、C-05 → <code>causality_drift</code> critical、journal change → <code>journal_drift</code> warning，summary <code>{3,0,2,1}</code>；重跑后 finding id 集合不变</td></tr>
+    <tr><td><code>R05</code></td><td>无 AI 诚实：偏移检查不依赖模型</td><td><span class="tag t-ok">通过</span></td><td><code>drift.ts</code> 只 import schema 类型与 <code>@noltri/shared</code> 的 <code>tokenize</code>——没有 IO、时钟、随机、id 生成、模型调用；「identical snapshots produce identical drafts」用例钉住纯函数性；契约 §5 存档规则原文</td></tr>
+    <tr><td><code>R07</code></td><td>上下文包按需最小化地交给 Agent 读</td><td><span class="tag t-ok">通过</span></td><td><code>context-pack.ts</code> 12 区块、markdown＝blocks 同源拼接；<code>map.ts</code> 聚合与 <code>unsupportedClaimIds</code>；<code>research-map-context.test.ts</code> 3 项 ＋ demo 的 map／pack 断言（pack 12 区块、block[11] 带到 C-03 与 C-05）</td></tr>
+    <tr><td><code>R06</code> 后半句</td><td>后续检查绑定新基线</td><td><span class="tag t-ok">本轮补齐</span></td><td><code>e52176f</code>：对照取最新已批准基线的快照（无基线回退草稿行），只改草稿不批准偏移不消失；<code>research-drift.test.ts</code> 第 29 项＋契约 §5／§7 回写（详见 <a href="#binding">§九</a>）</td></tr>
+    <tr><td><code>R01</code>–<code>R03</code> · <code>R08</code></td><td>P5 已绿的行不回归</td><td><span class="tag t-ok">未重开</span></td><td>全量门禁覆盖 P5 全部用例；本轮 71 文件 1152 项全绿（21 项 PG 跳过不计）</td></tr>
+  </tbody>
+</table>
+<div class="warnbox">口径只写「有可跑用例」的行：五条 P6 端点对 grant-scoped Agent 客户端按设计不可达（契约 §4，片段上限未覆盖研究文本前不开）；桌面三视图的验证止于渲染测试，没有真实窗口实点；R03 的通过口径仍是归档路径，删除／合并来源依然没有代码路径。</div>
+
+<h2 id="commits">四 提交清单（按提交范围统计，不由工作区反推）</h2>
+<p class="sub">范围 <code>07e66d7..e52176f</code>，基线 <code>07e66d7</code> 是 P5 的收尾（P5 交付报告提交）。下表由 <code>git show --shortstat</code> 逐提交取。</p>
+<table>
+  <thead><tr><th>提交</th><th>内容</th><th>规模</th></tr></thead>
+  <tbody>
+    <tr><td><code>6f60aed</code></td><td>feat(core): run the six drift rules and open the five P6 endpoints</td><td>13 文件 +1 614 / −17</td></tr>
+    <tr><td><code>3dbac17</code></td><td>feat(workbench): give P6's 偏移检查 / 研究地图 / 上下文包 their views</td><td>13 文件 +1 086 / −8</td></tr>
+    <tr><td><code>e52176f</code></td><td>feat(core): bind the drift checks to the latest approved baseline (R06)</td><td>3 文件 +40 / −2</td></tr>
+    <tr><td colspan="2"><b>区间净值（<code>git diff --stat 07e66d7..e52176f</code>）</b></td><td><b>26 文件 · +2 738 · −25</b></td></tr>
+  </tbody>
+</table>
+<p class="sub">逐提交相加是 +2 740 / −27，<b>大于</b>区间净值的 +2 738 / −25：<code>services/knowledge-core/src/research/index.ts</code> 与 <code>drift.ts</code> 被 <code>6f60aed</code> 与 <code>e52176f</code> 先后改动（R06 修复改的正是第一个提交新建的文件），区间 diffstat 只计最终差异。两个数都对，口径不同，以区间净值为规模结论。</p>
+<p class="sub">分片：P6-A＋P6-B 一个提交（<code>6f60aed</code>）、P6-C 一个（<code>3dbac17</code>）、R06 修复一个（<code>e52176f</code>）；P6-D 的文档回写提交（契约＋FUNCTION_MAP＋本报告）在范围之后，与 P5 的 <code>f27212c</code> 同例。</p>
+
+<h2 id="gate">五 门禁与用例分布（实测）</h2>
+<table>
+  <thead><tr><th>包</th><th>测试文件</th><th>通过</th><th>跳过</th><th>P5 时</th></tr></thead>
+  <tbody>
+    <tr><td><code>apps/desktop</code></td><td>12</td><td><b>186</b></td><td>0</td><td>173</td></tr>
+    <tr><td><code>services/knowledge-core</code></td><td>18</td><td><b>224</b></td><td>0</td><td>16 文件／187</td></tr>
+    <tr><td><code>services/native-host</code></td><td>7</td><td>135</td><td>0</td><td>135</td></tr>
+    <tr><td><code>apps/extension</code></td><td>9</td><td>134</td><td>0</td><td>134</td></tr>
+    <tr><td><code>packages/storage</code></td><td>8</td><td>129</td><td>21</td><td>129／21</td></tr>
+    <tr><td><code>packages/shared</code></td><td>3</td><td><b>107</b></td><td>0</td><td>98</td></tr>
+    <tr><td><code>packages/api-client</code></td><td>4</td><td><b>88</b></td><td>0</td><td>77</td></tr>
+    <tr><td><code>packages/schema</code></td><td>3</td><td>31</td><td>0</td><td>31</td></tr>
+    <tr><td><code>services/mcp-server</code></td><td>3</td><td>27</td><td>0</td><td>27</td></tr>
+    <tr><td><code>packages/ai-provider</code></td><td>2</td><td>48</td><td>0</td><td>48</td></tr>
+    <tr><td><code>apps/web</code>（<code>node:test</code>）</td><td>1</td><td>28</td><td>0</td><td>28</td></tr>
+    <tr><td><code>services/ai</code></td><td>1</td><td>15</td><td>0</td><td>15</td></tr>
+    <tr><td><b>合计</b></td><td><b>71</b></td><td><b>1152</b></td><td><b>21</b></td><td>69 文件／1082／21</td></tr>
+  </tbody>
+</table>
+<p>研究相关的逐文件分布（vitest 直跑提取；<code>research-fakes.ts</code> 是两驱动契约测试的共享假实现，不是测试文件）：</p>
+<pre><code>services/knowledge-core · 18 文件 / 224 通过
+  research-drift.test.ts            29   六类规则 + 纯函数 + 去重 + R06 绑定
+  research-domain.test.ts           26
+  research-http.test.ts             16   （P6 五条端点在列）
+  research-demo.test.ts              7   （R01 全链路 + 三个种子缺口逐类断言）
+  research-archive.test.ts           6   R03
+  research-restart.test.ts           2   R08
+  research-map-context.test.ts       3   R07
+  architecture-gate.test.ts         12   （研究端点条数钉在 38）
+apps/desktop · 12 / 186
+  research-model.test.ts            25
+  research-render.test.tsx          24
+packages/api-client · 4 / 88
+  research.test.ts                  59   （45 行 WIRE 表逐行核对）
+packages/shared · 3 / 107
+  labels.test.ts                    76   （含 P6 三张词表）</code></pre>
+<pre><code># 全量门禁（R06 绑定落地后的一次完整重跑）
+pnpm -w typecheck &amp;&amp; pnpm -w test --force --concurrency=1
+# → typecheck 12/12 · test 12/12 · GATE_EXIT=0 · Tasks 12 successful, 12 total（11.5s）
+# 日志：/tmp/p6d-gate-final.txt · 完整测试日志 /tmp/p6d-gate-test-full.txt
+# 分包明细（vitest 直跑）：/tmp/p6d-core-tests.txt · /tmp/p6d-desktop-tests.txt 等
+
+# 桌面构建
+pnpm --filter @noltri/desktop build
+# → ✓ built in 137ms（四入口）
+#   workbench 82.33 kB JS（gzip 21.96）＋ 16.24 kB CSS（gzip 3.75）
+# 日志：/tmp/p6d-desktop-build.txt</code></pre>
+
+<h2 id="drift">六 六类偏移规则与去重（契约 §5 的实现）</h2>
+<p><code>drift.ts</code> 是纯函数：读一份快照，返回 finding 草稿。落库、盖戳（id／createdAt／status）与去重都发生在领域包装 <code>runDriftCheck</code> 里。六类规则的触发与 severity 口径：</p>
+<table>
+  <thead><tr><th>规则</th><th>触发条件（确定性）</th><th>severity</th><th>建议动作（节选）</th></tr></thead>
+  <tbody>
+    <tr><td><code>evidence_drift</code></td><td>论点没有任何 <code>supports</code>／<code>partially_supports</code> 关系（反证与限定不算支撑）</td><td>confirmed → critical；其余 warning</td><td>补充 Evidence、弱化 Claim 或改为 Future Research</td></tr>
+    <tr><td><code>causality_drift</code></td><td>强因果表述（cause／lead to／导致／影响／决定……）且支持证据为空或以非统计类型为主（expert_judgement／note／interview／document／external_source／other）</td><td>boundary 空 → critical；含弱化词（suggest／相关／may……）→ info；否则 warning</td><td>弱化为相关性表述或在 boundary 中限定推断程度</td></tr>
+    <tr><td><code>rq_drift</code></td><td>仅当带 <code>manuscriptText</code>：正文中像研究问题的句子（问号／RQn／whether-how-what-why／「研究问题」）与 Charter 与已登记 RQ 归一化匹配失败</td><td>warning</td><td>登记到 Charter 或 RQ，或修订正文表述</td></tr>
+    <tr><td><code>contribution_drift</code></td><td>contribution 类论点与 Core Contribution 的去停用词 token 重合率 &lt; 0.2；另有正文贡献句扫描（contribut／贡献）</td><td>Core Contribution 空 → critical；否则 warning</td><td>对齐核心贡献表述，或改写 Claim／更新 Charter</td></tr>
+    <tr><td><code>method_drift</code></td><td>method 类 ResearchChange 晚于章程更新时间</td><td>warning</td><td>同步更新 Charter 的 Research Method、RQ 与 Boundary</td></tr>
+    <tr><td><code>journal_drift</code></td><td>journal 类变更，或（已选目标期刊时）contribution／scope 变更晚于章程</td><td>warning</td><td>同步更新 Target Journal、Core Contribution 与 Boundary</td></tr>
+  </tbody>
+</table>
+<div class="note">去重与返回口径（契约 §5）：去重键是 <code>(driftType, sourceEntityId, targetEntityId)</code>；重跑时草稿若命中一条仍处于 <code>open</code> 的既有 finding，就<b>并入返回而不重复建档</b>——结果集＝既有 open 条目＋本轮新建，<code>summary</code> 按返回集合统计。demo 用例两次运行逐 id 相等；只改草稿不批准基线，偏移不会消失（R06，<a href="#binding">§九</a>）。已标为 acknowledged／resolved／dismissed 的条目不再占位：规则若仍命中，会重新开一条（判断在规则、状态在 finding；桌面只提供 确认→acknowledged、解决→resolved 两个动作）。</div>
+
+<h2 id="map">七 研究地图与上下文包（纯装配，排版归 UI）</h2>
+<h3>研究地图 <code>GET …/map</code></h3>
+<p><code>map.ts</code> 把项目、章程要点（workingTitle／coreContribution／researchBoundary／claimBoundary／currentStage）与四层实体（questions → evidence → claims → sections）聚合成一份可画的图层：</p>
+<ul>
+  <li><b>边集只保留七种关系 × 三种三元组</b>：evidence→claim（supports／partially_supports／contradicts／qualifies／contextualizes）、claim→RQ（answers）、claim→section（appears_in）；决策与变更的边不进地图。</li>
+  <li><b><code>unsupportedClaimIds</code></b> 与「有支撑」口径完全一致（只认 supports／partially_supports）——所以 <code>evidence_drift</code> 命中的论点在同一份地图上一定是无支撑的（demo：C-03 同时出现在两处）。</li>
+  <li>每个 claim 带 <code>supported</code> 布尔；服务器不排版、不算坐标，只交图。</li>
+</ul>
+<h3>上下文包 <code>GET …/context-pack</code></h3>
+<p><code>context-pack.ts</code> 按契约顺序装配 12 个区块：PROJECT／Current Research Question／Core Contribution／Research Boundary／Claim Boundary／Current Method／Confirmed Claims／Key Evidence／Important Decisions／Recent Changes／Open Issues／Current Drift Warnings。<code>markdown</code> 与 <code>blocks</code> 由同一批字符串拼接（「同源」，两种表示永不互相矛盾）；Key Evidence 只取支撑 confirmed 论点的证据，决策与变更各取最近 5 条，警告只带 <code>open</code> 的 findings；<code>generatedAt</code> 由领域包装盖戳（纯装配不知道时间）。demo 断言：12 区块、block[0]＝PROJECT、block[11] 能读到 C-03 与 C-05 两条警告原文。</p>
+
+<h2 id="workbench">八 客户端与桌面（api-client 38 调用 · 九视图）</h2>
+<p><b>api-client。</b>新增五个方法（<code>researchDriftCheck</code>／<code>researchDriftFindings</code>／<code>patchResearchDriftFinding</code>／<code>researchMap</code>／<code>researchContextPack</code>），研究面到 <b>38 个类型化调用</b>（18 读 ＋ 20 写），WIRE 表 45 行逐行核对方法、路径与载荷形态；<code>validatedRequest</code> 在发网络前就地拒绝不合契约的请求。</p>
+<p><b>shared。</b>补三张词表：<code>driftTypeLabels</code>（六类中文名）、<code>driftSeverityLabels</code>、<code>driftFindingStatusLabels</code>，外加实体标签「偏移」——桌面不再出现裸枚举。</p>
+<p><b>桌面（六 → 九视图）。</b><code>ResearchWorkspace</code> 新增三个视图，纯决策逻辑继续集中在 <code>research-model.ts</code>：</p>
+<ul>
+  <li><b>偏移检查 <code>DriftPanel</code></b>——本轮唯一带写操作的研究面板：可粘贴正文摘录后「运行偏移检查」，列 finding（严重度／类型／状态三枚标签＋描述＋建议），待处理的提供「确认」「解决」两个动作；写入后整页重载。</li>
+  <li><b>研究地图 <code>MapPanel</code></b>、<b>上下文包 <code>ContextPackPanel</code></b>——只画不写：图层、无支撑论点清单、12 区块与 markdown。</li>
+  <li>三个面板都由渲染测试（<code>renderToStaticMarkup</code>）与模型测试钉住；<code>WorkbenchApi</code> 用 <code>Pick&lt;ApiClient, …&gt;</code> 从客户端类型派生——上游方法改名会编译失败，而不是悄悄留一份陈旧的镜像。</li>
+</ul>
+<p>构建保持干净：<code>vite build</code> 137ms 四入口；workbench 报 82.33 kB JS（gzip 21.96）＋ 16.24 kB CSS（gzip 3.75）。</p>
+
+<h2 id="binding">九 R06：检查绑定新基线（本轮补齐的缺口）</h2>
+<p>P5 交付了批准基线的前半句（append-only 版本、快照不可变、按名打复核标记），后半句「后续检查绑定新基线」被写进契约 §7、<code>baselines.ts</code> 注释与 P5 报告 §十三，约定由 P6 的 drift-check 读 <code>findCharterBaseline</code> 完成。审计时发现第一版实现（以及被归档的参考构建与归档契约）只拿章程草稿行做对照——承诺在文档里、行为还没到。修复（<code>e52176f</code>）很小，语义变化不小：</p>
+<ul>
+  <li><code>runDriftCheck</code> 的并发快照从七路变八路，加上 <code>repo.findCharterBaseline(projectId, userId)</code>；</li>
+  <li>规则对照的章程＝<code>baseline?.charter ?? charterDraft</code>——<b>有基线时对照最新已批准基线的快照，无基线时（首次批准之前）回退草稿行</b>；</li>
+  <li><b>只改草稿、不批准，偏移不会消失</b>：草稿编辑不移动参照系，只有批准一次修订才会。</li>
+</ul>
+<p>区分两半的用例（<code>research-drift.test.ts</code> 第 29 项）：贡献论点与 v1 基线脱节 → 有偏移；把草稿改成与新论点一致（不批准）→ 偏移照旧（对照仍是 v1 快照）；把这条标注 dismissed、批准 v2 → 再跑，偏移按新基线消失。demo 与 restart 用例各自走上回退路径与「批准但未跑检查」路径，无回归。</p>
+
+<h2 id="gaps">十 未验证与明确没做的事</h2>
+<ul>
+  <li><b>五条 P6 端点不进 Agent 授权面</b>（设计如此）：<code>DriftFinding.description</code> 会回引论点原句，<code>context-pack</code> 整份就是拼给 Agent 读的聚合文本——研究文本没接 §435 片段上限之前，一条都不开（契约 §4）。架构门禁把端点总数钉死在 38：新增路由不登记就会失败。</li>
+  <li><b>桌面三视图只有渲染级验证。</b>本轮没有运行过真实的 <code>tauri dev</code> 窗口，「运行偏移检查」「确认」「解决」按钮的行为由渲染测试与模型测试覆盖，未在真实窗口里实点；也没有可截的研究窗口截图。P4 的 Setup Manager 连接中心面板的真实窗口检查同样挂账（原计划随 P8 补）。</li>
+  <li><b>R03 仍是归档路径</b>：来源的删除／合并没有代码路径，报告不写成「删除安全已实现」。</li>
+  <li><b>21 项 PG 用例跳过</b>：缺 <code>NOLTRI_PG_TEST_URL</code>，按 §19 X02 口径不计通过。</li>
+  <li><b>推送未做</b>：本地领先 <code>origin/v1_research&amp;modify</code> 10 个提交（<code>0d8f082</code>…<code>e52176f</code>，含 P5 尾部与 P6 全部）；此前对 GitHub 的同步只推了分支、未建 PR。按契约 §6「push 单独确认」，等确认后连 P6-D 文档提交一起推（届时 11 个）。</li>
+  <li><b>三个非项目文件留在未跟踪状态</b>：<code>.workspace/</code>、<code>project.bak</code>、<code>project.json</code> 是工作区既有的本地杂物，不属于产品源码，历轮提交刻意不带上它们。</li>
+</ul>
+
+<h2 id="method">十一 环境、命令与临时产物</h2>
+<table>
+  <thead><tr><th>项</th><th>值</th></tr></thead>
+  <tbody>
+    <tr><td>平台</td><td>macOS 26.6.2 / Darwin 25.6.0 / arm64 · Node v24.18.0 · pnpm ＋ turbo · vitest 5.0.3</td></tr>
+    <tr><td>范围净值</td><td><code>git diff --stat 07e66d7..e52176f</code> → 26 文件 · +2 738 / −25</td></tr>
+    <tr><td>门禁日志</td><td><code>/tmp/p6d-gate-final.txt</code>（typecheck 12/12 · test 12/12 · GATE_EXIT=0）</td></tr>
+    <tr><td>分包日志</td><td><code>/tmp/p6d-core-tests.txt</code> · <code>/tmp/p6d-desktop-tests.txt</code> · <code>/tmp/p6d-apiclient-tests.txt</code> · <code>/tmp/p6d-shared-tests.txt</code>（逐文件明细的来源）</td></tr>
+    <tr><td>构建日志</td><td><code>/tmp/p6d-desktop-build.txt</code>（四入口，137ms）</td></tr>
+    <tr><td>临时产物</td><td>全部测试用临时目录，用后即删；工作区未留测试残留</td></tr>
+  </tbody>
+</table>
+<p class="sub">数字口径：§四由 <code>git show --shortstat</code> 逐提交取；§五由 R06 修复后的完整重跑取，逐文件数另以 vitest 直跑提取（architecture-gate 12、research.test 59、labels 76 三项在写报告前复核过）。本报告与 P6-D 文档提交在范围之后，不计入任何统计。</p>
+
+<h2 id="next">十二 下一步</h2>
+<ul>
+  <li><b>P7（云清理）</b>：删除 <code>apps/web</code> 与云依赖。这是破坏性动作，等用户明确确认后开工。</li>
+  <li><b>P8（安装包）</b>：安装包／签名与 M05，把 Setup Manager 连接中心的真实窗口检查一并补上（连同本轮桌面三视图的实机实点）。</li>
+  <li><b>研究侧遗留</b>：五条端点接入 Agent 授权面之前，先让 §435 的片段上限覆盖研究文本（契约 §4 写明了这条前置）；桌面地图／上下文包暂无交互形态。</li>
+  <li><b>推送</b>：待确认后推 <code>0d8f082</code>…<code>e52176f</code> 与 P6-D 文档提交（不建 PR，除非另有指示）。</li>
+  <li>照旧：每完成一个模块跑所在包 typecheck＋test，提交按路径窄范围分批，push 单独确认。</li>
+</ul>
+
+<div class="foot">
+  <p>知序 Noltri · P6 偏移检查与研究地图交付报告 · 2026-10-07 · 分支 <code>v1_research&amp;modify</code> · 提交范围 <code>07e66d7..e52176f</code></p>
+  <p>本报告为单文件、无外部依赖：样式与脚本全部内嵌，不请求任何网络资源，不含截图（研究视图本轮没有可截的真实窗口，原因见 §十）。所有数字来自实际执行的命令输出；R06 的修复对应 <code>e52176f</code> 的真实提交与用例，不是只写在报告里的说法。</p>
+</div>
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var stored = null;
+  try { stored = localStorage.getItem('noltri-report-theme'); } catch (e) {}
+  if (stored === 'dark') root.setAttribute('data-theme', 'dark');
+  document.getElementById('themer').addEventListener('click', function () {
+    var dark = root.getAttribute('data-theme') === 'dark';
+    if (dark) { root.removeAttribute('data-theme'); } else { root.setAttribute('data-theme', 'dark'); }
+    try { localStorage.setItem('noltri-report-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+
+  Array.prototype.slice.call(document.querySelectorAll('pre')).forEach(function (block) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy';
+    button.textContent = '复制';
+    button.addEventListener('click', function () {
+      var text = block.textContent.replace(/^复制/, '');
+      function done(ok) {
+        button.textContent = ok ? '已复制' : '失败';
+        setTimeout(function () { button.textContent = '复制'; }, 1600);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+        return;
+      }
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', 'readonly');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      done(ok);
+    });
+    block.appendChild(button);
+  });
+
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav a'));
+  var targets = links.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); });
+  function onScroll() {
+    var y = window.scrollY + 90;
+    var active = 0;
+    for (var i = 0; i < targets.length; i += 1) { if (targets[i] && targets[i].offsetTop <= y) active = i; }
+    links.forEach(function (a, i) { a.style.color = i === active ? 'var(--accent)' : ''; });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+</body>
+</html>

@@ -101,6 +101,16 @@
 - MCP Client 连接验证脚本 `pnpm --filter @noltri/mcp-server run verify`（真实 `@modelcontextprotocol/sdk` Client 经 StreamableHTTPClientTransport 连接，已实测通过并产生真实数据）
 - 客户端使用指引 `skills/knowledge-skill/SKILL.md`（工具地图 + 诚实规则：只用工具返回的节点 id、失败如实上报、原文不可改）
 
+### Research（P5–P6，研究工作台）
+- **Research 域全链路（P5-A/B，R01）**：schema 契约（含冻结的 `CHARTER_FIELD_NAMES` 字段词表与 `RELATION_PAIRINGS` 端点配对表）→ storage 双驱动（memory／SQLite 共用同一份 `research-repository-contract.ts`，桌面 profile 两域共用同一 `sqliteFile`、WAL 双句柄）→ 领域门面 **39 方法**（每个方法先从凭据取 `userId`、再证明项目归属）→ **38 条 REST 端点**（18 读 ＋ 20 写）。研究端点**故意全部不进授权 scope 表**（研究文本未接 §435 片段上限，grant 一律拒绝），架构门禁同时钉住条数（38）与「无 scope 条目」两条（`services/knowledge-core/test/architecture-gate.test.ts` 12 项）
+- **R02 关系方向由端点配对表钉死**：五种证据关系（`supports｜partially_supports｜contradicts｜qualifies｜contextualizes`）只允许 evidence→claim，`answers` 只允许 claim→RQ，`appears_in` 只允许 claim→章节；schema 与 domain 两侧拒绝非法配对；「有支撑」口径只认前两种，反证／限定从不计入
+- **R06 批准章程基线**：批准 append-only 增版、快照批准即冻结、`changedFields` 相对上一版（首版空表）；按名打 `charter_baseline` 复核标记（同基线重复批准原地刷新，不新增行）；**drift-check 以最新基线快照为对照**（无基线回退草稿行）—— R06「后续检查绑定新基线」，只改草稿不批准偏移不消失
+- **R03 出处指针与归档安全**：证据出处（`nodeId`／`rawSourceId`／`locationOrigin`）可空、不重绑；`GET /api/research/references` 只读跨项目检查（至少给一个 id）；归档知识节点时**先**标 `source_archived`（引用证据与其支撑的论点）再完成归档、恢复不误清、未接线不阻断；V1 无删除／合并，`rawSourceId` 列已预留
+- **R04／R05 六类偏移检查（P6）**：确定性规则、**V1 不调模型**（`drift.ts` 纯函数：无 IO／时钟／模型调用）；按 `(driftType, sourceEntityId, targetEntityId)` 对 open findings 去重并入；demo 种子三个刻意缺口逐类命中（C-03→evidence_drift warning、C-05→causality_drift critical、journal change→journal_drift warning，summary `{3,0,2,1}`；`research-drift.test.ts` 29 项 ＋ `research-demo.test.ts` 7 项）
+- **R07 研究地图与上下文包（P6）**：map 聚合 questions→evidence→claims→sections→contribution 与七种边、`unsupportedClaimIds` 与「有支撑」同口径；context-pack 12 区块、`markdown`＝`blocks` 拼接、默认按需最小化（`research-map-context.test.ts` 3 项）
+- **客户端与桌面（P5-D／P6-C）**：api-client **38 个类型化调用**（45 行 WIRE 表逐行核对方法、路径与载荷形态；`packages/api-client/test/research.test.ts` 59 项）；`@noltri/shared` 补齐研究中文词表（现 20 张 map 以「键集合＝schema 枚举」契约测试锁定）；桌面「研究工作台」**九个视图**（总览／章程与边界／研究问题／证据工作台／论点与章节／决策与时间线 ＋ 偏移检查／研究地图／上下文包），纯决策逻辑在 `research-model.ts`（25 项）、渲染以 `renderToStaticMarkup` 断言（24 项）
+- **R08 重启／导出往返（P5-E）**：`research-restart.test.ts` 按桌面 profile 双句柄布局关掉再开 ＋ 库文件复制到新路径重开，13 条关系五元组、首个基线快照、pending／cleared 标记与出处指针逐项读回
+
 ## 后续实现
 
 ### 验证缺口（代码已就绪，需真实环境补验）
@@ -131,8 +141,7 @@
 - 发布物整理：扩展打包产物上架准备、桌面 dmg、部署文档
 - **P3 已交付（协议、幂等、降级队列、Native Host、身份门禁、安装器）；仍欠的一步是扩展的 `nativeMessaging` 权限与 host 路径接线**——它替用户向浏览器领新权限，必须用户点头后单独完成，随后才谈得上真实 Chrome 加载验收
 - **P4 已交付（stdio 握手、Agent 矩阵、备份／幂等／可撤销卸载、每客户端授权与 scope、写入验证探针、§435 隐私边界与三项授权选项）；仍欠的是 M05 打包路径与在真实 Agent 客户端／真实应用窗口里的点验**（见上两条）
-- P5 Research 整合：旧领域与测试迁入、storage 迁移、研究工作台与关联
-- P5–P6 Research 整合与偏移检查：旧领域与测试迁入、研究工作台、六类偏移与上下文包
+- **P5／P6 已交付（Research 整合与偏移检查）**：schema、双驱动 storage、39 方法门面、**38 条端点**、api-client 38 个类型化调用、桌面九视图、demo 种子与 R08 往返；六类偏移检查（确定性、不调模型）、研究地图与上下文包落地 —— R01／R02／R03／R06／R08 之外，R04／R05／R07 补齐。仍欠：研究端点对 Agent 客户端的授权面按设计关闭 —— 开启前必须先让 §435 的片段上限覆盖研究文本（契约 §4）
 - P7 云依赖清理：删除 Web／Supabase／Remote Bridge 的启动入口、env 示例、脚本与 CI 配置；`packages/storage/test/*supabase*` 的行为断言已由 SQLite 契约覆盖，**删除动作仍需按「替代已存在＋回归通过＋引用已清理」三项证据执行**
 - P8 安装包、签名／notarization 与最终实机验收
 

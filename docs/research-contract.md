@@ -65,18 +65,19 @@
 | GET | `/api/research/projects/:projectId/timeline` | — | `{events}` |
 | POST | `/api/research/projects/:projectId/timeline` | `CreateTimelineEventRequest` | `TimelineEvent` |
 
-**P6 才开的 5 条**（schema 已在 `research-api.ts` 落地，domain / HTTP 未接）：
+**P6 开的 5 条**（P6-A／P6-B 已落地：domain 规则、HTTP 路由、架构门禁）：
 `POST …/drift-check`、`GET …/drift-findings`、`PATCH /api/research/drift-findings/:findingId`、
-`GET …/map`、`GET …/context-pack`。开发文档 §18 把「六类检测、人工处理、决策版本、研究地图和上下文包」
-明确排在 P6；本轮不因为 `drift_findings` 表已经能存就顺手把产生它的规则也发出去。
+`GET …/map`、`GET …/context-pack`。它们在 P5 只把 schema 落进 `research-api.ts`（表能存不等于规则已发），
+P6 按契约 §5 把六类检测、人工处理、研究地图和上下文包一次补齐。
 
-`packages/api-client/src/client.ts` 已覆盖全部 33 条（P5-D1）：`apiRoutes.research*` 是路由常量（带 id 的走
-`encodeURIComponent`），`ApiClient` 上 15 个读方法在客户端解开列表信封（`章程`／`基线` 没数据时是 `null`，
-不是 `undefined`），18 个写方法的请求体**先过共享 schema** —— 表单拼出来的 `论点` 不合格时，调用方拿到的是
+`packages/api-client/src/client.ts` 已覆盖全部 38 条（P5-D1 33 条 ＋ P6-C 5 条）：`apiRoutes.research*` 是路由常量（带 id 的走
+`encodeURIComponent`），`ApiClient` 上 18 个读方法在客户端解开列表信封（`章程`／`基线` 没数据时是 `null`，
+不是 `undefined`），20 个写方法的请求体**先过共享 schema** —— 表单拼出来的 `论点` 不合格时，调用方拿到的是
 zod 的 issues，而不是一次注定被 Core 拒掉的往返；`userId`／`projectId` 这类身份字段被挡在请求体之外（§0 铁律 1）。
 `GET /api/research/references` 在本地就要求至少一个 id：漏传的过滤器会变成一次跨项目的全表检查。
-桌面工作台必须经 `ApiClient` 调 Core，所以 UI 里不出现手写 `fetch`；P6 的 5 条端点**不进** client，
-等它们先在 domain／HTTP 侧落地。本分支没有 `/api/web/research/*` 云代理；`apps/web` 存活到 P7。
+桌面工作台必须经 `ApiClient` 调 Core，所以 UI 里不出现手写 `fetch`；P6 的 5 条（偏移检查 / 偏移发现列表与更新 /
+研究地图 / 上下文包）由 P6-C 一并纳入客户端，测试里 45 行 WIRE 表逐行核对方法、路径与载荷形态。
+本分支没有 `/api/web/research/*` 云代理；`apps/web` 存活到 P7。
 
 ## 2 服务层行为约定
 
@@ -146,14 +147,16 @@ Core 自己只监听 `127.0.0.1`，这两个句柄都不对外。
 （第 435 行「限制返回片段」）靠 `capText(actor, text)` 兑现，而 research 的文本（章程、证据描述、论点正文）
 还没有接入这条路径；即使 grant 要求限制片段，这里也兑现不了。打开 Research 给 Agent 客户端必须是**和 capping 一起决定**，
 不能先开后补。桌面工作台走 dev-token / dev-open（`identity.grant === undefined`），
-`requireScope` 是 no-op，33 条端点全部可达。P5-C 新增的 6 条（批准 / 版本列表 / 基线读取 / 标记列表 / 标记清空 /
+`requireScope` 是 no-op，38 条端点全部可达。P5-C 新增的 6 条（批准 / 版本列表 / 基线读取 / 标记列表 / 标记清空 /
 引用检查）**同样没有** scope 条目：`CharterVersion.charter` 是整份章程文本，`reviewMark.reason` 里带着批准理由，
-`references` 里带着证据标题与它所属项目的名字 —— 兑现不了片段限制就一律不开。
+`references` 里带着证据标题与它所属项目的名字 —— 兑现不了片段限制就一律不开。P6 的 5 条（偏移检查 / 偏移发现 /
+研究地图 / 上下文包）继续沿用同一条边界：`DriftFinding.description` 会回引论点原句，`context-pack` 整份就是
+拼给 Agent 读的聚合文本 —— 研究文本没接片段上限之前，一条都不开。
 
-这条边界要有测试撑着：架构门禁从 `ROUTES` 里收集出全部 `api/research/*` 形状，既钉住条数（现为 33，
+这条边界要有测试撑着：架构门禁从 `ROUTES` 里收集出全部 `api/research/*` 形状，既钉住条数（现为 38，
 新增路由不登记就会失败），也钉住「这些形状没有一个能在 `SCOPE_BY_ACTION` 里查到条目」。
 
-## 5 Research Map / 上下文包 / 六类偏移的口径（P6 落地，规则在此存档）
+## 5 Research Map / 上下文包 / 六类偏移的口径（P6 已落地，规则继续在此存档）
 
 从归档契约继承，避免 P6 重新发明或漏掉细节。
 
@@ -166,6 +169,8 @@ Core 自己只监听 `127.0.0.1`，这两个句柄都不对外。
 **Drift-check**（`POST …/drift-check`）：确定性规则，V1 不调模型（诚实记录在 FUNCTION_MAP）。每次运行先生成草稿，
 再按 `(driftType, sourceEntityId, targetEntityId)` 去重（已有 `status='open'` 的直接并入返回，不重复创建），
 最后返回全部 findings + `summary{total,info,warning,critical}`（针对本次返回的 findings）。
+**规则对照的章程取最新已批准基线的快照**（R06「后续检查绑定新基线」），尚无基线时回退到草稿行 ——
+只改草稿、不批准新基线，偏移不会消失（`research-drift.test.ts` 的绑定用例钉住这一点）。
 severity 未注明处为 `warning`：
 
 - **evidence_drift**：claim 无 `supports|partially_supports` → source=claim；`status==='confirmed'` 时 `critical`。
@@ -203,13 +208,13 @@ packages/storage/src/research-types.ts                 P5-A（P5-C 追加 8 个�
 packages/storage/src/research-in-memory.ts             P5-A（同上，P5-C 两个驱动都实现）
 packages/storage/src/sqlite-research.ts                P5-A
 packages/storage/test/research-repository-contract.ts  两驱动共用契约测试（新增方法必须两侧同语义）
-packages/api-client/src/client.ts                      P5-D1 已落地（33 条：15 读 + 18 写；测试在 test/research.test.ts）
-services/knowledge-core/src/research/**                P5-B（34 方法 façade；baselines.ts / references.ts 是 P5-C）
+packages/api-client/src/client.ts                      P5-D1＋P6-C 已落地（38 条：18 读 + 20 写；45 行 WIRE 表；测试在 test/research.test.ts）
+services/knowledge-core/src/research/**                P5-B（39 方法 façade；baselines.ts / references.ts 是 P5-C，drift.ts / map.ts / context-pack.ts 是 P6）
 services/knowledge-core/src/research/support.ts        P5-B（P5-C 把端点归属判断 `entityIsInProject` 提到这里）
 services/knowledge-core/src/services/node.ts           知识域唯一伸进 research 的一处：归档时标记引用（R03）
-services/knowledge-core/src/http/research.ts|router.ts  P5-B（P5-C 追加 6 条，P6 再追加 5 条）
-services/knowledge-core/test/research*.ts              P5-B（`research-archive.test.ts` 是 R03 的跨域面；`research-restart.test.ts` 是 P5-E 的 R08 往返）
-apps/desktop/**                                        P5-D（研究工作台面板，prop 驱动、纯展示可测；六个视图已落地，研究地图等 P6 再开）
+services/knowledge-core/src/http/research.ts|router.ts  P5-B（P5-C 追加 6 条，P6 追加 5 条 —— 共 38）
+services/knowledge-core/test/research*.ts              P5-B（`research-drift.test.ts` 是 R04/R05 的面；`research-map-context.test.ts` 是 R07 的面；`research-archive.test.ts` 是 R03 的跨域面；`research-restart.test.ts` 是 P5-E 的 R08 往返）
+apps/desktop/**                                        P5-D＋P6-C（研究工作台面板，prop 驱动、纯展示可测；九个视图已落地 —— P5 六视图 ＋ 偏移检查 / 研究地图 / 上下文包）
 docs/research-contract.md                              本文件
 ```
 
@@ -223,9 +228,9 @@ docs/research-contract.md                              本文件
 
 | ID | 本轮口径 | 状态 |
 | --- | --- | --- |
-| R01 | 研究项目全流程 Charter→RQ→Evidence→Claim→Section 可建可读可修订 | ✅ P5-B（27 端点 + domain 测试；P5-C 后端点为 33 条） |
+| R01 | 研究项目全流程 Charter→RQ→Evidence→Claim→Section 可建可读可修订 | ✅ P5-B（27 端点 + domain 测试；P6 后端点为 38 条） |
 | R02 | 五种证据关系可表示，反证与限定不被当作支持 | ✅ P5-C1：`RELATION_PAIRINGS` 钉住方向，domain 与 schema 两侧有测试 |
 | R03 | 来源删除／修改／合并安全，原始版本与复核提示可追溯 | ✅ P5-C2＋P5-C3：出处指针可空不重绑、`GET /api/research/references` 只读检查、归档时对证据与其论点打 `source_archived` 标记、恢复不误清、未接 research 不阻断归档。V1 只有「归档」，没有删除／合并，所以那两条路径尚无代码可挂（`rawSourceId` 已预留，删除落地时同一套标记即可复用） |
-| R06 | 批准章程修订：历史保留、影响对象被标记、后续检查绑定新基线 | ✅ P5-C2（append-only 版本 + 快照不可变 + 按名标记）；「后续检查绑定新基线」等 P6 的 drift-check 读 `findCharterBaseline` |
+| R06 | 批准章程修订：历史保留、影响对象被标记、后续检查绑定新基线 | ✅ P5-C2＋P6：append-only 版本 + 快照不可变 + 按名标记（P5-C2）；「后续检查绑定新基线」由 drift-check 落地 —— 规则以最新基线快照为对照（无基线回退草稿行），只改草稿不批准偏移不消失（P6，`research-drift.test.ts` 绑定用例） |
 | R08 | 重启／导出恢复后关系完整 | ✅ P5-E（`research-restart.test.ts`：桌面 profile 的双句柄布局关掉再开，13 条关系五元组、首个基线快照、pending/cleared 两种标记与出处指针逐项读回；文件复制到新路径后同样完整） |
-| R04 / R05 / R07 | 六类偏移 fixture、无 AI 诚实、上下文包给 Agent | P6 |
+| R04 / R05 / R07 | 六类偏移 fixture、无 AI 诚实、上下文包给 Agent | ✅ P6：六类规则确定性、**不调模型**（`drift.ts` 纯函数，无 IO／时钟）；demo 三个缺口逐类断言（C-03→evidence_drift warning、C-05→causality_drift critical、journal change→journal_drift warning，summary `{3,0,2,1}`）；map 聚合与 `unsupportedClaimIds`、context-pack 12 区块 markdown＝blocks（`research-drift.test.ts` 29 项、`research-map-context.test.ts` 3 项、`research-demo.test.ts` 7 项）；桌面三视图由 `research-model.test.ts` / `research-render.test.tsx` 钉住 |
