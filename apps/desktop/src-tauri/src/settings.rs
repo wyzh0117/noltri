@@ -20,6 +20,9 @@ pub const MAX_CAPTURE_TEXT_LENGTH: usize = 40_000;
 pub const PREVIEW_CHARS: usize = 280;
 /// Consecutive permanent failures for one app before it is recorded as 「不完全兼容」 (V1 §11.4).
 pub const INCOMPATIBLE_AFTER: u32 = 3;
+/// The 知序 MCP server's endpoint — its own HTTP port (`MCP_PORT` default 8790), where the
+/// bundled `mcp-server.mjs` listens in installed mode and where the README's dev setup points.
+pub const DEFAULT_MCP_ENDPOINT: &str = "http://127.0.0.1:8790/mcp";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -69,7 +72,9 @@ impl Default for Settings {
     fn default() -> Self {
         let base = env_or("NOLTRI_API_BASE_URL", "http://localhost:8787");
         Self {
-            mcp_endpoint: env_or("NOLTRI_MCP_ENDPOINT", &format!("{base}/mcp")),
+            // The MCP endpoint is the mcp-server's own port (`MCP_PORT` default 8790), not a
+            // path on Core — Core does not serve /mcp (README 启动 MCP 服务器一节).
+            mcp_endpoint: env_or("NOLTRI_MCP_ENDPOINT", DEFAULT_MCP_ENDPOINT),
             api_base_url: base,
             api_token: env_or("NOLTRI_ACCESS_TOKEN", ""),
             min_selection_length: SCHEMA_MIN_TEXT_LENGTH.max(12),
@@ -183,7 +188,7 @@ fn sanitise(mut settings: Settings) -> Settings {
         settings.api_base_url = Settings::default().api_base_url;
     }
     if settings.mcp_endpoint.trim().is_empty() {
-        settings.mcp_endpoint = format!("{}/mcp", settings.api_base_url);
+        settings.mcp_endpoint = DEFAULT_MCP_ENDPOINT.to_string();
     }
     settings.min_selection_length = settings.min_selection_length.max(SCHEMA_MIN_TEXT_LENGTH);
     settings

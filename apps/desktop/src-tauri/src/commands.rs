@@ -4,7 +4,7 @@
 //! `core:default` + global-shortcut: the webviews only `listen()` and call these commands.
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::accessibility::ax::{self, Rect};
 use crate::accessibility::observer::{self, Probe, CAPTURE_RESULT_EVENT, SELECTION_CHANGED_EVENT};
@@ -699,6 +699,9 @@ pub struct RuntimeInfo {
     pub config_dir: String,
     pub trusted: bool,
     pub shortcut: String,
+    /// Who owns the local Core this session: `external` / `dev-manual` / `managed` /
+    /// `starting` / `failed: …`. Purely diagnostic — no UI reads it yet.
+    pub core_runtime: String,
 }
 
 #[tauri::command]
@@ -710,6 +713,10 @@ pub fn runtime_info(app: AppHandle, state: State<'_, SharedState>) -> Result<Run
         .map(|dir| dir.display().to_string())
         .unwrap_or_default();
     let package = app.package_info();
+    let core_runtime = app
+        .try_state::<crate::runtime::CoreRuntimeHandle>()
+        .map(|handle| handle.status().label())
+        .unwrap_or_else(|| "unknown".to_string());
     Ok(RuntimeInfo {
         app_name: package.name.clone(),
         bundle_id: Some(app.config().identifier.clone()),
@@ -717,7 +724,29 @@ pub fn runtime_info(app: AppHandle, state: State<'_, SharedState>) -> Result<Run
         config_dir,
         trusted: ax::is_trusted(false),
         shortcut: guard.settings.global_shortcut.clone(),
+        core_runtime,
     })
+}
+
+/// M05: the installed app's own registration entry for the browser capture channel.
+#[tauri::command]
+pub async fn browser_host_status(app: AppHandle) -> Result<crate::browser_host::BrowserHostStatus, String> {
+    crate::browser_host::status(&app).await
+}
+
+#[tauri::command]
+pub async fn browser_host_repair(
+    app: AppHandle,
+    extension_ids: Vec<String>,
+    browser: String,
+    confirm: bool,
+) -> Result<String, String> {
+    crate::browser_host::repair(&app, &extension_ids, &browser, confirm).await
+}
+
+#[tauri::command]
+pub async fn browser_host_uninstall(app: AppHandle, browser: String) -> Result<String, String> {
+    crate::browser_host::uninstall(&app, &browser).await
 }
 
 #[cfg(test)]

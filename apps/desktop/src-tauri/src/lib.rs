@@ -7,10 +7,14 @@
 //!    Manager down with it — a broken capture rung must never hide the diagnostics that explain it.
 //! 3. Keep the floating windows and the 知识工作台 alive for the whole session (created once,
 //!    shown/hidden) and track overlay focus, so the observer never reads the pill's own text field.
+//! 4. In packaged builds, own the bundled Knowledge Core runtime: probe the port, spawn the
+//!    sidecar when it is silent, and kill only the child this process started (`runtime.rs`).
 
+mod browser_host;
 mod commands;
 mod mcp;
 mod overlay;
+mod runtime;
 mod settings;
 mod state;
 mod time;
@@ -98,6 +102,8 @@ fn is_configured_shortcut(app: &AppHandle, fired: &tauri_plugin_global_shortcut:
 pub fn run() {
     let observer = Arc::new(Observer::default());
     let observer_for_exit = observer.clone();
+    let runtime = Arc::new(runtime::CoreRuntimeHandle::default());
+    let runtime_for_setup = runtime.clone();
 
     let builder = tauri::Builder::default()
         .plugin(
@@ -109,6 +115,7 @@ pub fn run() {
                 })
                 .build(),
         )
+        .plugin(tauri_plugin_shell::init())
         .manage(observer.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -124,6 +131,7 @@ pub fn run() {
             let capture_enabled = initial.settings.capture_enabled;
             let shared = SharedState::new(initial);
             app.manage(shared.clone());
+            app.manage(runtime_for_setup.clone());
 
             if capture_enabled {
                 match observer.start(handle.clone(), shared.clone()) {
@@ -154,6 +162,9 @@ pub fn run() {
             if let Err(error) = windows::create_workbench(&handle) {
                 eprintln!("[noltri] 知识工作台窗口创建失败: {error}");
             }
+
+            // Core ownership: probe first, spawn the bundled runtime only in packaged builds.
+            runtime::start(handle.clone(), runtime_for_setup);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -216,12 +227,16 @@ pub fn run() {
             commands::record_capture_outcome,
             commands::dismiss_overlay,
             commands::runtime_info,
+            commands::browser_host_status,
+            commands::browser_host_repair,
+            commands::browser_host_uninstall,
         ]);
 
     match builder.build(tauri::generate_context!()) {
         Ok(app) => app.run(move |_app_handle, event| {
             if matches!(event, RunEvent::Exit) {
                 observer_for_exit.stop();
+                runtime.stop();
             }
         }),
         // A failure here is a broken config or a missing frontend bundle. Say what and why on
