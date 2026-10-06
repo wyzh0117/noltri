@@ -74,6 +74,61 @@ MCP 端到端验证（需要 core 在 8787 运行）：
 pnpm --filter @noltri/mcp-server run verify
 ```
 
+## 安装版（macOS · 知序 Companion）
+
+V1 的交付产物是 `知序 Companion.app` 与 `知序 Companion_0.1.0_aarch64.dmg`（Apple Silicon／arm64；
+本机实测构建；sha256、签名与验收细节见 `docs/Noltri_V1_P8_Delivery_Report.html`）。安装版
+**自带运行环境**：不需要 Node / pnpm / Rust，不需要云凭据，也不需要开终端。
+
+**使用**：挂载 dmg → 把 App 拖进「应用程序」→ 打开。首屏是 Setup Manager（捕获与连接）；
+「打开知识工作台」进入收件箱、知识库（三栏知识树 + 节点对话）与研究工作台等视图。App 启动时
+自己带起两个本机服务——Knowledge Core（`127.0.0.1:8787`，本机 SQLite 知识库）与 MCP 服务器
+（`127.0.0.1:8790/mcp`，供本机 Agent 客户端连接）；App 是这两个服务的唯一管理者，正常退出随带
+停掉，且只杀自己拉起的进程（若 8787 上已有别的知序 Core，会识别为外部运行时直接使用）。
+
+**离线模式**：默认即离线（`AI_PROVIDER=offline`）——不配置任何模型密钥也能采集、落盘、人工归档、
+全文搜索与结构检查；未接模型时界面如实显示。安装版按设计不保存第三方模型凭据，BYOK 目前只走
+开发版（服务端环境变量）。
+
+**数据位置**（`~/Library/Application Support/com.noltri.companion/`）：
+
+| 路径 | 内容 |
+| --- | --- |
+| `noltri.sqlite`（+ `-wal` / `-shm`） | 知识库本体（SQLite WAL 模式；schema 版本见 `/api/health`） |
+| `host/noltri-native-host` | 浏览器采集通道入口脚本（由 Setup Manager 写入／可修复覆盖） |
+| `grants.json` | 本机客户端授权表（启用后才有；只存 SHA-256 摘要） |
+| `native-host.json` | Native Host 端点文件（组位／他人位非 0 会被拒绝读取） |
+
+**权限**：读取其它应用的选区需要「系统设置 → 隐私与安全性 → 辅助功能」授权——未授权时选区捕获
+不可用，但仍可用手动粘贴窗，界面如实显示状态、不循环弹窗。浏览器采集通道的注册写入
+（Chrome / Edge / Brave / Firefox）在点确认前只显示预览，不落盘。
+
+**备份与恢复**：退出 App 后，整份复制 `~/Library/Application Support/com.noltri.companion/`；
+**必须带上 `noltri.sqlite-wal`**（退出路径是杀进程收尾，WAL 可能尚未合并进主文件，只复制
+`noltri.sqlite` 会丢最近写入）。恢复＝把目录放回原位再启动。也可以用 SQLite 的 `.backup` 做
+一致性快照（实测：快照在新路径可直接打开并读回同一数据）。
+
+**故障处理**：
+
+- 知识库自检：`sqlite3 "$HOME/Library/Application Support/com.noltri.companion/noltri.sqlite" "PRAGMA integrity_check;"`
+- 服务健康：`curl http://127.0.0.1:8787/api/health`（返回真实身份声明，`productId=noltri-knowledge-core`）
+- 8787 / 8790 被占用时安装版**不会**自动换端口：App 会显示 Core 未就绪；退出占用端口的程序再重开
+  （占用者是另一个知序 Core 时自动识别为外部运行时）。
+- 浏览器通道入口失效（移动 App／换机器后）：Setup Manager 的「浏览器通道」区一键修复，重写 launcher。
+
+**从源码构建安装包**：
+
+```bash
+pnpm install
+# 1) 备好随包运行时（不随仓库提交，见 .gitignore）：把官方 Node v24.18.0（darwin-arm64）的 bin/node
+#    复制为 apps/desktop/src-tauri/binaries/noltri-runtime-aarch64-apple-darwin
+# 2) 打包（beforeBuildCommand 会先跑 build:runtime，把四个 Node 入口打成单文件 ESM 进 src-tauri/resources/）
+cd apps/desktop && pnpm tauri build     # 产物：src-tauri/target/release/bundle/{macos,dmg}
+```
+
+当前签名状态（如实）：本机 0 个 Developer ID，产物是 ad-hoc 签名、**未公证**——首次打开需要在
+「隐私与安全性」放行；对外分发前需先补正式签名与公证。
+
 ## 环境变量
 
 | 变量 | 取值 | 说明 |
@@ -159,8 +214,8 @@ curl -s -X POST http://127.0.0.1:8787/api/admin/grants/<id>/revoke \
 
 ## 验证状态（诚实边界）
 
-以下能力有自动化测试或运行时证据支撑；凡未列出的（真实浏览器加载扩展、桌面 GUI 实机
-运行、真实模型调用、桌面打包签名）均未验证，详见 `FUNCTION_MAP.md`
+以下能力有自动化测试或运行时证据支撑；凡未列出的（真实浏览器加载扩展、真实模型调用、
+正式签名与公证、Setup 面板交互等）均未验证，详见 `FUNCTION_MAP.md`
 的「后续实现」。
 
 P3 的边界要说清楚：Native Messaging host 的协议、身份门禁、幂等与安装器由 135 项测试＋
@@ -178,3 +233,12 @@ P7 的边界：云依赖清理已做到运行依赖层——`apps/web`、Supabas
 workspace／锁文件引用全部删除；审计线索词只剩归档引用、拒绝样例与历史文档（已列入 P7 报告
 的允许清单）。干净 clone 验证（`git clone` → `pnpm install --frozen-lockfile` → `pnpm test`
 → 桌面 `vite build`）在 P7 提交上实测通过。
+
+P8 的边界（安装包与实机验收）：`.app`／`.dmg` 在本机实机构建并完成冷启动验收——从挂载的 dmg
+运行，随包运行时（官方 Node v24.18.0）拉起 Core :8787 与 MCP :8790；采集一条原文后**强杀全部
+进程**（WAL 580 KB 未合并）再重启，原文／知识点／节点计数与收件箱读回一致；SQLite `.backup`
+快照放到新路径读回同一数据；100 次同键重复提交只落 1 行。签名是 **ad-hoc**（本机 0 个
+Developer ID）、**未公证**——`spctl` 评估为 rejected，属预期，对外分发前必须先解决。辅助功能
+权限未授权，选区捕获／胶囊／快捷键仍未实机点验；浏览器通道注册仍只做过预览写入（未对浏览器
+目录落盘）；BYOK 未接入安装版。安装版**未测**：磁盘不足／只读目录、8787／8790 被占用时的
+表现、从旧版本升级覆盖安装、1 万条量级的查询性能。

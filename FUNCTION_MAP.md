@@ -23,9 +23,9 @@
 - **浏览器 Native Host（P3-C，`services/native-host`，135 项测试＋真实 stdio 实测）**：Chrome Native Messaging 4 字节小端长度前缀＋ UTF-8 JSON，单帧 1 MiB 上限；只接受 `hello｜health｜capture｜capture_batch` 四个动词，其它（如 `export_all`）一律 `forbidden_scope` 拒绝且**不回显载荷**；单条消息最多 4 次采集，超限明确说「这条消息不符合采集要求」而不是「不执行 capture_batch」；转发前逐条重新核验 Core 身份（`productId`＋`protocolVersion`＋`instanceId` 变化＝App 重启）；stdout 只承载协议帧，任何日志走 stderr；回复严格按请求顺序串行写出
 - **Native Host 注册与撤销（P3-C）**：`install-cli.ts` 先打印可读预览（写入位置、host 程序、允许的扩展 origin），**只有 `--confirm` 才写文件**；已存在的 manifest 先备份为 `.before-<时间戳>.bak` 再覆盖，`uninstall` 恢复备份而不是直接删；`allowed_origins` 只收 `/^[a-p]{32}$/` 的扩展 id，列表为空即拒绝生成（不写出通配）。Windows 需要注册表键，安装器**拒绝代改**并说明手动步骤。凭据绝不出现在预览里
 - **端点身份门禁（P3-C）**：地址与凭据的来源优先级是 `~/.noltri/data/native-host.json`（读取前先按文件 mode 判定，组位或他人位非 0 即视为不安全并拒绝使用）> `NOLTRI_API_BASE_URL` / `NOLTRI_API_TOKEN` > 默认 `http://127.0.0.1:8787`。「端口上有 JSON」或「`{"ok":true}`」都不足以判定是本项目服务：productId 不符 → `core_identity_mismatch`「这个端口上运行的不是知序 Noltri Core，内容没有发送」；契约不符 → 不确认落盘。实测两个诱捕服务各自 `POST /api/capture` 计数为 0
-- 桌面 Companion macOS Accessibility 选区捕获（Rust AX 轮询观察者；8 项 Rust 测试、cargo check 通过；**GUI 未实机运行，TCC 授权流程未实测**）
-- 桌面 Companion 浮动捕获胶囊（overlay 窗口 + 前端；Setup/捕获侧 22 项前端测试、vite 构建通过；**未实机运行**）
-- 桌面 Companion 全局快捷键 → 粘贴式迷你捕获窗降级（Rust 快捷键注册 + paste 窗口；同上，**未实机运行**）
+- 桌面 Companion macOS Accessibility 选区捕获（Rust AX 轮询观察者；8 项 Rust 测试、cargo check 通过；P8 已实机冷启动安装版，**选区捕获的 TCC 授权流程与真机交互仍未实测**）
+- 桌面 Companion 浮动捕获胶囊（overlay 窗口 + 前端；Setup/捕获侧 22 项前端测试、vite 构建通过；**未实机点验**）
+- 桌面 Companion 全局快捷键 → 粘贴式迷你捕获窗降级（Rust 快捷键注册 + paste 窗口；同上，**未实机点验**）
 - 桌面 Companion 捕获管线前端流 `runCaptureFlow`：契约校验 → ApiClient 捕获 → 结果/失败文案 → `recordCaptureOutcome`（`apps/desktop/test/capture-contract.test.ts` 5 项覆盖：payload 无身份字段、短文本本地拒绝不发包、原文已保存的 AI 失败提示、成功路径节点路径展示）
 
 ### Knowledge Core（224 项测试 + 本地 HTTP 实测闭环 + SQLite 纵向切片 + 真实 stdio Agent 实测）
@@ -68,14 +68,17 @@
 - `apps/web`（Next.js 16 三栏知识树 + `/api/web/*` 代理，28 项测试 + next build）与 Web 时代的 Supabase 装配（登录、cookie 会话、SSR）已随 P7 云依赖清理整体删除；归档留在 `ad1d0c6`（`origin/feature/research-v1`）。迁入桌面工作台的功能见上一节。
 - P2 的 Web↔桌面对等脚手架（`apps/desktop/test/workbench-render.test.tsx` 前半）随删除一并移除；该文件保留「V1 词汇」断言（树行文案、`role="treeitem"`、选中态类名），仍是桌面工作台渲染的回归证据。
 
-### Desktop Companion、Setup Manager 与知识工作台（183 项前端测试 + 23 项 Rust 测试；Companion/Setup GUI 未实机运行，工作台已用浏览器驱动 dist 产物实机回归）
-- Tauri 2 壳与原生能力层（29 个 `#[tauri::command]` 全部注册；TS 侧 `lib/tauri.ts` 调用其中 27 个，`get_selection_preview` 与 `runtime_info` 已注册但前端尚未调用；2 个事件名 `selection-changed`／`capture-result`，共 3 处 `emit`；`cargo check` 与 `cargo test`（23 项全通过）实测）
+### Desktop Companion、Setup Manager 与知识工作台（183 项前端测试 + 28 项 Rust 测试；安装版已实机冷启动，Companion 捕获交互与 Setup 面板点验仍未实机，工作台已用浏览器驱动 dist 产物实机回归）
+- Tauri 2 壳与原生能力层（32 个 `#[tauri::command]` 全部注册；TS 侧 `lib/tauri.ts` 调用其中 30 个，`get_selection_preview` 与 `runtime_info` 已注册但前端尚未调用；2 个事件名 `selection-changed`／`capture-result`，共 3 处 `emit`；`cargo check` 与 `cargo test`（28 项全通过）实测）
 - macOS Accessibility 权限状态检测与引导（状态展示 + 打开系统设置 + 「我已授权」重新检查）
 - Setup Manager Capture 状态区：观察者状态、捕获总开关、最小长度、测试选区捕获、按应用退出（opt-out chips）、不兼容应用列表与重试、最近收纳记录
 - **Agent 支持矩阵（P4-B，M06）**：7 张卡片（Claude Desktop / Claude Code / ChatGPT‑Codex / Cursor / Hermes / Qoder / 其他 MCP Client），每张分别报告**检测**（`.app` bundle 是否存在、`Info.plist` 版本号）、**支持状态**（`writable` 可代写配置／`guided` 仅引导／`unverified` 未验证需人工配置）、**配置路径**、**连接方式**、**权限**。只有 Claude 家族的 JSON 文件会被代写；Codex 是 TOML、Cursor 与其它客户端一律引导；Hermes／Qoder 检测到安装也**不给写路径、不给伪造 URL**，界面文案是「验证前不显示为已连接」。`agentRows()` 对未知的 support 值降级为「未验证」而不是「已支持」，`official_settings_url`／`docs_url` 只在真实官方地址已知时才出现（M06「不能伪造已连接」）
 - **配置预览 → 备份 → 原子替换 → 可撤销卸载（P4-C，M02）**：写入前由系统确认框给出**绝对路径＋合并摘要＋这份授权的说明**（`summarizeMerge` 说明会替换哪一项、保留哪几项兄弟配置、原文件将先备份）；取消确认时**刚签发的凭据同步撤销**，不留一份没人知道的授权。`write_text_atomically` 先把旧文件复制成 `<file>.noltri-backup.<时间戳>` 再 `rename`，**备份失败即中止写入**，连续两次写各自留一份备份（新的不会盖掉旧的），`list_backups` 只列本应用命名的备份文件（用户手制的 `.bak` 不会被冒充成可撤销点），`restore_backup` 拒绝恢复非本应用所有、或不在目标文件同目录的文件，且恢复动作本身又先备份一次因此**撤销恢复也是可撤销的**。卸载 `removeServerEntry` 只摘自家条目：兄弟服务器／键顺序／未知字段全部保留，**重复安装产出逐字节相同的文档**（幂等），文档不是 JSON 或没有 `mcpServers` 位即拒绝动笔，已存在的自家条目解析失败也拒绝覆盖；卸载成功后同时撤销该客户端仍然生效的授权
 - **连接中心：授权与写入验证（P4-D，M01／M03／M04／§435）**：一次配置写入同时签发**该客户端专属**的可撤销凭据（`capture+read` 或勾选「只写采集」＝仅 `capture`），界面在签发前显示这份授权到底给了什么（`describeGrant`：scope · 项目范围 · 片段上限 · 生效中／已撤销）；§435 的隐私边界原文写在授权步骤上（「MCP 通信在本机，并不保证 Agent 的推理也在本机…」）；三项选项（只写采集／限制项目／限制返回片段）中互相矛盾的组合在**签发前**就被指出（`grantOptionConflict`），非法片段上限（非整数、越界）不静默丢弃而是挡住写入按钮；项目复选框上限 100 项与 Core 的拒绝阈值取自同一个导出常量。「写入验证完成」按 §433 只由**探针** earn：以该客户端凭据 capture 一条带 nonce 标记的原文 → 经收件箱单条端点读回同一 `rawSourceId` → 检索命中并报告归类位置，任一步失败就不给出「完成」；另有「检查 Agent 是否已写入」按钮，用同一 nonce 的 B 标记判断 Agent 自己是否真的调过工具。凭据明文只在签发响应里出现一次，撤销按钮随时可撤
-- 原生时间工具（UTC ISO-8601，Hinnant 算法）；`cargo test` 实测 23 项全通过：配置写入／备份／卸载守卫 13（`mcp`）、文档形状与 removal 边界 4（`commands`）、设置约束 3、时间形状 3
+- 原生时间工具（UTC ISO-8601，Hinnant 算法）；`cargo test` 实测 28 项全通过：配置写入／备份／卸载守卫 13（`mcp`）、文档形状与 removal 边界 4（`commands`）、随包运行时状态与停止 3（`runtime`）、浏览器通道 launcher／守卫 2（`browser_host`）、设置约束 3、时间形状 3
+- **随包运行时托管（P8-B／P8-C）**：官方 Node v24.18.0（sha256 `ee6fb0e0…`）以 sidecar 形式随包携带（`binaries/noltri-runtime-aarch64-apple-darwin`），一鱼三吃——App 启动时用它拉起 `core-server.mjs`（`STORAGE_DRIVER=sqlite`＋`NOLTRI_DATA_DIR`＝App 数据目录）与 `mcp-server.mjs`（`KNOWLEDGE_API_URL=:8787` 指回 Core），浏览器 launcher 也指向它。就绪判定＝两侧探针（Core 验 `productId`＋`instanceId`，MCP 验 `/healthz`），500ms 间隔、20s 超时；退出只杀自己拉起的进程，dev 模式不拉起。实测：随包运行时冷启动到可应答 Core 273ms／MCP 139ms；从挂载的 dmg 完整冷启动在数秒内两侧就绪、退出后端口关闭。`runtime_info` 命令输出 `core_runtime` 诊断（前端未调用）
+- **安装包（P8-B）**：`pnpm tauri build` 产出 `知序 Companion.app`（133.57 MiB）与 `知序 Companion_0.1.0_aarch64.dmg`（43.37 MiB，sha256 `b94ad7e4…`）；arm64、最低 macOS 11；ad-hoc 签名、未公证（本机无 Developer ID，`spctl` rejected 属预期）；包内 strings 扫描 0 处开发目录引用
+- **浏览器通道（P8-C，M05）**：launcher（`host/noltri-native-host`，指向随包运行时而非开发目录）写入 App 数据目录并提供 status／repair／uninstall 三命令＋设置面板区块；实测经 4 字节长度帧协议调起随包 host 并回报 Core 身份；注册写入仍先预览后确认（未对浏览器目录落盘）
 
 #### 知识工作台（P2 迁入，`apps/desktop/src/workbench/`）
 - 独立 WebView 入口 `workbench.html`：`WebviewWindowBuilder` 在 setup 阶段一次性 hidden 预建（1280×820，最小 940×600，居中），`open_workbench_window` 只做 `show()` + `set_focus()`；关闭事件 `prevent_close()` + `hide()`，因此窗口不会被销毁、随时可再打开（Rust 生命周期；**未实机运行**，前端行为以浏览器驱动 dist 产物实机回归覆盖）
@@ -116,13 +119,13 @@
 - Native Host 的注册（`install-cli.ts install --confirm`）本轮**只做过预览与临时 HOME 下的写入测试**，没有对用户真实浏览器目录执行过写入；`~/Library/Application Support/Google/Chrome/NativeMessagingHosts` 保持原样
 - Windows 的 host 注册需要注册表键，安装器**拒绝代改**，而手动导入的 `.reg` 样本与步骤文档**尚未编写**
 - 桌面 Companion 实机运行：TCC 辅助功能授权流程、胶囊/粘贴窗/快捷键真机交互、MCP 配置写入真实客户端配置文件
-- **Setup Manager 连接中心的面板没有在真实应用窗口里点过**：Agent 矩阵、授权选项、确认框文案、备份列表与恢复按钮都只有单元／契约层证据（137 项前端测试＋23 项 Rust 测试），`vite build` 通过；本轮**未运行 `tauri dev`、未打包**，因此也未对用户真实 Claude 配置文件执行过写入
+- **Setup Manager 连接中心的面板没有在真实应用窗口里点过**：Agent 矩阵、授权选项、确认框文案、备份列表与恢复按钮都只有单元／契约层证据（137 项前端测试＋28 项 Rust 测试），`vite build` 通过；P8 已实机冷启动安装版并截图 Setup Manager（AX 未授权边界如实显示），但上述面板仍未实际点验，也未对用户真实 Claude 配置文件执行过写入
 - **M03 的「指定可用 Agent」一支是通过真实 stdio MCP 进程 × 真实 Core 证明的**（握手＋`tools/list`＋写入＋读回＋撤销，见 `docs/P0-baseline-and-recovery.md` §15.5），**不是**在 Claude Desktop 的界面里点出来的；第三方 Agent 客户端的 UI 行为本轮未验证
-- **「复制 MCP 条目」按钮仍沿用设备凭据**（不可撤销、不受片段上限约束），界面已把这句话写在按钮旁，但要彻底去掉这条后门路径需要客户端配置写入全部走「签发→写入」，属 M05／P8 打包阶段的收尾项
-- M05「安装包路径更新」：未打包，因此「注册入口仍可启动或被 Setup 修复、不指向旧开发目录」这一条**尚未验证**
-- 桌面打包与签名（dmg / notarization）
-- SQLite 本地库在安装版内的实机闭环：Tauri 启动、冷启动、异常退出后重启、磁盘不足／目录只读（当前只有 Node 侧文件库测试，异常退出已由 `SIGKILL` 用例覆盖 WAL 重放，但**未打包、未双击运行**，磁盘不足／只读目录未测）
-- `node:sqlite` 为实验性 API：打包时携带的 Node 版本、`ExperimentalWarning` 的处理与 `better-sqlite3` 替代路径**均未实测**
+- **「复制 MCP 条目」按钮仍沿用设备凭据**（不可撤销、不受片段上限约束），界面已把这句话写在按钮旁；要彻底去掉这条后门路径需要客户端配置写入全部走「签发→写入」，P8 未改这条通路，仍是后续收尾项
+- **M05 已由 P8 验证**：launcher（`host/noltri-native-host`，指向随包运行时而非开发目录）写入 App 数据目录后，经 4 字节长度帧协议实测调起随包 host 并回报 Core 身份（`productId`／`instanceId`）；包内 strings 扫描 0 处开发目录引用。「被 Setup 修复」由 repair 命令＋单元测试覆盖、界面区块已就位；注册写入仍未对浏览器目录落盘（见上一条 nativeMessaging 决定）
+- 桌面打包已完成（P8：`.app`／`.dmg`、arm64、ad-hoc 签名）；**notarization 仍欠**——本机无 Developer ID，对外分发前必须补正式签名与公证
+- **SQLite 安装版实机闭环（P8 已验）**：从挂载的 dmg 冷启动（随包运行时拉起 Core／MCP）、强杀全部进程后重启（WAL 580 KB 未合并 → 重放后计数与原文一致）、SQLite `.backup` 备份快照在新路径读回同一数据、100 次同键重复提交只落 1 行；**未测**：磁盘不足、只读目录、8787／8790 被占用时的表现、从旧版本升级覆盖安装
+- `node:sqlite` 随包 Node v24.18.0 实测：模块加载与 Core／MCP 进程运行**均无 `ExperimentalWarning` 输出**；`better-sqlite3` 替代路径未采用（无必要）
 - 真实模型调用（BYOK 网关）下的抽取/嵌入/对话质量验证
 - 知识工作台未进 WebView 截图：本轮以浏览器驱动 **dist 构建产物**（`vite preview`，非 `tauri dev`）完成 P2 实机回归，页面与 Tauri 加载的是同一份 bundle，但**窗口显示/隐藏、`close` 拦截、设置持久化等 Tauri 专有路径仍未实机运行**
 - 工作台「重试归纳」「移动节点（拖拽）」「写摘要」三条写路径本轮**只在契约与单元测试层验证**，实机回归未触发（实机场景已覆盖重复归档的 conflict 提示与重命名）
@@ -132,10 +135,10 @@
 ### V1 收尾项
 - 发布物整理：扩展打包产物上架准备、桌面 dmg、部署文档
 - **P3 已交付（协议、幂等、降级队列、Native Host、身份门禁、安装器）；仍欠的一步是扩展的 `nativeMessaging` 权限与 host 路径接线**——它替用户向浏览器领新权限，必须用户点头后单独完成，随后才谈得上真实 Chrome 加载验收
-- **P4 已交付（stdio 握手、Agent 矩阵、备份／幂等／可撤销卸载、每客户端授权与 scope、写入验证探针、§435 隐私边界与三项授权选项）；仍欠的是 M05 打包路径与在真实 Agent 客户端／真实应用窗口里的点验**（见上两条）
+- **P4 已交付（stdio 握手、Agent 矩阵、备份／幂等／可撤销卸载、每客户端授权与 scope、写入验证探针、§435 隐私边界与三项授权选项）；M05 打包路径已由 P8 收尾；仍欠的是在真实 Agent 客户端／真实应用窗口里的点验**（见上两条）
 - **P5／P6 已交付（Research 整合与偏移检查）**：schema、双驱动 storage、39 方法门面、**38 条端点**、api-client 38 个类型化调用、桌面九视图、demo 种子与 R08 往返；六类偏移检查（确定性、不调模型）、研究地图与上下文包落地 —— R01／R02／R03／R06／R08 之外，R04／R05／R07 补齐。仍欠：研究端点对 Agent 客户端的授权面按设计关闭 —— 开启前必须先让 §435 的片段上限覆盖研究文本（契约 §4）
 - **P7 已交付（云依赖清理）**：`apps/web`、Supabase 驱动与迁移 SQL、云 env、workspace／锁文件引用全部删除；审计线索词只剩允许清单（归档引用／拒绝样例／历史文档）；干净 clone 安装／测试／构建桌面包通过（68 文件 / 1110 项，0 skip）。报告：`docs/Noltri_V1_P7_Delivery_Report.html`
-- P8 安装包、签名／notarization 与最终实机验收
+- **P8 已交付（安装包与最终实机验收）**：随包运行时托管（Core／MCP／Native Host launcher）、`.app`／`.dmg` 构建、M05 验证、冷启动／异常退出／备份恢复／重复提交实机验收、最终报告 `docs/Noltri_V1_P8_Delivery_Report.html`；仍欠：公证（本机无 Developer ID）、从旧版本升级覆盖安装、端口占用／磁盘不足／只读目录的实机演练、真实模型调用（BYOK 网关）
 
 ### V2（已确认，未开始）
 - 完整溯源视图
