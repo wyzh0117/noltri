@@ -1,38 +1,102 @@
 import { z } from 'zod';
 import {
   apiErrorSchema,
+  approveCharterRequestSchema,
   assignSourceRequestSchema,
   assignSourceResponseSchema,
   captureRequestSchema,
   captureResultSchema,
+  charterBaselineResponseSchema,
+  charterRequestSchema,
+  charterResponseSchema,
+  charterVersionListResponseSchema,
+  charterVersionSchema,
+  claimListResponseSchema,
+  claimSchema,
   conversationListResponseSchema,
   conversationMessagesResponseSchema,
-  healthResponseSchema,
+  createClaimRequestSchema,
+  createEntityRelationRequestSchema,
+  createEvidenceRequestSchema,
+  createResearchChangeRequestSchema,
+  createResearchDecisionRequestSchema,
+  createResearchProjectRequestSchema,
+  createResearchQuestionRequestSchema,
+  createSectionRequestSchema,
+  createTimelineEventRequestSchema,
+  deleteRelationResponseSchema,
+  entityRelationSchema,
+  evidenceListResponseSchema,
+  evidenceSchema,
   grantListResponseSchema,
+  healthResponseSchema,
   inboxResponseSchema,
   issueGrantRequestSchema,
   issueGrantResponseSchema,
   knowledgeNodeSchema,
+  manuscriptSectionSchema,
   moveNodeResponseSchema,
   nodeChatResponseSchema,
   nodeContextSchema,
   nodeDetailSchema,
+  patchClaimRequestSchema,
+  patchEvidenceRequestSchema,
+  patchResearchProjectRequestSchema,
+  patchResearchQuestionRequestSchema,
+  patchSectionRequestSchema,
   rawSourceSchema,
+  relationListResponseSchema,
   RETRYABLE_ERROR_CODES,
+  researchChangeListResponseSchema,
+  researchChangeSchema,
+  researchCharterSchema,
+  researchDecisionListResponseSchema,
+  researchDecisionSchema,
+  researchProjectListResponseSchema,
+  researchProjectSchema,
+  researchQuestionListResponseSchema,
+  researchQuestionSchema,
+  researchReferenceQuerySchema,
+  researchReferenceResponseSchema,
+  researchReviewMarkSchema,
   revokeGrantResponseSchema,
+  reviewMarkListResponseSchema,
   searchResponseSchema,
+  sectionListResponseSchema,
+  timelineEventSchema,
+  timelineListResponseSchema,
   treeResponseSchema,
+  type ApproveCharterRequest,
   type AssignSourceRequest,
   type AssignSourceResponse,
   type CaptureRequest,
   type CaptureResult,
+  type ChangeListQuery,
+  type CharterRequest,
+  type CharterVersion,
+  type Claim,
+  type ClaimListQuery,
   type Conversation,
   type ConversationMessage,
+  type CreateClaimRequest,
+  type CreateEntityRelationRequest,
+  type CreateEvidenceRequest,
+  type CreateResearchChangeRequest,
+  type CreateResearchDecisionRequest,
+  type CreateResearchProjectRequest,
+  type CreateResearchQuestionRequest,
+  type CreateSectionRequest,
+  type CreateTimelineEventRequest,
+  type DeleteRelationResponse,
+  type EntityRelation,
+  type Evidence,
+  type EvidenceListQuery,
   type HealthResponse,
   type InboxResponse,
   type IssueGrantRequest,
   type IssueGrantResponse,
   type KnowledgeNode,
+  type ManuscriptSection,
   type MoveNodeRequest,
   type MoveNodeResponse,
   type NodeChatRequest,
@@ -40,11 +104,27 @@ import {
   type NodeContext,
   type NodeContextRequest,
   type NodeDetail,
+  type PatchClaimRequest,
+  type PatchEvidenceRequest,
   type PatchNodeRequest,
+  type PatchResearchProjectRequest,
+  type PatchResearchQuestionRequest,
+  type PatchSectionRequest,
   type PublicGrant,
   type RawSource,
+  type RelationListQuery,
+  type ResearchChange,
+  type ResearchCharter,
+  type ResearchDecision,
+  type ResearchProject,
+  type ResearchQuestion,
+  type ResearchReferenceMatch,
+  type ResearchReferenceQuery,
+  type ResearchReviewMark,
+  type ReviewMarkListQuery,
   type SearchRequest,
   type SearchResponse,
+  type TimelineEvent,
   type TreeQuery,
   type TreeResponse,
 } from '@noltri/schema';
@@ -72,6 +152,37 @@ export const apiRoutes = {
   conversationMessages: (id: string) => `/api/conversations/${encodeURIComponent(id)}/messages`,
   grants: '/api/admin/grants',
   grantRevoke: (id: string) => `/api/admin/grants/${encodeURIComponent(id)}/revoke`,
+  /**
+   * `/api/research/*` (research contract §1). Two shapes a caller must keep apart: the project-scoped
+   * collection (`researchEvidence(projectId)`) and the row-scoped patch (`researchEvidenceItem(id)`) —
+   * the Core routes them differently, so a mix-up answers `not_found` instead of the row the caller meant.
+   *
+   * None of these paths has a `SCOPE_BY_ACTION` entry, so a 本地客户端授权 grant is refused before it
+   * reaches the handler; the desktop workbench calls them with the device credential.
+   */
+  researchProjects: '/api/research/projects',
+  researchProject: (id: string) => `/api/research/projects/${encodeURIComponent(id)}`,
+  researchCharter: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/charter`,
+  researchCharterApprove: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/charter/approve`,
+  researchCharterVersions: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/charter/versions`,
+  researchCharterBaseline: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/charter/baseline`,
+  researchReviewMarks: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/review-marks`,
+  researchReviewMarkClear: (id: string) => `/api/research/review-marks/${encodeURIComponent(id)}/clear`,
+  /** The one research route with no project in its path: a 出处 can be cited by several projects (R03). */
+  researchReferences: '/api/research/references',
+  researchQuestions: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/questions`,
+  researchQuestion: (id: string) => `/api/research/questions/${encodeURIComponent(id)}`,
+  researchEvidence: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/evidence`,
+  researchEvidenceItem: (id: string) => `/api/research/evidence/${encodeURIComponent(id)}`,
+  researchClaims: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/claims`,
+  researchClaim: (id: string) => `/api/research/claims/${encodeURIComponent(id)}`,
+  researchSections: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/sections`,
+  researchSection: (id: string) => `/api/research/sections/${encodeURIComponent(id)}`,
+  researchRelations: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/relations`,
+  researchRelation: (id: string) => `/api/research/relations/${encodeURIComponent(id)}`,
+  researchDecisions: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/decisions`,
+  researchChanges: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/changes`,
+  researchTimeline: (id: string) => `/api/research/projects/${encodeURIComponent(id)}/timeline`,
 } as const;
 
 export class ApiClientError extends Error {
@@ -108,6 +219,33 @@ export class ApiClientError extends Error {
 function isRetryableCode(code: string): boolean {
   const retryable: ReadonlySet<string> = RETRYABLE_ERROR_CODES;
   return retryable.has(code);
+}
+
+/**
+ * `?a=&b=` from the set half of a query object, or `''` when nothing was asked for. The knowledge
+ * calls build their query strings inline; the research surface has enough of them that the rule
+ * 'never send an empty key' deserves one place instead of six copies.
+ */
+function searchSuffix(params: Record<string, string | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, value);
+  }
+  const suffix = search.toString();
+  return suffix.length === 0 ? '' : `?${suffix}`;
+}
+
+/**
+ * Check a write payload against the shared contract before the network call, so a form that produced
+ * an unsendable 章程 or 证据 gets the zod issues back from the caller's own stack instead of a
+ * round-trip to a Core that would reject it anyway.
+ */
+function validatedRequest<Output>(schema: z.ZodType<Output>, request: unknown, label: string): Output {
+  const validated = schema.safeParse(request);
+  if (!validated.success) {
+    throw new ApiClientError(400, 'invalid_request', `${label} payload is not sendable`, validated.error.issues);
+  }
+  return validated.data;
 }
 
 export interface ApiClientOptions {
@@ -285,6 +423,216 @@ export class ApiClient {
   /** Revocation is immediate: a connection that is already open fails on its next request. */
   async revokeGrant(id: string): Promise<PublicGrant> {
     return (await this.request('POST', apiRoutes.grantRevoke(id), revokeGrantResponseSchema)).grant;
+  }
+
+  // --- 研究项目 / 章程 / 复核标记 / 引用检查 (research contract §1) ---------------------------------
+
+  async researchProjects(): Promise<ResearchProject[]> {
+    return (await this.request('GET', apiRoutes.researchProjects, researchProjectListResponseSchema)).projects;
+  }
+
+  createResearchProject(request: CreateResearchProjectRequest): Promise<ResearchProject> {
+    return this.request('POST', apiRoutes.researchProjects, researchProjectSchema, {
+      body: validatedRequest(createResearchProjectRequestSchema, request, 'research project'),
+    });
+  }
+
+  researchProject(projectId: string): Promise<ResearchProject> {
+    return this.request('GET', apiRoutes.researchProject(projectId), researchProjectSchema);
+  }
+
+  patchResearchProject(projectId: string, request: PatchResearchProjectRequest): Promise<ResearchProject> {
+    return this.request('PATCH', apiRoutes.researchProject(projectId), researchProjectSchema, {
+      body: validatedRequest(patchResearchProjectRequestSchema, request, 'research project patch'),
+    });
+  }
+
+  /** A project without a 章程 is a normal state: this answers `null`, not an error. */
+  async researchCharter(projectId: string): Promise<ResearchCharter | null> {
+    return (await this.request('GET', apiRoutes.researchCharter(projectId), charterResponseSchema)).charter;
+  }
+
+  /** PUT is an upsert here — one 章程 row per project. Approving is a separate call (R06). */
+  saveResearchCharter(projectId: string, request: CharterRequest): Promise<ResearchCharter> {
+    return this.request('PUT', apiRoutes.researchCharter(projectId), researchCharterSchema, {
+      body: validatedRequest(charterRequestSchema, request, 'charter'),
+    });
+  }
+
+  /**
+   * 批准 freezes the current draft as an append-only version and marks the objects the caller named.
+   * It does not lock the draft: the 章程 stays editable after approval.
+   */
+  approveResearchCharter(projectId: string, request: ApproveCharterRequest): Promise<CharterVersion> {
+    return this.request('POST', apiRoutes.researchCharterApprove(projectId), charterVersionSchema, {
+      body: validatedRequest(approveCharterRequestSchema, request, 'charter approval'),
+    });
+  }
+
+  async researchCharterVersions(projectId: string): Promise<CharterVersion[]> {
+    return (await this.request('GET', apiRoutes.researchCharterVersions(projectId), charterVersionListResponseSchema))
+      .versions;
+  }
+
+  /** The version later checks bind to; `null` until the first 批准. */
+  async researchCharterBaseline(projectId: string): Promise<CharterVersion | null> {
+    return (await this.request('GET', apiRoutes.researchCharterBaseline(projectId), charterBaselineResponseSchema))
+      .baseline;
+  }
+
+  async researchReviewMarks(
+    projectId: string,
+    query: ReviewMarkListQuery = {},
+  ): Promise<ResearchReviewMark[]> {
+    const suffix = searchSuffix(query);
+    return (await this.request('GET', `${apiRoutes.researchReviewMarks(projectId)}${suffix}`, reviewMarkListResponseSchema))
+      .marks;
+  }
+
+  /** Clearing writes `status='cleared'`; the row stays — it is the record of when the mark was handled. */
+  clearResearchReviewMark(markId: string): Promise<ResearchReviewMark> {
+    return this.request('POST', apiRoutes.researchReviewMarkClear(markId), researchReviewMarkSchema);
+  }
+
+  /**
+   * 「这个出处被谁引用了」 — the read-only check to make before archiving a node or a capture (R03).
+   * Refused before the network when neither id is given: a filter-less reference query is a
+   * cross-project table scan wearing the clothes of a check.
+   */
+  async researchReferences(query: ResearchReferenceQuery): Promise<ResearchReferenceMatch[]> {
+    const validated = researchReferenceQuerySchema.safeParse(query);
+    if (!validated.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Reference query is not sendable', validated.error.issues);
+    }
+    const suffix = searchSuffix(validated.data);
+    return (await this.request('GET', `${apiRoutes.researchReferences}${suffix}`, researchReferenceResponseSchema))
+      .references;
+  }
+
+  // --- 研究问题 / 证据 / 论点 / 章节 ----------------------------------------------------------------
+
+  async researchQuestions(projectId: string): Promise<ResearchQuestion[]> {
+    return (await this.request('GET', apiRoutes.researchQuestions(projectId), researchQuestionListResponseSchema))
+      .questions;
+  }
+
+  createResearchQuestion(projectId: string, request: CreateResearchQuestionRequest): Promise<ResearchQuestion> {
+    return this.request('POST', apiRoutes.researchQuestions(projectId), researchQuestionSchema, {
+      body: validatedRequest(createResearchQuestionRequestSchema, request, 'research question'),
+    });
+  }
+
+  patchResearchQuestion(questionId: string, request: PatchResearchQuestionRequest): Promise<ResearchQuestion> {
+    return this.request('PATCH', apiRoutes.researchQuestion(questionId), researchQuestionSchema, {
+      body: validatedRequest(patchResearchQuestionRequestSchema, request, 'research question patch'),
+    });
+  }
+
+  async researchEvidence(projectId: string, query: EvidenceListQuery = {}): Promise<Evidence[]> {
+    const suffix = searchSuffix(query);
+    return (await this.request('GET', `${apiRoutes.researchEvidence(projectId)}${suffix}`, evidenceListResponseSchema))
+      .evidence;
+  }
+
+  createResearchEvidence(projectId: string, request: CreateEvidenceRequest): Promise<Evidence> {
+    return this.request('POST', apiRoutes.researchEvidence(projectId), evidenceSchema, {
+      body: validatedRequest(createEvidenceRequestSchema, request, 'evidence'),
+    });
+  }
+
+  patchResearchEvidence(evidenceId: string, request: PatchEvidenceRequest): Promise<Evidence> {
+    return this.request('PATCH', apiRoutes.researchEvidenceItem(evidenceId), evidenceSchema, {
+      body: validatedRequest(patchEvidenceRequestSchema, request, 'evidence patch'),
+    });
+  }
+
+  async researchClaims(projectId: string, query: ClaimListQuery = {}): Promise<Claim[]> {
+    const suffix = searchSuffix(query);
+    return (await this.request('GET', `${apiRoutes.researchClaims(projectId)}${suffix}`, claimListResponseSchema))
+      .claims;
+  }
+
+  createResearchClaim(projectId: string, request: CreateClaimRequest): Promise<Claim> {
+    return this.request('POST', apiRoutes.researchClaims(projectId), claimSchema, {
+      body: validatedRequest(createClaimRequestSchema, request, 'claim'),
+    });
+  }
+
+  patchResearchClaim(claimId: string, request: PatchClaimRequest): Promise<Claim> {
+    return this.request('PATCH', apiRoutes.researchClaim(claimId), claimSchema, {
+      body: validatedRequest(patchClaimRequestSchema, request, 'claim patch'),
+    });
+  }
+
+  async researchSections(projectId: string): Promise<ManuscriptSection[]> {
+    return (await this.request('GET', apiRoutes.researchSections(projectId), sectionListResponseSchema)).sections;
+  }
+
+  createResearchSection(projectId: string, request: CreateSectionRequest): Promise<ManuscriptSection> {
+    return this.request('POST', apiRoutes.researchSections(projectId), manuscriptSectionSchema, {
+      body: validatedRequest(createSectionRequestSchema, request, 'section'),
+    });
+  }
+
+  patchResearchSection(sectionId: string, request: PatchSectionRequest): Promise<ManuscriptSection> {
+    return this.request('PATCH', apiRoutes.researchSection(sectionId), manuscriptSectionSchema, {
+      body: validatedRequest(patchSectionRequestSchema, request, 'section patch'),
+    });
+  }
+
+  // --- 关系 / 决策 / 变更 / 时间线 ------------------------------------------------------------------
+
+  async researchRelations(projectId: string, query: RelationListQuery = {}): Promise<EntityRelation[]> {
+    const suffix = searchSuffix(query);
+    return (await this.request('GET', `${apiRoutes.researchRelations(projectId)}${suffix}`, relationListResponseSchema))
+      .relations;
+  }
+
+  /** The direction is part of the meaning (R02): a rejected pairing is a server-side `invalid_request`. */
+  createResearchRelation(projectId: string, request: CreateEntityRelationRequest): Promise<EntityRelation> {
+    return this.request('POST', apiRoutes.researchRelations(projectId), entityRelationSchema, {
+      body: validatedRequest(createEntityRelationRequestSchema, request, 'relation'),
+    });
+  }
+
+  deleteResearchRelation(relationId: string): Promise<DeleteRelationResponse> {
+    return this.request('DELETE', apiRoutes.researchRelation(relationId), deleteRelationResponseSchema);
+  }
+
+  async researchDecisions(projectId: string): Promise<ResearchDecision[]> {
+    return (await this.request('GET', apiRoutes.researchDecisions(projectId), researchDecisionListResponseSchema))
+      .decisions;
+  }
+
+  /** Append-only: a wrong 决策 is answered by another 决策, never by an edit (contract §0 rule 3). */
+  createResearchDecision(projectId: string, request: CreateResearchDecisionRequest): Promise<ResearchDecision> {
+    return this.request('POST', apiRoutes.researchDecisions(projectId), researchDecisionSchema, {
+      body: validatedRequest(createResearchDecisionRequestSchema, request, 'research decision'),
+    });
+  }
+
+  async researchChanges(projectId: string, query: ChangeListQuery = {}): Promise<ResearchChange[]> {
+    const suffix = searchSuffix(query);
+    return (await this.request('GET', `${apiRoutes.researchChanges(projectId)}${suffix}`, researchChangeListResponseSchema))
+      .changes;
+  }
+
+  createResearchChange(projectId: string, request: CreateResearchChangeRequest): Promise<ResearchChange> {
+    return this.request('POST', apiRoutes.researchChanges(projectId), researchChangeSchema, {
+      body: validatedRequest(createResearchChangeRequestSchema, request, 'research change'),
+    });
+  }
+
+  /** Newest first: the server orders by `occurredAt` descending. */
+  async researchTimeline(projectId: string): Promise<TimelineEvent[]> {
+    return (await this.request('GET', apiRoutes.researchTimeline(projectId), timelineListResponseSchema)).events;
+  }
+
+  /** A 里程碑 is the only hand-written timeline entry; 决策 and 变更 write their own row on creation. */
+  createResearchMilestone(projectId: string, request: CreateTimelineEventRequest): Promise<TimelineEvent> {
+    return this.request('POST', apiRoutes.researchTimeline(projectId), timelineEventSchema, {
+      body: validatedRequest(createTimelineEventRequestSchema, request, 'timeline event'),
+    });
   }
 
   private async request<Output>(
