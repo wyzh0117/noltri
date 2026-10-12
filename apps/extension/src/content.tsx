@@ -1,14 +1,16 @@
 import {
   isCaptureResultMessage,
   isCollectContextMessage,
+  isCollectPageContextMessage,
   MESSAGE_CAPTURE,
   type CaptureMessage,
   type CollectContextReply,
+  type CollectPageContextReply,
 } from './messaging';
 import { createOverlayController } from './overlay/controller';
 import { createSelectionObserver, type ObserverRules } from './capture/observer';
-import { readSelectionIntent } from './source/extract';
-import { OFFLINE_MESSAGE, parseCaptureResult, type CaptureOutcome } from './api/client';
+import { readImageAltText, readPageCollectionContext, readSelectionIntent } from './source/extract';
+import { WORKER_SILENT_MESSAGE, offlineFailure, parseCaptureResult, type CaptureOutcome } from './api/client';
 import { DEFAULT_SETTINGS, isDomainDisabled, loadSettings, syncArea, type ExtensionSettings } from './settings/storage';
 
 /** The service worker's own request timeout is 20s; this is the page-side safety net for a dead worker. */
@@ -64,13 +66,13 @@ function start(): void {
     // and the captured intent is the one being sent.
     observer.freeze();
     const message: CaptureMessage = { type: MESSAGE_CAPTURE, intent };
-    timer = setTimeout(() => finish({ ok: false, message: OFFLINE_MESSAGE }), CAPTURE_TIMEOUT_MS);
+    timer = setTimeout(() => finish(offlineFailure(WORKER_SILENT_MESSAGE)), CAPTURE_TIMEOUT_MS);
     chrome.runtime.sendMessage(message, (): void => {
-      if (chrome.runtime.lastError) finish({ ok: false, message: OFFLINE_MESSAGE });
+      if (chrome.runtime.lastError) finish(offlineFailure(WORKER_SILENT_MESSAGE));
     });
   }
 
-  chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse: (reply: CollectContextReply) => void) => {
+  chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse: (reply: CollectContextReply | CollectPageContextReply) => void) => {
     if (isCaptureResultMessage(message)) {
       const outcome = parseCaptureResult(message);
       if (outcome) finish(outcome);
@@ -78,6 +80,15 @@ function start(): void {
     }
     if (isCollectContextMessage(message)) {
       sendResponse(collectContextReply(message.selectionText));
+      return false;
+    }
+    if (isCollectPageContextMessage(message)) {
+      const context = readPageCollectionContext();
+      const reply: CollectPageContextReply = {
+        ...context,
+        ...(message.imageHref ? { imageAltText: readImageAltText(message.imageHref) } : {}),
+      };
+      sendResponse(reply);
       return false;
     }
     return false;

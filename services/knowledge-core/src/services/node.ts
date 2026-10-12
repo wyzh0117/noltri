@@ -6,6 +6,7 @@
  */
 import type {
   JsonValue,
+  KnowledgeItem,
   KnowledgeNode,
   NodeDetail,
   NodeKnowledgeItem,
@@ -13,7 +14,7 @@ import type {
   PatchNodeRequest,
 } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
-import type { ActorContext, CoreDeps } from '../types';
+import { capText, type ActorContext, type CoreDeps } from '../types';
 
 /** Shape of `relatedNodeSchema`; the contract exports the schema but not an alias for it. */
 export type RelatedNodeView = NodeDetail['relatedNodes'][number];
@@ -59,7 +60,13 @@ export async function getNodeDetail(deps: CoreDeps, actor: ActorContext, nodeId:
 
   const nodeItems: NodeKnowledgeItem[] = items.map((item) => {
     const summary = summaryById.get(item.rawSourceId);
-    return { item, sources: summary === undefined ? [] : [summary] };
+    // §435: a capped client reads a node detail whose text is capped, not the stored row.
+    const visible: KnowledgeItem = {
+      ...item,
+      normalizedText: capText(actor, item.normalizedText),
+      summary: item.summary === null ? null : capText(actor, item.summary),
+    };
+    return { item: visible, sources: summary === undefined ? [] : [summary] };
   });
 
   const relatedNodes: RelatedNodeView[] = [];
@@ -80,10 +87,7 @@ export async function getNodeDetail(deps: CoreDeps, actor: ActorContext, nodeId:
   return { node, path, items: nodeItems, children, relatedNodes, stats };
 }
 
-/**
- * PATCH applies title / summary / status only — the frozen V1 contract.
- * A title change is a rename and writes a VersionRecord, so it stays reversible (§2.4).
- */
+/** PATCH applies title, summary and status changes while keeping a reversible version record. */
 export async function patchNode(
   deps: CoreDeps,
   actor: ActorContext,

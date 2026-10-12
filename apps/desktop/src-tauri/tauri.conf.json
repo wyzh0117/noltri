@@ -1,61 +1,55 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "知序 Companion",
+  "productName": "知序",
   "version": "0.1.0",
   "identifier": "com.noltri.companion",
   "build": {
     "beforeDevCommand": "pnpm exec vite",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run build",
+    "beforeBuildCommand": "pnpm run build:runtime && pnpm run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "知序 · Setup Manager",
+        "title": "知序 · 我的知识库",
         "url": "main.html",
-        "width": 1080,
-        "height": 780,
-        "minWidth": 820,
-        "minHeight": 560,
+        "width": 1360,
+        "height": 900,
+        "minWidth": 780,
+        "minHeight": 620,
         "center": true,
         "resizable": true,
         "visible": true
-      },
-      {
-        "label": "overlay",
-        "title": "知序",
-        "url": "overlay.html",
-        "width": 300,
-        "height": 132,
-        "resizable": false,
-        "maximizable": false,
-        "minimizable": false,
-        "transparent": true,
-        "decorations": false,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visibleOnAllWorkspaces": true,
-        "acceptFirstMouse": true,
-        "focus": false,
-        "focusable": true,
-        "visible": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
     "category": "Productivity",
     "publisher": "知序 Noltri",
     "copyright": "© 知序 Noltri",
-    "shortDescription": "macOS 选区捕获与知识收纳引导",
-    "longDescription": "知序 Companion 在 macOS 上用系统辅助功能读取选区，把值得复用的内容一键归纳进知识树，并引导 ChatGPT / Claude / Cursor 等 MCP 客户端完成连接。",
-    "icon": []
+    "shortDescription": "网页、Agent 与论文摘录知识库",
+    "longDescription": "知序把网页、Agent 对话与论文摘录收集到同一资料库，并按学科方向组织、关联与对读。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/noltri-runtime"],
+    "resources": [
+      "resources/core-server.mjs",
+      "resources/mcp-server.mjs"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.5"
+    }
   }
 }

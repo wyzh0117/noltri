@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_SOURCE_TITLE_LENGTH,
   SURROUNDING_CONTEXT_JOINER,
@@ -11,10 +11,14 @@ import {
   platformFromHostname,
   productPlatform,
   readSelectionIntent,
+  readImageAltText,
+  readPageCollectionContext,
   textOfContentTree,
   type ContentTree,
   type SurroundingContextInput,
 } from '../src/source/extract';
+
+afterEach(() => vi.unstubAllGlobals());
 
 const SELECTION = '归纳知识点按钮';
 const BEFORE = 'A'.repeat(1_000);
@@ -133,6 +137,45 @@ describe('platform labelling is hostname-only', () => {
 
   it('tags the popup paste fallback as a manual source', () => {
     expect(buildSource({ href: '', title: '', type: 'manual' })).toEqual({ type: 'manual', appName: '知序 Noltri 扩展' });
+  });
+});
+
+describe('page and image metadata collection', () => {
+  it('reads declared descriptions and an HTTPS Open Graph image without reading page text', () => {
+    const metadata = new Map([
+      ['meta[name="description"]', { content: 'A short page description that explains the topic.' }],
+      ['meta[property="og:image"]', { content: '/images/cover.png' }],
+    ]);
+    vi.stubGlobal('document', {
+      title: 'Page title',
+      querySelector: (selector: string) => metadata.get(selector) ?? null,
+    });
+    vi.stubGlobal('location', { href: 'https://docs.example.com/topic' });
+
+    expect(readPageCollectionContext()).toEqual({
+      title: 'Page title',
+      description: 'A short page description that explains the topic.',
+      previewImageUrl: 'https://docs.example.com/images/cover.png',
+    });
+  });
+
+  it('ignores insecure image metadata and reads alt text only for the clicked image', () => {
+    const metadata = new Map([
+      ['meta[property="og:image"]', { content: 'http://cdn.example.com/cover.png' }],
+    ]);
+    vi.stubGlobal('document', {
+      title: 'Image page',
+      querySelector: (selector: string) => metadata.get(selector) ?? null,
+      images: [
+        { currentSrc: 'https://cdn.example.com/first.png', src: 'https://cdn.example.com/first.png', alt: 'first selected image', title: '' },
+        { currentSrc: 'https://cdn.example.com/second.png', src: 'https://cdn.example.com/second.png', alt: 'second selected image', title: '' },
+      ],
+    });
+    vi.stubGlobal('location', { href: 'https://docs.example.com/topic' });
+
+    expect(readPageCollectionContext()).toEqual({ title: 'Image page' });
+    expect(readImageAltText('https://cdn.example.com/second.png')).toBe('second selected image');
+    expect(readImageAltText('file:///tmp/private.png')).toBeUndefined();
   });
 });
 

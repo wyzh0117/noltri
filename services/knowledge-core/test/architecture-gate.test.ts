@@ -3,13 +3,15 @@
  *
  * These assertions are structural: they do not test features, they test that the load-bearing
  * invariants of PROJECT_MASTER survived the implementation — one capture pipeline, RawSource first,
- * no provider/storage leak, MCP behind Knowledge Core, desktop independent of any single Agent, and
+ * no provider/storage leak, MCP behind Knowledge Core, desktop independent of any single Agent,
+ * Research kept plain and off the Agent grant surface until 限制返回片段 covers its text, and
  * a data model V2 can extend without being overturned.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CaptureClient } from '@noltri/schema';
+import { scopeForAction } from '../src/authorization';
 import { attachItemRecord, captureOf, createNodeRecord, makeHarness, CHINESE_TEXT } from './fakes';
 
 function repoRoot(): string {
@@ -62,7 +64,13 @@ describe('architecture gate — knowledge core', () => {
       const harness = makeHarness();
       const result = await harness.core.capture(captureOf(CHINESE_TEXT, client), harness.actor);
       expect(result.processingStatus).toBe('done');
-      expect(Object.keys(result).sort()).toEqual(['items', 'processingStatus', 'rawSourceId'].sort());
+      expect(Object.keys(result).sort()).toEqual(
+        ['duplicate', 'items', 'processingStatus', 'rawSourceId', 'requestId', 'stage'].sort(),
+      );
+      // The unified request is what makes a replay recognisable, so every entry point has to carry it.
+      expect(result.requestId.length).toBeGreaterThan(0);
+      expect(['completed', 'needs_review']).toContain(result.stage);
+      expect(result.duplicate).toBe(false);
       expect(result.items.length).toBeGreaterThan(0);
       for (const item of result.items) {
         expect(Object.keys(item).sort()).toEqual(
@@ -76,6 +84,7 @@ describe('architecture gate — knowledge core', () => {
     const harness = makeHarness();
     const result = await harness.core.capture(
       {
+        requestId: 'req-gate-desktop-0001',
         text: CHINESE_TEXT,
         source: { type: 'desktop_app' },
         capture: { capturedAt: '2026-10-02T12:00:00.000Z', client: 'desktop' },
@@ -86,6 +95,8 @@ describe('architecture gate — knowledge core', () => {
     const rawSource = await harness.repository.findRawSource(result.rawSourceId, harness.actor.userId);
     expect(rawSource?.sourceType).toBe('desktop_app');
     expect(rawSource?.sourceApp).toBeNull();
+    // With no install identity the entry point itself scopes the idempotency key.
+    expect(rawSource?.clientId).toBe('desktop');
   });
 
   it('the V2 graph model already exists beside the tree: links and edges are independent of parent_id', async () => {
@@ -132,23 +143,22 @@ describe('architecture gate — mcp server', () => {
     expect(violations).toEqual([]);
   });
 
-  it.skipIf(!existsSync(mcpSrc))('exposes exactly the seven V1 tools', async () => {
+  it.skipIf(!existsSync(mcpSrc))('exposes only the six library tools', async () => {
     const toolNames: string[] = [];
     for (const file of tsFilesUnder(mcpSrc)) {
       const source = readFileSync(file, 'utf8');
-      for (const match of source.matchAll(/name:\s*'(capture_knowledge|search_knowledge|get_knowledge_tree|get_knowledge_node|update_knowledge_node|move_knowledge_node|get_node_context)'/g)) {
+      for (const match of source.matchAll(/name:\s*'(save_knowledge|search_knowledge|get_knowledge_tree|get_knowledge_item|relate_knowledge|remove_knowledge_relation)'/g)) {
         if (!toolNames.includes(match[1])) toolNames.push(match[1]);
       }
     }
     expect(toolNames.sort()).toEqual(
       [
-        'capture_knowledge',
+        'save_knowledge',
         'search_knowledge',
         'get_knowledge_tree',
-        'get_knowledge_node',
-        'update_knowledge_node',
-        'move_knowledge_node',
-        'get_node_context',
+        'get_knowledge_item',
+        'relate_knowledge',
+        'remove_knowledge_relation',
       ].sort(),
     );
   });
@@ -157,6 +167,16 @@ describe('architecture gate — mcp server', () => {
 describe('architecture gate — storage seam', () => {
   it('the repository factory is the only place a driver is chosen', () => {
     const coreSources = tsFilesUnder(CORE_SRC).map((file) => readFileSync(file, 'utf8')).join('\n');
-    expect(coreSources).not.toMatch(/driver\s*===?\s*['"](memory|supabase)['"]/);
+    expect(coreSources).not.toMatch(/driver\s*===?\s*['"](memory|sqlite)['"]/);
+  });
+});
+
+describe('architecture gate — removed legacy research workspace', () => {
+  it('has no research endpoints, domain implementation, or native messaging host', () => {
+    const router = readFileSync(join(CORE_SRC, 'http', 'router.ts'), 'utf8');
+    expect(router).not.toContain('/api/research');
+    expect(existsSync(join(CORE_SRC, 'research'))).toBe(false);
+    expect(existsSync(join(ROOT, 'services', 'native-host'))).toBe(false);
+    expect(readFileSync(join(ROOT, 'packages', 'api-client', 'src', 'client.ts'), 'utf8')).not.toMatch(/researchProjects|createResearchProject/);
   });
 });

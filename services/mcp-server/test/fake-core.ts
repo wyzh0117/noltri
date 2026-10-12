@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import type {
   CaptureResult,
   HealthResponse,
+  LibraryItem,
   KnowledgeItem,
   KnowledgeNode,
   MoveNodeResponse,
@@ -68,6 +69,9 @@ const fixtureSource: NodeSourceSummary = {
 
 export const fixtureCaptureResult: CaptureResult = {
   rawSourceId: 'raw-0001',
+  requestId: 'req-mcp-fixture-0001',
+  stage: 'completed',
+  duplicate: false,
   processingStatus: 'done',
   items: [
     {
@@ -199,11 +203,41 @@ export const fixtureContext: NodeContext = {
 
 export const fixtureHealth: HealthResponse = {
   status: 'ok',
+  productId: 'noltri-knowledge-core',
+  instanceId: 'fake-instance-0001',
+  protocolVersion: '1',
   version: '0.1.0-fake',
   storageDriver: 'memory',
+  storage: { driver: 'memory', ok: true, detail: { volatile: true, knowledgeItems: 0 } },
   aiProvider: 'offline',
   embeddingDim: 8,
   requiresAiKey: false,
+};
+
+export const fixtureLibraryItem: LibraryItem = {
+  id: 'raw-library-0001',
+  content: '原始论文摘录',
+  summary: '论文摘录摘要',
+  kind: 'paper_excerpt',
+  source: {
+    type: 'agent',
+    title: '示例论文',
+    url: 'https://example.org/paper',
+    platform: null,
+    appName: 'Codex',
+    capturedAt: '2026-09-20T00:00:00.000Z',
+    citation: '示例作者（2026）',
+    page: '5',
+    author: '示例作者',
+    doi: null,
+  },
+  previewImageUrl: null,
+  subjectPath: ['经济学', '平台经济'],
+  researchPoint: '平台定价与网络效应',
+  tags: ['论文'],
+  aiStatus: 'ready',
+  createdAt: '2026-09-20T00:00:00.000Z',
+  archived: false,
 };
 
 export interface FakeCoreOptions {
@@ -240,7 +274,38 @@ export async function startFakeKnowledgeCore(options: FakeCoreOptions = {}): Pro
 
       if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, fixtureHealth);
 
-      if (req.method === 'POST' && url.pathname === '/api/capture') return json(res, 201, fixtureCaptureResult);
+      if (req.method === 'GET' && url.pathname === '/api/items') {
+        const limit = Number(url.searchParams.get('limit') ?? 50);
+        const offset = Number(url.searchParams.get('offset') ?? 0);
+        return json(res, 200, {
+          items: [{ ...fixtureLibraryItem, content: '平台经济的待整理原文。', subjectPath: [], aiStatus: 'pending' }],
+          limit,
+          offset,
+        });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/items') {
+        const input = (body ?? {}) as Partial<LibraryItem>;
+        return json(res, 200, {
+          item: {
+            ...fixtureLibraryItem,
+            ...(typeof input.content === 'string' ? { content: input.content } : {}),
+            ...(input.kind === undefined ? {} : { kind: input.kind }),
+            ...(input.source === undefined ? {} : { source: { ...fixtureLibraryItem.source, ...input.source } }),
+            ...(input.subjectPath === undefined ? {} : { subjectPath: input.subjectPath }),
+          },
+        });
+      }
+
+      const relationCreateMatch = /^\/api\/items\/([^/]+)\/relations$/.exec(url.pathname);
+      if (relationCreateMatch && req.method === 'POST') {
+        const relationInput = (body ?? {}) as { targetId?: string; relation?: string };
+        return json(res, 200, { relation: { targetId: relationInput.targetId, relation: relationInput.relation, direction: 'outgoing', createdAt: fixtureLibraryItem.createdAt } });
+      }
+      const relationMatch = /^\/api\/items\/([^/]+)\/relations\/([^/]+)$/.exec(url.pathname);
+      if (relationMatch && req.method === 'DELETE') return json(res, 200, { ok: true });
+      const itemMatch = /^\/api\/items\/([^/]+)$/.exec(url.pathname);
+      if (itemMatch && req.method === 'GET') return json(res, 200, { ...fixtureLibraryItem, id: decodeURIComponent(itemMatch[1] ?? '') });
 
       if (req.method === 'GET' && url.pathname === '/api/tree') {
         const rootId = url.searchParams.get('rootId');
@@ -264,7 +329,7 @@ export async function startFakeKnowledgeCore(options: FakeCoreOptions = {}): Pro
       if (nodeMatch && req.method === 'GET') {
         const id = decodeURIComponent(nodeMatch[1] ?? '');
         if (id === 'missing-node') {
-          return json(res, 404, { error: { code: 'not_found', message: '节点不存在' } });
+          return json(res, 404, { error: { code: 'not_found', message: '节点不存在', retryable: false, traceId: 'fake-trace-404' } });
         }
         return json(res, 200, { ...fixtureNodeDetail, node: { ...fixtureNode, id } });
       }
@@ -284,15 +349,29 @@ export async function startFakeKnowledgeCore(options: FakeCoreOptions = {}): Pro
         const id = decodeURIComponent(moveMatch[1] ?? '');
         if (options.moveConflict === true) {
           return json(res, 409, {
-            error: { code: 'conflict', message: '目标父节点会成为当前节点的子孙，移动会形成循环', details: { nodeId: id } },
+            error: {
+              code: 'conflict',
+              message: '目标父节点会成为当前节点的子孙，移动会形成循环',
+              retryable: false,
+              traceId: 'fake-trace-409',
+              details: { nodeId: id },
+            },
           });
         }
         return json(res, 200, { ...fixtureMove, node: { ...fixtureNode, id } });
       }
 
-      return json(res, 404, { error: { code: 'not_found', message: `Unknown route ${String(req.method)} ${url.pathname}` } });
+      return json(res, 404, {
+        error: { code: 'not_found', message: `Unknown route ${String(req.method)} ${url.pathname}`, retryable: false },
+      });
     })().catch((error: unknown) => {
-      json(res, 500, { error: { code: 'internal_error', message: error instanceof Error ? error.message : 'fake core failed' } });
+      json(res, 500, {
+        error: {
+          code: 'internal_error',
+          message: error instanceof Error ? error.message : 'fake core failed',
+          retryable: true,
+        },
+      });
     });
   });
 

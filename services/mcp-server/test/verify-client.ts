@@ -45,18 +45,19 @@ async function main(): Promise<void> {
     step('2. tools/list');
     const listed = await client.listTools();
     console.log(listed.tools.map((tool) => tool.name).join(', '));
-    if (listed.tools.length !== 7) throw new Error(`expected 7 tools, got ${String(listed.tools.length)}`);
+    if (listed.tools.length !== 6) throw new Error(`expected 6 tools, got ${String(listed.tools.length)}`);
 
-    step('3. tools/call capture_knowledge');
+    step('3. tools/call save_knowledge');
     const capture = await client.callTool({
-      name: 'capture_knowledge',
+      name: 'save_knowledge',
       arguments: {
-        text: CAPTURE_TEXT,
+        content: CAPTURE_TEXT,
+        kind: 'knowledge',
         source: { type: 'agent', appName: 'verify-client', title: 'MCP 通道验证' },
       },
     });
     if (capture.isError === true) {
-      throw new Error(`capture_knowledge failed: ${JSON.stringify(capture.content)}`);
+      throw new Error(`save_knowledge failed: ${JSON.stringify(capture.content)}`);
     }
     console.log(JSON.stringify(capture.structuredContent, null, 2));
 
@@ -68,7 +69,7 @@ async function main(): Promise<void> {
 
     await client.close();
     step('RESULT');
-    console.log('OK: initialize → tools/list → tools/call(capture_knowledge, get_knowledge_tree) over Streamable HTTP');
+    console.log('OK: initialize → tools/list → tools/call(save_knowledge, get_knowledge_tree) over Streamable HTTP');
   } finally {
     app.closeAllConnections();
     await new Promise<void>((resolveClose) => app.close(() => resolveClose()));

@@ -6,8 +6,6 @@ import type { CreateRawSourceInput, KnowledgeItem, KnowledgeNode } from '@noltri
 import type { KnowledgeRepository, MoveNodeRecordResult } from '../src/types';
 
 export interface RepositoryContractOptions {
-  /** Applies the longer timeouts a networked driver needs; asserts nothing Postgres-specific. */
-  requiresServer?: boolean;
   /** Vector width the repository accepts; every fixture vector is padded to it. */
   embeddingDim?: number;
 }
@@ -65,7 +63,7 @@ export function describeKnowledgeRepository(
   options: RepositoryContractOptions = {},
 ): void {
   const dim = options.embeddingDim ?? 3;
-  const timeout = options.requiresServer === true ? 30_000 : 5_000;
+  const timeout = 5_000;
   const vector = makeVector(dim);
   const foreignUser = () => `${USER_PREFIX}-foreign-${randomUUID()}`;
 
@@ -135,6 +133,44 @@ export function describeKnowledgeRepository(
       });
     }, timeout);
 
+    it('carries the capture idempotency key and can be looked up by it', async () => {
+      await scope(async (repository, userId) => {
+        const keyed = await repository.createRawSource({
+          ...sourceInput(userId, '带幂等键的原文 keyed capture'),
+          requestId: 'req-contract-0001',
+          clientId: 'extension',
+        });
+        expect(keyed.requestId).toBe('req-contract-0001');
+        expect(keyed.clientId).toBe('extension');
+        expect(await repository.findRawSource(keyed.id, userId)).toEqual(keyed);
+
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', 'req-contract-0001')).toMatchObject({
+          id: keyed.id,
+        });
+        // Another entry point may never read this row, and another owner certainly may not.
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'desktop', 'req-contract-0001')).toBeNull();
+        expect(await repository.findRawSourceByIdempotencyKey(foreignUser(), 'extension', 'req-contract-0001')).toBeNull();
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', 'req-never-used')).toBeNull();
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', '')).toBeNull();
+
+        const other = await repository.createRawSource({
+          ...sourceInput(userId, '同文案不同请求 another keyed capture'),
+          requestId: 'req-contract-0002',
+          clientId: 'extension',
+        });
+        expect(other.id).not.toBe(keyed.id);
+
+        // A capture that states no key keeps both columns null, so the partial unique index stays out of the way.
+        const unkeyed = await repository.createRawSource(sourceInput(userId, '无幂等键的原文'));
+        expect(unkeyed.requestId).toBeNull();
+        expect(unkeyed.clientId).toBeNull();
+        await repository.createRawSource(sourceInput(userId, '第二条无键原文'));
+        expect(await repository.findRawSourceByIdempotencyKey(userId, 'extension', 'req-contract-0001')).toMatchObject({
+          id: keyed.id,
+        });
+      });
+    }, timeout);
+
     it('lists raw sources by id in the requested order and skips foreign rows', async () => {
       await scope(async (repository, userId) => {
         const first = await repository.createRawSource(sourceInput(userId, 'first'));
@@ -145,6 +181,76 @@ export function describeKnowledgeRepository(
         const listed = await repository.listRawSourcesByIds([second.id, first.id, foreign.id, 'absent'], userId);
         expect(listed.map((row) => row.id)).toEqual([second.id, first.id]);
         expect(await repository.listRawSourcesByIds([], userId)).toEqual([]);
+      });
+    }, timeout);
+
+    it('lists inbox sources newest-first, filtered by status and scoped to the owner', async () => {
+      await scope(async (repository, userId) => {
+        const oldest = await repository.createRawSource(sourceInput(userId, 'oldest'));
+        await pause();
+        const middle = await repository.createRawSource(sourceInput(userId, 'middle'));
+        await pause();
+        const newest = await repository.createRawSource(sourceInput(userId, 'newest'));
+        await pause();
+        const foreign = await repository.createRawSource(sourceInput(foreignUser(), 'foreign'));
+
+        await repository.updateRawSourceProcessing(middle.id, userId, 'failed', '模型超时');
+        await repository.updateRawSourceProcessing(foreign.id, foreign.userId, 'failed', '不应出现');
+
+        expect((await repository.listInbox({ userId })).map((row) => row.id)).toEqual([
+          newest.id,
+          middle.id,
+          oldest.id,
+        ]);
+        expect((await repository.listInbox({ userId, statuses: ['failed'] })).map((row) => row.id)).toEqual([
+          middle.id,
+        ]);
+        expect(
+          (await repository.listInbox({ userId, statuses: ['pending', 'processing'] })).map((row) => row.id),
+        ).toEqual([newest.id, oldest.id]);
+        expect((await repository.listInbox({ userId, limit: 2 })).map((row) => row.id)).toEqual([
+          newest.id,
+          middle.id,
+        ]);
+        expect((await repository.listInbox({ userId, limit: 2, offset: 2 })).map((row) => row.id)).toEqual([
+          oldest.id,
+        ]);
+        expect(await repository.listInbox({ userId, offset: 99 })).toEqual([]);
+        expect(await repository.listInbox({ userId: foreignUser() })).toEqual([]);
+      });
+    }, timeout);
+
+    it('counts inbox rows per processing status for one owner only', async () => {
+      await scope(async (repository, userId) => {
+        await repository.createRawSource(sourceInput(userId, 'pending a'));
+        const b = await repository.createRawSource(sourceInput(userId, 'pending b'));
+        const c = await repository.createRawSource(sourceInput(userId, 'done c'));
+        const d = await repository.createRawSource(sourceInput(userId, 'failed d'));
+        await repository.updateRawSourceProcessing(c.id, userId, 'done');
+        await repository.updateRawSourceProcessing(d.id, userId, 'failed', '模型超时');
+        const foreign = await repository.createRawSource(sourceInput(foreignUser(), 'foreign pending'));
+
+        expect(await repository.countInboxByStatus(userId)).toEqual({
+          pending: 2,
+          processing: 0,
+          done: 1,
+          failed: 1,
+        });
+        // The counter follows updates, it is not a snapshot of creation.
+        await repository.updateRawSourceProcessing(b.id, userId, 'processing');
+        expect(await repository.countInboxByStatus(userId)).toMatchObject({ pending: 1, processing: 1 });
+        expect(await repository.countInboxByStatus(foreign.userId)).toEqual({
+          pending: 1,
+          processing: 0,
+          done: 0,
+          failed: 0,
+        });
+        expect(await repository.countInboxByStatus(`${USER_PREFIX}-nobody`)).toEqual({
+          pending: 0,
+          processing: 0,
+          done: 0,
+          failed: 0,
+        });
       });
     }, timeout);
 
@@ -807,6 +913,26 @@ export function describeKnowledgeRepository(
         });
         expect(item.status).toBe('active');
         expect(await repository.searchSimilarItems(userId, vector(1, 0, 0), { limit: 5 })).toHaveLength(1);
+      });
+    }, timeout);
+
+    it('states its own storage health without leaking a credential', async () => {
+      await scope(async (repository, userId) => {
+        await repository.createRawSource(sourceInput(userId, '健康检查'));
+        const health = repository.storageHealth();
+        expect(health.driver).toBe(repository.driver);
+        expect(health.ok).toBe(true);
+        expect(Object.keys(health.detail).length).toBeGreaterThan(0);
+        for (const [key, value] of Object.entries(health.detail)) {
+          const type = value === null ? 'null' : typeof value;
+          expect(['string', 'number', 'boolean', 'null']).toContain(type);
+          expect(key.trim().length).toBeGreaterThan(0);
+        }
+        // Health answers before any credential exists, so nothing in it may look like one.
+        const rendered = JSON.stringify(health).toLowerCase();
+        for (const forbidden of ['password', 'secret', 'token', 'key=', 'postgres://', 'postgresql://']) {
+          expect(rendered).not.toContain(forbidden);
+        }
       });
     }, timeout);
   });

@@ -118,6 +118,126 @@ input:not([type]) {
   color: #0a7d33;
 }
 
+/* 支持状态是显式三态，未验证不能长得像已连接。 */
+.pill-support {
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 12px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: #6b5310;
+}
+
+.agent-matrix {
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.agent-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 8px;
+}
+
+.agent-matrix dt {
+  color: #666;
+}
+
+.agent-matrix dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 撤销区：备份是写前自动产生的，这里只负责让人挑一个回去。 */
+.undo {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e4e6ea;
+  font-size: 12px;
+}
+
+/* 写入验证探针：结论必须能指出那条记录，所以证据直接印在面板上。 */
+.probe {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e4e6ea;
+  font-size: 13px;
+}
+
+.probe-phrase {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #f4f5f7;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.backup-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.backup-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.button-danger {
+  color: #8a1c1c;
+  border-color: #d8b4b4;
+}
+
+/* 授权行：写进第三方配置的凭据、它的范围和撤销入口。 */
+.grant-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+/* 授权选项：§435 要求授权界面自己说清边界，并把收窄的开关摆在人面前。 */
+.grant-options {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e4e6ea;
+  font-size: 13px;
+}
+
+.privacy-note {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-left: 3px solid #d8b4b4;
+  background: #fbf6f6;
+  font-size: 12px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 限制返回片段 is a number box, and its default width is wide enough to push the label off the card. */
+.option input[type='number'] {
+  width: 88px;
+}
+
+.project-list {
+  max-height: 180px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #e4e6ea;
+  border-radius: 4px;
+  overflow: auto;
+}
+
 .setup-footer {
   text-align: center;
 }
@@ -209,4 +329,22 @@ input:not([type]) {
 
 .paste-hint {
   color: #6b7280;
+}
+
+/* 浏览器通道：注册事实与 CLI 预览/结果原文照印，路径要能整行读完。 */
+.channel-facts {
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.cli-output {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #f4f5f7;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

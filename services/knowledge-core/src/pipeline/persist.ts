@@ -25,8 +25,8 @@ import { MAX_NODE_PATH_DEPTH, roundConfidence } from '../types';
 import type { NormalizedPoint } from './normalize';
 
 export interface EmbedSeed {
-  readonly embedding: number[];
-  readonly model: string;
+  readonly embedding?: number[];
+  readonly model?: string;
 }
 
 export interface ResolvedNode {
@@ -95,9 +95,9 @@ export async function resolveNodeChain(
       nodeType: isLeaf ? 'topic' : 'domain',
       parentId,
       confidence: roundConfidence(confidence),
-      embedding: seed.embedding,
-      embeddingModel: seed.model,
-      embeddingStatus: 'ready',
+      ...(seed.embedding === undefined ? {} : { embedding: seed.embedding }),
+      ...(seed.model === undefined ? {} : { embeddingModel: seed.model }),
+      embeddingStatus: seed.embedding === undefined ? 'none' : 'ready',
     });
 
     if (parentId !== null) {
@@ -141,7 +141,7 @@ export async function pathTitlesFor(deps: CoreDeps, actor: ActorContext, nodeId:
 export interface PersistArgs {
   readonly rawSourceId: string;
   readonly point: NormalizedPoint;
-  readonly embedding: number[];
+  readonly embedding?: number[];
   readonly targetNodeId: string;
   readonly action: CaptureAction;
   readonly linkConfidence: number;
@@ -170,9 +170,9 @@ export async function persistPoint(
     normalizedText: args.point.text,
     summary: args.point.summary,
     confidence: args.point.confidence,
-    embedding: args.embedding,
-    embeddingModel: config.ai.embedModel,
-    embeddingStatus: 'ready',
+    ...(args.embedding === undefined ? {} : { embedding: args.embedding }),
+    ...(args.embedding === undefined ? {} : { embeddingModel: config.ai.embedModel }),
+    embeddingStatus: args.embedding === undefined ? 'none' : 'ready',
     isAiDerived: true,
   });
 

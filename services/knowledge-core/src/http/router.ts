@@ -2,19 +2,26 @@
  * HTTP layer in web standards only — no express, no fastify.
  *
  * The same `handle(request: Request): Promise<Response>` runs inside a node:http server (see
- * `src/server.ts`) and inside a Next.js route handler (`apps/web`), which is what keeps one Knowledge
- * Core deployable on Vercel today and embeddable in a Desktop Local Core later.
+ * `src/server.ts`) and inside the MCP stdio transport, which is what keeps one Knowledge Core
+ * embeddable in the desktop build without a hosting runtime.
  */
-import type { z } from 'zod';
 import {
+  assignSourceRequestSchema,
   captureRequestSchema,
+  createItemRelationInputSchema,
+  createLibraryItemInputSchema,
+  inboxQuerySchema,
+  libraryItemsQuerySchema,
   moveNodeRequestSchema,
   nodeChatRequestSchema,
   nodeContextRequestSchema,
   patchNodeRequestSchema,
+  patchLibraryItemInputSchema,
   searchRequestSchema,
   treeQuerySchema,
+  type AssignSourceRequest,
   type CaptureRequest,
+  type InboxQuery,
   type MoveNodeRequest,
   type NodeChatRequest,
   type NodeContextRequest,
@@ -22,11 +29,25 @@ import {
   type SearchRequest,
   type TreeQuery,
 } from '@noltri/schema';
-import { asKnowledgeError, knowledgeError, type Logger } from '@noltri/shared';
+import { asKnowledgeError, createId, errorResponseBody, knowledgeError, type Logger } from '@noltri/shared';
 import type { CoreConfig } from '../config';
-import type { Identity } from '../auth';
-import { resolveIdentity as defaultResolveIdentity } from '../auth';
+import { resolveIdentity as defaultResolveIdentity, type IdentityResolver } from '../auth';
+import { requireNodeAccess, requireScope, type GrantStore } from '../authorization';
 import type { KnowledgeCore } from '../core';
+import type { ActorContext } from '../types';
+import { handleAdminGrants } from './admin';
+import { parseWith, readJsonBody } from './parse';
+import {
+  archiveLibraryItem,
+  createLibraryItem,
+  createLibraryRelation,
+  deleteLibraryRelation,
+  listLibraryItems,
+  listLibraryRelations,
+  patchLibraryItem,
+  readLibraryItem,
+  restoreLibraryItem,
+} from '../services/library';
 
 export type RequestHandler = (request: Request) => Promise<Response>;
 
@@ -35,7 +56,9 @@ export interface RouterDeps {
   config: CoreConfig;
   logger?: Logger;
   /** Injectable so a host with its own auth can swap the strategy; identity still never comes from the body. */
-  identityResolver?: (request: Request, config: CoreConfig, logger?: Logger) => Promise<Identity>;
+  identityResolver?: IdentityResolver;
+  /** Presence of a store is what turns 连接中心's own endpoints on. */
+  grants?: GrantStore | null;
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
@@ -49,7 +72,19 @@ interface Route {
 const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'health'] },
   { method: 'POST', segments: ['api', 'capture'] },
+  { method: 'GET', segments: ['api', 'items'] },
+  { method: 'POST', segments: ['api', 'items'] },
+  { method: 'GET', segments: ['api', 'items', ':id'] },
+  { method: 'PATCH', segments: ['api', 'items', ':id'] },
+  { method: 'DELETE', segments: ['api', 'items', ':id'] },
+  { method: 'POST', segments: ['api', 'items', ':id', 'restore'] },
+  { method: 'GET', segments: ['api', 'items', ':id', 'relations'] },
+  { method: 'POST', segments: ['api', 'items', ':id', 'relations'] },
+  { method: 'DELETE', segments: ['api', 'items', ':id', 'relations', ':targetId'] },
   { method: 'GET', segments: ['api', 'tree'] },
+  { method: 'GET', segments: ['api', 'inbox'] },
+  { method: 'GET', segments: ['api', 'inbox', ':id'] },
+  { method: 'POST', segments: ['api', 'inbox', ':id', 'assign'] },
   { method: 'GET', segments: ['api', 'nodes', ':id'] },
   { method: 'PATCH', segments: ['api', 'nodes', ':id'] },
   { method: 'POST', segments: ['api', 'nodes', ':id', 'move'] },
@@ -59,6 +94,10 @@ const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'conversations'] },
   { method: 'GET', segments: ['api', 'conversations', ':id', 'messages'] },
   { method: 'POST', segments: ['api', 'capture', ':id', 'retry'] },
+  // 连接中心: the device credential manages the clients, and no client manages itself.
+  { method: 'GET', segments: ['api', 'admin', 'grants'] },
+  { method: 'POST', segments: ['api', 'admin', 'grants'] },
+  { method: 'POST', segments: ['api', 'admin', 'grants', ':id', 'revoke'] },
 ];
 
 function matchesShape(route: readonly string[], actual: readonly string[]): boolean {
@@ -77,7 +116,7 @@ function corsHeaders(config: CoreConfig, request: Request): Record<string, strin
   const origin = wildcard ? '*' : requested !== null && config.corsOrigin.split(',').includes(requested) ? requested : config.corsOrigin;
   const headers: Record<string, string> = {
     'access-control-allow-origin': origin,
-    'access-control-allow-methods': 'GET, POST, PATCH, OPTIONS',
+    'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'access-control-allow-headers': 'authorization, content-type, x-noltri-client',
     'access-control-max-age': '600',
   };
@@ -89,29 +128,10 @@ function json(status: number, payload: unknown, headers: Record<string, string>)
   return new Response(JSON.stringify(payload), { status, headers: { ...headers, ...JSON_HEADERS } });
 }
 
-function parseWith<Output>(schema: z.ZodType<Output>, body: unknown, label: string): Output {
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    throw knowledgeError('invalid_request', `${label} 请求体校验失败 / ${label} payload failed validation`, parsed.error.issues);
-  }
-  return parsed.data;
-}
-
-async function readJsonBody(request: Request): Promise<unknown> {
-  const text = await request.text();
-  if (text.trim().length === 0) {
-    throw knowledgeError('invalid_request', '请求体必须是 JSON 对象 / an empty body is not accepted');
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw knowledgeError('invalid_request', '请求体不是合法 JSON / body is not valid JSON');
-  }
-}
-
 export function createRequestHandler(deps: RouterDeps): RequestHandler {
   const { core, config } = deps;
   const logger = deps.logger;
+  const grants = deps.grants ?? null;
   const resolve = deps.identityResolver ?? ((request, cfg) => defaultResolveIdentity(request, cfg, logger));
 
   return async function handle(request: Request): Promise<Response> {
@@ -130,12 +150,15 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
 
     if (route === undefined) {
       if (shapeMatches.length === 0) {
-        return json(404, knowledgeError('not_found', `未知端点 ${url.pathname} / unknown endpoint`).toJSON(), cors);
+        return json(404, errorResponseBody(knowledgeError('not_found', `未知端点 ${url.pathname} / unknown endpoint`), createId()), cors);
       }
       const allowed = shapeMatches.map((candidate) => candidate.method).join(', ');
       return json(
         405,
-        knowledgeError('invalid_request', `${url.pathname} 仅支持 ${allowed} / method not allowed`).toJSON(),
+        errorResponseBody(
+          knowledgeError('invalid_request', `${url.pathname} 仅支持 ${allowed} / method not allowed`),
+          createId(),
+        ),
         cors,
       );
     }
@@ -144,22 +167,30 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
       const payload = await dispatch({
         route: route.segments,
         segments,
+        method,
         url,
         request,
         core,
         config,
+        grants,
         resolve,
         cors,
       });
       return payload ?? json(200, { ok: true }, cors);
     } catch (error) {
       const mapped = asKnowledgeError(error);
+      // One id per failed attempt: it goes into the envelope and into the log line, so a client's report
+      // and the server's record of that report are the same event.
+      const traceId = createId();
+      mapped.traceId ??= traceId;
       if (logger) {
         logger.warn('request failed', {
           method,
           path: url.pathname,
           code: mapped.code,
           status: mapped.status,
+          retryable: mapped.retryable,
+          traceId,
           ms: Date.now() - startedAt,
         });
       }
@@ -172,16 +203,19 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
 interface DispatchArgs {
   route: readonly string[];
   segments: readonly string[];
+  /** Uppercased HTTP verb, already matched against ROUTES; scope checks key on method + path. */
+  method: string;
   url: URL;
   request: Request;
   core: KnowledgeCore;
   config: CoreConfig;
-  resolve: (request: Request, config: CoreConfig, logger?: Logger) => Promise<Identity>;
+  grants: GrantStore | null;
+  resolve: IdentityResolver;
   cors: Record<string, string>;
 }
 
 async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
-  const { route, segments, url, request, core, config, resolve, cors } = args;
+  const { route, segments, method, url, request, core, config, grants, resolve, cors } = args;
   const path = route.join('/');
 
   // Health is the one public endpoint: platforms probe it before any credential exists.
@@ -190,19 +224,111 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
   }
 
   const identity = await resolve(request, config);
-  const actor = { userId: identity.userId, actor: identity.actor };
+  const grant = identity.grant;
+  // Cheap rejection before any body is read: the credential decides what this client may do at all.
+  requireScope(grant, method, path);
+  // §435 限制返回片段 rides on the actor, so every read service cuts the text it hands back. The device
+  // credential and the legacy path carry no cap: 收件箱 triage has to be able to see the whole capture.
+  const snippetChars = grant?.snippetChars ?? undefined;
+  const actor: ActorContext = {
+    userId: identity.userId,
+    actor: identity.actor,
+    ...(snippetChars === undefined ? {} : { snippetChars }),
+  };
+
+  if (path === 'api/admin/grants' || path === 'api/admin/grants/:id/revoke') {
+    return json(
+      200,
+      await handleAdminGrants({
+        method,
+        path,
+        identity,
+        store: grants,
+        ...(path === 'api/admin/grants/:id/revoke' ? { id: decodeURIComponent(paramAt(route, segments, 'id')) } : {}),
+        body: method === 'POST' && path === 'api/admin/grants' ? await readJsonBody(request) : undefined,
+      }),
+      cors,
+    );
+  }
 
   switch (path) {
+    case 'api/items': {
+      if (method === 'GET') {
+        const query = parseWith(libraryItemsQuerySchema, Object.fromEntries(url.searchParams), 'items query');
+        requireNodeAccess(grant, query.nodeId ?? null, '条目列表');
+        return json(200, await listLibraryItems(core, actor, query), cors);
+      }
+      requireNodeAccess(grant, null, '自动归类收集');
+      const input = parseWith(createLibraryItemInputSchema, await readJsonBody(request), 'create item');
+      return json(200, await createLibraryItem(core, actor, input), cors);
+    }
+    case 'api/items/:id': {
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      if (method === 'GET') {
+        requireNodeAccess(grant, null, '条目详情');
+        return json(200, await readLibraryItem(core, actor, id), cors);
+      }
+      requireNodeAccess(grant, null, '修改条目');
+      if (method === 'PATCH') {
+        const patch = parseWith(patchLibraryItemInputSchema, await readJsonBody(request), 'patch item');
+        return json(200, await patchLibraryItem(core, actor, id, patch), cors);
+      }
+      return json(200, await archiveLibraryItem(core, actor, id), cors);
+    }
+    case 'api/items/:id/restore': {
+      requireNodeAccess(grant, null, '恢复条目');
+      return json(200, await restoreLibraryItem(core, actor, decodeURIComponent(paramAt(route, segments, 'id'))), cors);
+    }
+    case 'api/items/:id/relations': {
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      requireNodeAccess(grant, null, '条目关联');
+      if (method === 'GET') return json(200, await listLibraryRelations(core, actor, id), cors);
+      const input = parseWith(createItemRelationInputSchema, await readJsonBody(request), 'create item relation');
+      return json(200, await createLibraryRelation(core, actor, id, input.targetId, input.relation), cors);
+    }
+    case 'api/items/:id/relations/:targetId': {
+      requireNodeAccess(grant, null, '移除条目关联');
+      await deleteLibraryRelation(
+        core,
+        actor,
+        decodeURIComponent(paramAt(route, segments, 'id')),
+        decodeURIComponent(paramAt(route, segments, 'targetId')),
+      );
+      return json(200, { ok: true }, cors);
+    }
     case 'api/capture': {
+      // 自动归类 picks the node, so a client limited to specific projects cannot capture: it would write
+      // wherever the classifier decided. It files through the inbox or gets a 全部项目 grant instead.
+      requireNodeAccess(grant, null, '自动归类写入');
       const payload = parseWith(captureRequestSchema, await readJsonBody(request), 'capture');
       return json(200, await core.capture(payload satisfies CaptureRequest, actor), cors);
     }
     case 'api/tree': {
       const query = parseWith(treeQuerySchema, Object.fromEntries(url.searchParams), 'tree query');
+      requireNodeAccess(grant, query.rootId ?? null, '整棵知识树');
       return json(200, await core.getTree(query satisfies TreeQuery, actor), cors);
+    }
+    case 'api/inbox': {
+      const query = parseWith(inboxQuerySchema, Object.fromEntries(url.searchParams), 'inbox query');
+      requireNodeAccess(grant, null, '收件箱列表');
+      return json(200, await core.listInbox(query satisfies InboxQuery, actor), cors);
+    }
+    case 'api/inbox/:id': {
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      requireNodeAccess(grant, null, '收件箱原文');
+      const source = await core.readRawSource(id, actor);
+      if (source === null) throw knowledgeError('not_found', `原文 ${id} 不存在 / raw source not found`);
+      return json(200, source, cors);
+    }
+    case 'api/inbox/:id/assign': {
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      const body = parseWith(assignSourceRequestSchema, await readJsonBody(request), 'assign source');
+      requireNodeAccess(grant, body.nodeId, '归档目标项目');
+      return json(200, await core.assignSource(id, body satisfies AssignSourceRequest, actor), cors);
     }
     case 'api/nodes/:id': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      requireNodeAccess(grant, id, '节点');
       if (request.method.toUpperCase() === 'GET') {
         return json(200, await core.getNodeDetail(id, actor), cors);
       }
@@ -212,30 +338,42 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
     case 'api/nodes/:id/move': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
       const body = parseWith(moveNodeRequestSchema, await readJsonBody(request), 'move node');
+      requireNodeAccess(grant, id, '被移动的节点');
+      // Both ends of a move have to be inside the grant: reparenting out of an authorised project is a
+      // write to the project it lands in.
+      requireNodeAccess(grant, body.targetParentId, '移动目标项目');
       return json(200, await core.moveNode(id, body satisfies MoveNodeRequest, actor), cors);
     }
     case 'api/search': {
       const body = parseWith(searchRequestSchema, await readJsonBody(request), 'search');
+      requireNodeAccess(grant, body.scopeNodeId ?? null, '全库检索');
       return json(200, await core.search(body satisfies SearchRequest, actor), cors);
     }
     case 'api/node-context': {
       const body = parseWith(nodeContextRequestSchema, await readJsonBody(request), 'node context');
+      requireNodeAccess(grant, body.nodeId, '上下文范围');
       return json(200, await core.buildNodeContext(body satisfies NodeContextRequest, actor), cors);
     }
     case 'api/chat': {
       const body = parseWith(nodeChatRequestSchema, await readJsonBody(request), 'chat');
+      requireNodeAccess(grant, body.nodeId, '对话节点');
       return json(200, await core.chat(body satisfies NodeChatRequest, actor), cors);
     }
     case 'api/conversations': {
       const nodeId = url.searchParams.get('nodeId') ?? undefined;
+      requireNodeAccess(grant, nodeId ?? null, '会话列表');
       return json(200, { conversations: await core.listConversations(actor, nodeId) }, cors);
     }
     case 'api/conversations/:id/messages': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
-      return json(200, { messages: await core.listConversationMessages(id, actor) }, cors);
+      const messages = await core.listConversationMessages(id, actor);
+      // A conversation is not addressable by project in its URL, so the rows themselves decide.
+      for (const message of messages) requireNodeAccess(grant, message.contextNodeId, '会话记录');
+      return json(200, { messages }, cors);
     }
     case 'api/capture/:id/retry': {
       const rawSourceId = decodeURIComponent(paramAt(route, segments, 'id'));
+      requireNodeAccess(grant, null, '重跑采集归类');
       return json(200, await core.retryCapture(rawSourceId, actor), cors);
     }
     default:

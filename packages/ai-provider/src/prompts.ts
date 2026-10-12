@@ -91,10 +91,11 @@ export function classifySystemPrompt(attachThreshold: number): string {
     '   nodeId must be copied verbatim from the supplied candidate list; never invent one.\n' +
     `3. 只有把握度 >= ${String(attachThreshold)}（attachThreshold）时才 attach；低于阈值一律 create。\n` +
     '   Attach only when your confidence clears attachThreshold; otherwise create.\n' +
-    '4. create 时 newNodeTitle 为简体中文、不超过 24 个字符；newNodePath 是「根 → 叶」层级数组，' +
-    '1 到 3 级，最后一个元素应与 newNodeTitle 一致。优先复用候选里已出现的领域名，不要虚构多余层级。\n' +
-    '   newNodePath is a root-to-leaf array of 1..3 levels; reuse domain names that already appear ' +
-    'in the candidates instead of inventing extra levels.\n' +
+    '4. create 时 newNodeTitle 为简体中文、不超过 24 个字符；newNodePath 是「学科/领域 → 研究方向 → 具体主题」层级数组，' +
+    '通常 2 到 3 级，最后一个元素应与 newNodeTitle 一致。优先复用候选里已有的学科/领域名称；没有合适候选时，选择真实的广义学科作为根，再逐步细分。' +
+    '严禁把整句话、摘录标题或原文片段直接当作根节点；不设固定学科表，也不要制造不必要的层级。\n' +
+    '   newNodePath is a root-to-leaf path: academic discipline/field → research direction → specific topic, usually 2..3 levels. ' +
+    'Reuse a relevant existing discipline from the candidates; otherwise choose the real broad discipline first. Never use a whole sentence, excerpt title, or source text as the root. Do not impose a fixed taxonomy or add needless levels.\n' +
     '5. reason 是一句简体中文，不超过 40 个字符。\n' +
     '6. confidence 是 0 到 1 的小数，不要写成语句。\n' +
     '7. 只输出 JSON / Output JSON only, exactly one of:\n' +

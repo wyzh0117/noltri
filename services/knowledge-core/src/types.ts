@@ -5,7 +5,7 @@
  * `src/http/router.ts` (web standards only), by the future MCP server, or directly in tests.
  */
 import type { AIProvider } from '@noltri/ai-provider';
-import type { Logger } from '@noltri/shared';
+import { truncate, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
 
@@ -17,6 +17,12 @@ export interface ActorContext {
   readonly userId: string;
   /** Written into VersionRecord.actor, e.g. "web_app" | "desktop" | "extension" | "mcp" | "api". */
   readonly actor: string;
+  /**
+   * §435 限制返回片段, carried from the client's grant. `undefined` = this actor reads what the library
+   * holds; a number caps every piece of stored text this request returns. Only a grant can set it — the
+   * device credential and the legacy path read in full, which is what 收件箱 triage needs.
+   */
+  readonly snippetChars?: number;
 }
 
 /** Everything a core service or pipeline step needs. Constructed once, in `createKnowledgeCore`. */
@@ -44,4 +50,13 @@ export function clamp01(value: number): number {
 /** Deterministic, storage-safe confidence rounding (three decimals keeps tier boundaries stable). */
 export function roundConfidence(value: number): number {
   return Number(clamp01(value).toFixed(3));
+}
+
+/**
+ * §435 限制返回片段. Applied where stored text leaves the Core, so a capped client cannot read the
+ * library out through whichever endpoint it likes: 检索, 上下文包, 节点详情 and 原文 all pass through here.
+ */
+export function capText(actor: ActorContext, text: string): string {
+  const max = actor.snippetChars;
+  return max === undefined ? text : truncate(text, max);
 }

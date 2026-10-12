@@ -7,6 +7,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config as loadDotenv } from 'dotenv';
@@ -15,26 +16,48 @@ import { loadCoreConfig } from './config';
 import { buildHandler, type CoreBundle } from './http/index';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const MAX_HTTP_BODY_BYTES = 256_000;
 
-/** Loads the repository-root .env without assuming the process started from any particular folder. */
+class BodyTooLargeError extends Error {}
+
+/** Loads local credentials without assuming cwd; process env always has priority over dotenv files. */
 export function loadRootEnv(startFrom: string = here): string | null {
-  let cursor = startFrom;
-  for (let depth = 0; depth < 8; depth += 1) {
-    const candidate = path.join(cursor, '.env');
-    if (existsSync(candidate)) {
-      loadDotenv({ path: candidate, quiet: true });
-      return candidate;
+  const explicit = process.env.NOLTRI_ENV_FILE?.trim();
+  const findUp = (name: string): string | undefined => {
+    let cursor = startFrom;
+    for (let depth = 0; depth < 8; depth += 1) {
+      const candidate = path.join(cursor, name);
+      if (existsSync(candidate)) return candidate;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
     }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) break;
-    cursor = parent;
-  }
-  return null;
+    return undefined;
+  };
+  const home = path.join(os.homedir(), '.noltri');
+  const data = process.env.NOLTRI_DATA_DIR?.trim();
+  const candidates = [
+    explicit,
+    findUp('.env.local'),
+    path.join(home, '.env.local'),
+    ...(data ? [path.join(data, '.env.local')] : []),
+    findUp('.env'),
+    path.join(home, '.env'),
+    ...(data ? [path.join(data, '.env')] : []),
+  ].filter((candidate): candidate is string => candidate !== undefined && existsSync(candidate));
+  for (const candidate of new Set(candidates)) loadDotenv({ path: candidate, quiet: true });
+  return candidates[0] ?? null;
 }
 
 async function readBody(request: IncomingMessage): Promise<Buffer | undefined> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+    size += buffer.length;
+    if (size > MAX_HTTP_BODY_BYTES) throw new BodyTooLargeError();
+    chunks.push(buffer);
+  }
   const body = Buffer.concat(chunks);
   return body.length === 0 ? undefined : body;
 }
@@ -116,10 +139,13 @@ export async function startServer(options: { port?: number } = {}): Promise<Runn
           reason: error instanceof Error ? error.message : 'unknown',
         });
         if (!response.headersSent) {
-          response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+          const tooLarge = error instanceof BodyTooLargeError;
+          response.writeHead(tooLarge ? 413 : 500, { 'content-type': 'application/json; charset=utf-8' });
         }
         response.end(
-          JSON.stringify({ error: { code: 'internal_error', message: 'Knowledge Core 未能完成该请求' } }),
+          JSON.stringify({ error: error instanceof BodyTooLargeError
+            ? { code: 'invalid_request', message: `请求正文超过 ${MAX_HTTP_BODY_BYTES} 字节` }
+            : { code: 'internal_error', message: 'Knowledge Core 未能完成该请求' } }),
         );
       }
     })();
@@ -144,7 +170,7 @@ export async function startServer(options: { port?: number } = {}): Promise<Runn
 }
 
 const isDirectRun =
-  process.argv[1] !== undefined && /server\.(ts|js)$/.test(path.resolve(process.argv[1]));
+  process.argv[1] !== undefined && /server\.(?:mjs|ts|js)$/.test(path.resolve(process.argv[1]));
 
 if (isDirectRun) {
   const running = await startServer();

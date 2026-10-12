@@ -11,6 +11,8 @@ import type {
   KnowledgeEdge,
   KnowledgeItem,
   KnowledgeNode,
+  ItemRelation,
+  ItemRelationKind,
   NodeStatus,
   ProcessingStatus,
   RawSource,
@@ -21,7 +23,19 @@ import type {
   JsonValue,
 } from '@noltri/schema';
 
-export type StorageDriverName = 'memory' | 'supabase';
+export type StorageDriverName = 'memory' | 'sqlite';
+
+/**
+ * What a driver can state about itself without a network round trip or a full scan — the payload
+ * `GET /api/health` shows. `ok` means "this driver believes it can serve reads and writes"; a driver
+ * that is missing a capability it needs (SQLite without FTS5, a schema it did not migrate) reports false.
+ */
+export interface StorageHealth {
+  readonly driver: StorageDriverName;
+  readonly ok: boolean;
+  /** Driver-specific facts. Never a credential, a connection string or anything else worth leaking. */
+  readonly detail: Readonly<Record<string, string | number | boolean | null>>;
+}
 
 export interface PathSegment {
   id: string;
@@ -137,6 +151,21 @@ export interface NodeListItemOptions {
   includeArchived?: boolean;
 }
 
+export interface ListInboxInput {
+  userId: string;
+  /** Omitted means "every status"; the Inbox passes the ones still needing attention. */
+  statuses?: ProcessingStatus[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreateLibraryRelationRecordInput {
+  userId: string;
+  fromSourceId: string;
+  targetId: string;
+  relation: ItemRelationKind;
+}
+
 export interface NodeStats {
   itemCount: number;
   sourceCount: number;
@@ -152,14 +181,33 @@ export interface KnowledgeRepository {
   readonly driver: StorageDriverName;
 
   createRawSource(input: CreateRawSourceInput): Promise<RawSource>;
+  /**
+   * The capture's idempotency pair. Returns the source a client already submitted under this key, or null
+   * when nothing was written for it — including when another user or another entry point holds that key,
+   * because the pair is scoped to one owner.
+   */
+  findRawSourceByIdempotencyKey(
+    userId: string,
+    clientId: string,
+    requestId: string,
+  ): Promise<RawSource | null>;
   updateRawSourceProcessing(
     id: string,
     userId: string,
     status: ProcessingStatus,
     errorReason?: string | null,
   ): Promise<RawSource>;
+  updateRawSource(
+    id: string,
+    userId: string,
+    patch: Partial<Pick<RawSource, 'rawText' | 'sourceType' | 'sourcePlatform' | 'sourceApp' | 'sourceTitle' | 'sourceUrl' | 'capturedAt' | 'metadata'>>,
+  ): Promise<RawSource>;
   findRawSource(id: string, userId: string): Promise<RawSource | null>;
   listRawSourcesByIds(ids: string[], userId: string): Promise<RawSource[]>;
+  /** Newest-first capture feed behind 收件箱; `statuses` narrows it to the unfinished rows. */
+  listInbox(input: ListInboxInput): Promise<RawSource[]>;
+  /** Whole-library totals per status, so a paginated list can still show honest badges. */
+  countInboxByStatus(userId: string): Promise<Record<ProcessingStatus, number>>;
 
   createKnowledgeItem(input: CreateKnowledgeItemRecordInput): Promise<KnowledgeItem>;
   findKnowledgeItem(id: string, userId: string): Promise<KnowledgeItem | null>;
@@ -186,8 +234,13 @@ export interface KnowledgeRepository {
 
   linkItemToNode(input: LinkItemInput): Promise<ItemNodeLink>;
   listLinksForItem(itemId: string, userId: string): Promise<ItemNodeLink[]>;
+  unlinkItemFromNodes(itemId: string, userId: string): Promise<void>;
   listLinksForNode(nodeId: string, userId: string): Promise<ItemNodeLink[]>;
   countItemsForNodes(userId: string, nodeIds: string[]): Promise<Record<string, number>>;
+
+  createItemRelation(input: CreateLibraryRelationRecordInput): Promise<ItemRelation>;
+  listItemRelations(sourceId: string, userId: string): Promise<ItemRelation[]>;
+  deleteItemRelations(sourceId: string, targetId: string, userId: string): Promise<void>;
 
   createEdge(input: CreateEdgeInput): Promise<KnowledgeEdge>;
   findEdge(
@@ -218,4 +271,6 @@ export interface KnowledgeRepository {
   listConversations(userId: string, nodeId?: string): Promise<Conversation[]>;
   addMessage(input: AddMessageInput): Promise<ConversationMessage>;
   listMessages(conversationId: string, userId: string): Promise<ConversationMessage[]>;
+
+  storageHealth(): StorageHealth;
 }

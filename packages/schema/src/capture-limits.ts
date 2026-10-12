@@ -1,0 +1,5 @@
+export const MIN_CAPTURE_TEXT_LENGTH = 8;
+export const MAX_CAPTURE_TEXT_LENGTH = 40_000;
+export const MAX_SURROUNDING_CONTEXT_LENGTH = 20_000;
+export const MIN_REQUEST_ID_LENGTH = 8;
+export const MAX_REQUEST_ID_LENGTH = 64;

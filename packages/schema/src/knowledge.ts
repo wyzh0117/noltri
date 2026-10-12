@@ -31,6 +31,9 @@ export const rawSourceSchema = z.object({
   processingStatus: processingStatusSchema,
   errorReason: z.string().nullable(),
   createdAt: z.string(),
+  /** Idempotency pair: null for every capture written before P3 and for any caller that states no key. */
+  requestId: z.string().nullable(),
+  clientId: z.string().nullable(),
 });
 export type RawSource = z.infer<typeof rawSourceSchema>;
 
@@ -132,6 +135,8 @@ export const createRawSourceInputSchema = z.object({
   sourceUrl: z.string().nullable().optional(),
   capturedAt: z.string(),
   metadata: jsonValueSchema.optional(),
+  requestId: z.string().nullable().optional(),
+  clientId: z.string().nullable().optional(),
 });
 export type CreateRawSourceInput = z.infer<typeof createRawSourceInputSchema>;
 

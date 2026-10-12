@@ -3,10 +3,12 @@ import type {
   ConversationMessage,
   CreateRawSourceInput,
   ItemNodeLink,
+  ItemRelation,
   JsonValue,
   KnowledgeEdge,
   KnowledgeItem,
   KnowledgeNode,
+  ProcessingStatus,
   RawSource,
   UpdateNodeInput,
   VersionRecord,
@@ -16,12 +18,14 @@ import type {
   AddMessageInput,
   CreateConversationInput,
   CreateEdgeInput,
+  CreateLibraryRelationRecordInput,
   CreateKnowledgeItemRecordInput,
   CreateNodeRecordInput,
   CreateVersionRecordInput,
   ItemVectorMatch,
   KeywordMatch,
   KnowledgeRepository,
+  ListInboxInput,
   LinkItemInput,
   MoveNodeRecordInput,
   MoveNodeRecordResult,
@@ -30,6 +34,7 @@ import type {
   NodeVectorMatch,
   PathSegment,
   StorageDriverName,
+  StorageHealth,
   VectorSearchOptions,
 } from './types';
 
@@ -40,6 +45,9 @@ function clone<T>(value: T): T {
 
 const titleKey = (title: string) => title.trim().toLowerCase();
 
+/** Page ceiling shared with the file-backed drivers so a caller cannot ask for the whole map. */
+const MAX_INBOX_PAGE = 200;
+
 export class InMemoryRepository implements KnowledgeRepository {
   readonly driver: StorageDriverName = 'memory';
 
@@ -49,6 +57,7 @@ export class InMemoryRepository implements KnowledgeRepository {
   private readonly nodes = new Map<string, KnowledgeNode>();
   private readonly nodeEmbeddings = new Map<string, number[]>();
   private readonly links = new Map<string, ItemNodeLink>();
+  private readonly itemRelations = new Map<string, { userId: string; relation: ItemRelation }>();
   private readonly edges = new Map<string, KnowledgeEdge>();
   private readonly versions = new Map<string, VersionRecord>();
   private readonly conversations = new Map<string, Conversation>();
@@ -70,9 +79,25 @@ export class InMemoryRepository implements KnowledgeRepository {
       processingStatus: 'pending',
       errorReason: null,
       createdAt: nowIso(),
+      requestId: input.requestId ?? null,
+      clientId: input.clientId ?? null,
     };
     this.rawSources.set(record.id, record);
     return clone(record);
+  }
+
+  async findRawSourceByIdempotencyKey(userId: string, clientId: string, requestId: string): Promise<RawSource | null> {
+    if (requestId.length === 0) return null;
+    for (const record of this.rawSources.values()) {
+      if (
+        record.userId === userId &&
+        record.clientId === clientId &&
+        record.requestId === requestId
+      ) {
+        return clone(record);
+      }
+    }
+    return null;
   }
 
   async updateRawSourceProcessing(
@@ -88,6 +113,18 @@ export class InMemoryRepository implements KnowledgeRepository {
     return clone(updated);
   }
 
+  async updateRawSource(
+    id: string,
+    userId: string,
+    patch: Partial<Pick<RawSource, 'rawText' | 'sourceType' | 'sourcePlatform' | 'sourceApp' | 'sourceTitle' | 'sourceUrl' | 'capturedAt' | 'metadata'>>,
+  ): Promise<RawSource> {
+    const existing = this.rawSources.get(id);
+    if (!existing || existing.userId !== userId) throw knowledgeError('not_found', `RawSource ${id} not found`);
+    const updated: RawSource = { ...existing, ...patch };
+    this.rawSources.set(id, updated);
+    return clone(updated);
+  }
+
   async findRawSource(id: string, userId: string): Promise<RawSource | null> {
     const found = this.rawSources.get(id);
     return found && found.userId === userId ? clone(found) : null;
@@ -98,6 +135,29 @@ export class InMemoryRepository implements KnowledgeRepository {
       .map((id) => this.rawSources.get(id))
       .filter((row): row is RawSource => Boolean(row && row.userId === userId))
       .map(clone);
+  }
+
+  async listInbox(input: ListInboxInput): Promise<RawSource[]> {
+    const statuses = new Set<ProcessingStatus>(input.statuses ?? []);
+    const mine: RawSource[] = [];
+    for (const row of this.rawSources.values()) {
+      if (row.userId !== input.userId) continue;
+      if (statuses.size > 0 && !statuses.has(row.processingStatus)) continue;
+      mine.push(row);
+    }
+    // Insertion order is oldest-first; the capture feed is newest-first, like the SQL drivers.
+    mine.reverse();
+    const offset = Math.max(Math.trunc(input.offset ?? 0), 0);
+    const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), MAX_INBOX_PAGE);
+    return mine.slice(offset, offset + limit).map(clone);
+  }
+
+  async countInboxByStatus(userId: string): Promise<Record<ProcessingStatus, number>> {
+    const counts: Record<ProcessingStatus, number> = { pending: 0, processing: 0, done: 0, failed: 0 };
+    for (const row of this.rawSources.values()) {
+      if (row.userId === userId) counts[row.processingStatus] += 1;
+    }
+    return counts;
   }
 
   async createKnowledgeItem(input: CreateKnowledgeItemRecordInput): Promise<KnowledgeItem> {
@@ -358,6 +418,12 @@ export class InMemoryRepository implements KnowledgeRepository {
       .map(clone);
   }
 
+  async unlinkItemFromNodes(itemId: string, userId: string): Promise<void> {
+    for (const [id, link] of this.links) {
+      if (link.itemId === itemId && link.userId === userId) this.links.delete(id);
+    }
+  }
+
   async listLinksForNode(nodeId: string, userId: string): Promise<ItemNodeLink[]> {
     return [...this.links.values()]
       .filter((link) => link.nodeId === nodeId && link.userId === userId)
@@ -372,6 +438,40 @@ export class InMemoryRepository implements KnowledgeRepository {
       if (Object.prototype.hasOwnProperty.call(counts, link.nodeId)) counts[link.nodeId] += 1;
     }
     return counts;
+  }
+
+  async createItemRelation(input: CreateLibraryRelationRecordInput): Promise<ItemRelation> {
+    if (input.fromSourceId === input.targetId) throw knowledgeError('invalid_request', '条目不能关联自身');
+    for (const sourceId of [input.fromSourceId, input.targetId]) {
+      const source = this.rawSources.get(sourceId);
+      if (!source || source.userId !== input.userId) throw knowledgeError('not_found', `收集条目 ${sourceId} 不存在`);
+    }
+    const key = `${input.fromSourceId}\u0000${input.targetId}`;
+    const existing = this.itemRelations.get(key);
+    const result: ItemRelation = existing
+      ? { ...existing.relation, relation: input.relation, direction: 'outgoing' as const }
+      : { targetId: input.targetId, relation: input.relation, direction: 'outgoing', createdAt: nowIso() };
+    this.itemRelations.set(key, { userId: input.userId, relation: result });
+    return clone(result);
+  }
+
+  async listItemRelations(sourceId: string, userId: string): Promise<ItemRelation[]> {
+    return [...this.itemRelations.entries()]
+      .flatMap(([key, value]) => {
+        if (value.userId !== userId) return [];
+        const [fromId, targetId] = key.split('\u0000');
+        if (fromId === sourceId) return [clone(value.relation)];
+        if (targetId === sourceId) return [{ ...clone(value.relation), targetId: fromId ?? '', direction: 'incoming' as const }];
+        return [];
+      })
+      .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+  }
+
+  async deleteItemRelations(sourceId: string, targetId: string, userId: string): Promise<void> {
+    for (const [fromId, toId] of [[sourceId, targetId], [targetId, sourceId]]) {
+      const key = `${fromId}\u0000${toId}`;
+      if (this.itemRelations.get(key)?.userId === userId) this.itemRelations.delete(key);
+    }
   }
 
   async createEdge(input: CreateEdgeInput): Promise<KnowledgeEdge> {
@@ -578,6 +678,26 @@ export class InMemoryRepository implements KnowledgeRepository {
       .filter((row) => row.itemId === itemId && row.userId === userId)
       .sort((first, second) => second.confidence - first.confidence)[0];
     return link ? link.nodeId : null;
+  }
+
+  /**
+   * Nothing here survives the process, and the store is per-process rather than per-tenant, so the
+   * totals are the caller's own. The point of reporting them is that a health check must not claim a
+   * memory store is a database.
+   */
+  storageHealth(): StorageHealth {
+    return {
+      driver: 'memory',
+      ok: true,
+      detail: {
+        volatile: true,
+        rawSources: this.rawSources.size,
+        knowledgeItems: this.items.size,
+        knowledgeNodes: this.nodes.size,
+        itemVectors: this.itemEmbeddings.size,
+        nodeVectors: this.nodeEmbeddings.size,
+      },
+    };
   }
 }
 

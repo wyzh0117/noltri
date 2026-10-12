@@ -92,6 +92,11 @@ h1 {
   border-color: #f3c9c9;
 }
 
+.cardWarn {
+  border-color: #f0dfb8;
+  background: #fffdf5;
+}
+
 .label {
   font-size: 13px;
   font-weight: 600;

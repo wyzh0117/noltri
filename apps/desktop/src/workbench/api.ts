@@ -1,0 +1,33 @@
+import { ApiClient } from '@noltri/api-client';
+
+export type WorkbenchApi = Pick<
+  ApiClient,
+  | 'health'
+  | 'tree'
+  | 'listItems'
+  | 'createItem'
+  | 'patchItem'
+  | 'archiveItem'
+  | 'restoreItem'
+  | 'listItemRelations'
+  | 'createItemRelation'
+  | 'deleteItemRelation'
+>;
+
+export interface WorkbenchEndpoint {
+  readonly apiBaseUrl: string;
+  readonly apiToken: string;
+}
+
+export function createWorkbenchApi(endpoint: WorkbenchEndpoint): WorkbenchApi {
+  return new ApiClient({
+    baseUrl: endpoint.apiBaseUrl,
+    ...(endpoint.apiToken.trim() === '' ? {} : { token: endpoint.apiToken.trim() }),
+    clientHint: 'desktop',
+  });
+}
+
+export function describeError(error: unknown): string {
+  if (error instanceof Error && error.message.trim() !== '') return error.message;
+  return '发生未知错误。';
+}

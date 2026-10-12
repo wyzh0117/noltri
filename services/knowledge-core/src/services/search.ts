@@ -8,7 +8,7 @@
  */
 import type { NodeSourceSummary, SearchHit, SearchMode, SearchRequest, SearchResponse } from '@noltri/schema';
 import { knowledgeError, truncate } from '@noltri/shared';
-import { clamp01, type ActorContext, type CoreDeps } from '../types';
+import { clamp01, capText, type ActorContext, type CoreDeps } from '../types';
 import { callProvider } from '../pipeline/provider';
 
 const MAX_SEARCH_LIMIT = 50;
@@ -64,7 +64,7 @@ export async function search(deps: CoreDeps, actor: ActorContext, request: Searc
   const allowed = request.scopeNodeId === undefined ? null : await subtreeIds(deps, actor, request.scopeNodeId);
   const merged = new Map<string, Channel>();
 
-  if (mode === 'semantic' || mode === 'hybrid') {
+  if (deps.config.embeddingEnabled && (mode === 'semantic' || mode === 'hybrid')) {
     const vectors = await callProvider('embed', deps, () => deps.provider.embed([query]));
     const embedding = vectors[0];
     if (embedding === undefined) {
@@ -82,7 +82,7 @@ export async function search(deps: CoreDeps, actor: ActorContext, request: Searc
     }
   }
 
-  if (mode === 'keyword' || mode === 'hybrid') {
+  if (mode === 'keyword' || mode === 'hybrid' || !deps.config.embeddingEnabled) {
     const matches = await deps.repository.searchKeyword(actor.userId, query, { limit: MAX_SEARCH_LIMIT });
     for (const match of matches) {
       const key = match.itemId !== null ? itemKey(match.itemId) : nodeKey(String(match.nodeId));
@@ -137,7 +137,7 @@ export async function search(deps: CoreDeps, actor: ActorContext, request: Searc
           ? 'semantic'
           : 'keyword';
 
-    const text = item !== null ? item.normalizedText : channel.text;
+    const text = capText(actor, item !== null ? item.normalizedText : channel.text);
     hits.push({
       itemId: channel.itemId,
       nodeId: channel.nodeId,

@@ -20,6 +20,15 @@ export type ProcessingStatus = z.infer<typeof processingStatusSchema>;
 export const captureActionSchema = z.enum(['created', 'attached', 'merged']);
 export type CaptureAction = z.infer<typeof captureActionSchema>;
 
+/**
+ * What a capture reply states instead of a vague success flag (本地桌面版与 Research 开发文档 §7.4):
+ * `saved` 已落盘, `processing` 待归纳, `completed` 归纳成功, `needs_review` 需要复核, `failed` 归纳失败但原文已保留.
+ * The first two are what a replay of a request the server already holds answers with; a client decides
+ * whether to keep retrying from `stage`, never from `items.length`.
+ */
+export const captureStageSchema = z.enum(['saved', 'processing', 'completed', 'needs_review', 'failed']);
+export type CaptureStage = z.infer<typeof captureStageSchema>;
+
 export const confidenceTierSchema = z.enum(['high', 'medium', 'low']);
 export type ConfidenceTier = z.infer<typeof confidenceTierSchema>;
 
@@ -70,7 +79,7 @@ export type SearchMode = z.infer<typeof searchModeSchema>;
 
 /**
  * Forward-compatible fields: V1 only stores them, the UI appears in V3. The labels are the single
- * source of truth for the matching Postgres CHECK constraints (see supabase/migrations).
+ * source of truth for the matching CHECK constraints in `packages/storage/src/sqlite-schema.ts`.
  */
 export const masteryLevelSchema = z.enum([
   'collected',

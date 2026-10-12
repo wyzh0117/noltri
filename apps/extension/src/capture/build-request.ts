@@ -3,11 +3,16 @@ import { MAX_CAPTURE_TEXT_LENGTH, MAX_SURROUNDING_CONTEXT_LENGTH, type CaptureRe
 import { normalizeKnowledgeText, truncate } from '@noltri/shared';
 import type { SelectionIntent } from '../source/extract';
 
-export type CaptureIntent = SelectionIntent;
+export type CaptureIntent = SelectionIntent & { readonly library?: CaptureRequest['library'] };
 
 export interface CaptureRequestMeta {
   readonly deviceId?: string;
   readonly capturedAt?: string;
+  /**
+   * The idempotency key of a capture the outbox is resending. Stated here rather than generated per
+   * attempt, because a retry that mints a new key would file the user's text a second time.
+   */
+  readonly requestId?: string;
 }
 
 /**
@@ -25,5 +30,7 @@ export function buildExtensionCaptureRequest(intent: CaptureIntent, meta: Captur
     client: 'extension',
     ...(meta.deviceId ? { deviceId: meta.deviceId } : {}),
     ...(meta.capturedAt ? { capturedAt: meta.capturedAt } : {}),
+    ...(meta.requestId ? { requestId: meta.requestId } : {}),
+    library: intent.library ?? { kind: 'knowledge' },
   });
 }

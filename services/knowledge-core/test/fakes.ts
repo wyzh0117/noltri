@@ -19,7 +19,7 @@ import type {
 } from '@noltri/ai-provider';
 import { createOfflineProvider } from '@noltri/ai-provider';
 import type { CaptureClient, CaptureRequest } from '@noltri/schema';
-import { nowIso, silentLogger } from '@noltri/shared';
+import { createId, nowIso, silentLogger } from '@noltri/shared';
 import { createInMemoryRepository, type KnowledgeRepository } from '@noltri/storage';
 import { loadCoreConfig, type CoreConfig } from '../src/config';
 import { createKnowledgeCore, type KnowledgeCore } from '../src/core';
@@ -44,8 +44,10 @@ export function captureOf(
   text: string,
   client: CaptureClient = 'web_app',
   source: Partial<CaptureRequest['source']> = {},
+  requestId: string = createId(),
 ): CaptureRequest {
   return {
+    requestId,
     text,
     source: { type: client === 'extension' ? 'web' : client === 'desktop' ? 'desktop_app' : 'manual', ...source },
     capture: { capturedAt: nowIso(), client },
@@ -150,13 +152,24 @@ export interface Harness {
   config: CoreConfig;
 }
 
-export function makeHarness(options: { config?: CoreConfig; script?: Script; repository?: KnowledgeRepository } = {}): Harness {
+export function makeHarness(
+  options: {
+    config?: CoreConfig;
+    script?: Script;
+    repository?: KnowledgeRepository;
+  } = {},
+): Harness {
   const timeline: TimelineEntry[] = [];
   const config = options.config ?? testConfig();
   const inner = options.repository ?? createInMemoryRepository();
   const repository = tracedRepository(inner, timeline);
   const provider = new ScriptedProvider(timeline, options.script ?? {});
-  const core = createKnowledgeCore({ repository, provider, config, logger: silentLogger });
+  const core = createKnowledgeCore({
+    repository,
+    provider,
+    config,
+    logger: silentLogger,
+  });
   return {
     core,
     repository,

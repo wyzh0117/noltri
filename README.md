@@ -1,101 +1,91 @@
-# 知序 Noltri
+<div align="center">
+  <h1>知序 Noltri</h1>
+  <p>把网页、Agent 与论文摘录，收进一棵自己的知识树。</p>
+</div>
 
-个人知识编译系统：Capture（捕获）→ Compile（归纳）→ Connect（连接）→ Complete（补全）。
-用户从任意入口选中文本，一键「归纳知识点」：系统**先保存原文**（RawSource，永不覆盖），再由
-Knowledge Core 抽取原子知识点、生成向量、做相似度检索，并按 attach（挂到已有节点）/
-create（新建节点）/ merge（合并）三种决策把知识点挂进知识树。
+[English](README.en.md)
 
-总控文档：`PROJECT_MASTER.md`（架构与铁律）、`V1_DEVELOPMENT.md`（V1 开发计划）、
-`FUNCTION_MAP.md`（已实现 / 后续实现 清单，唯一事实来源）。
+## 项目介绍
 
-## 仓库结构
+知序是一款本机运行的个人知识库。你可以从网页、Agent 对话和论文中收集片段，再按学科整理、搜索和对比。资料默认保存在自己的电脑上。
 
-| 位置 | 内容 |
-| --- | --- |
-| `packages/schema` | zod 契约（CaptureRequest / CaptureResult / KnowledgeNode / …），前后端共用 |
-| `packages/shared` | 时间、ID、纯文本渲染（树形渲染、知识点行）、KnowledgeError 等 |
-| `packages/api-client` | 对 core REST 的类型安全客户端（全部入口共用） |
-| `packages/storage` | InMemory + Supabase(Postgres) 两套仓储，同一接口 |
-| `packages/ai-provider` | AI 抽象：`offline`（确定性测试）与 `openai`（BYOK，OpenAI 兼容 chat+embeddings） |
-| `services/knowledge-core` | Knowledge Core：唯一知识逻辑来源，REST API，架构门禁 `pnpm gate` |
-| `services/ai` | 归纳管线编排（原文落库 → 抽取 → 嵌入 → 相似度 → 分类决策 → 持久化） |
-| `services/mcp-server` | MCP 服务器（Streamable HTTP，7 个工具），只经 ApiClient 访问 core |
-| `apps/web` | Next.js 16 知识树 Web 应用 + `/api/web/*` 代理（supabase / dev-token 两种鉴权） |
-| `apps/desktop` | Tauri 2 macOS 桌面伴侣：AX 选区观察、胶囊 UI、手动粘贴窗、设置管理器、MCP 配置写入 |
-| `apps/extension` | Chrome MV3 扩展（选区捕获，SDK 打包内联） |
-| `supabase/migrations` | Postgres 建表 SQL（静态审查通过；未在真实库执行过） |
-| `skills/knowledge-skill` | MCP 客户端侧使用指引（7 个工具的地域与诚实规则） |
+## 快速开始
 
-铁律（`pnpm gate` 机器检查）：core 不直接依赖 pg/supabase/openai/express；全文只有一处
-`createRawSource`；四个入口共用同一 ApiClient；MCP 不碰数据库。
+知序 0.1.0 目前提供 Apple Silicon（arm64）版本，要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
 
-## 快速开始（零外部依赖）
+此版本尚未通过 Apple 公证。若 macOS 提示无法验证开发者，请先确认文件来自本项目的 Releases；尝试打开后进入“系统设置”→“隐私与安全性”→“仍要打开”，再确认“打开”。更多说明见 [Apple 官方指引](https://support.apple.com/en-us/102445)。
+
+### 从源码运行
+
+从源码运行需要 Node.js 20.19+ 或 22.12+、pnpm 11、Rust 工具链和 Xcode Command Line Tools。
 
 ```bash
 pnpm install
-
-# 1) 启动 Knowledge Core（内存存储 + 离线确定性 AI，不需要任何 key）
-STORAGE_DRIVER=memory AI_PROVIDER=offline PORT=8787 npx tsx services/knowledge-core/src/server.ts
-# 健康检查: curl http://127.0.0.1:8787/api/health
-
-# 2) 启动 MCP 服务器（HTTP :3211，Bearer 令牌见环境变量）
-KNOWLEDGE_API_URL=http://127.0.0.1:8787 MCP_HTTP_TOKEN=dev-token MCP_HTTP_PORT=3211 \
-  npx tsx services/mcp-server/src/server.ts
-
-# 3) Web 应用
-pnpm --filter @noltri/web dev   # http://localhost:3000，登录页用 dev-token 模式
+cp .env.example .env.local
+pnpm dev
 ```
 
-MCP 端到端验证（需要 core 在 8787 运行）：
+知序桌面窗口会自动打开。首次运行使用本机 SQLite 保存资料，并采用离线模式；不填 AI 密钥也能收集和整理内容。
+
+如需使用 DeepSeek 自动整理内容，可在 `.env.local` 中填写自己的设置：
+
+```dotenv
+AI_PROVIDER=openai
+AI_API_KEY=填入你自己的密钥
+AI_BASE_URL=https://api.deepseek.com
+AI_CHAT_MODEL=deepseek-flash
+AI_EMBEDDINGS_ENABLED=false
+```
+
+安装版如需启用 AI，请把这些设置写入 `~/.noltri/.env.local`；从源码运行则写入仓库根目录的 `.env.local`。修改后重启知序。
+
+### 安装浏览器扩展
+
+从 [0.1.0 Releases](https://github.com/wyzh0117/noltri/releases/latest) 下载并解压 `noltri-extension.zip`。也可以从源码构建：
 
 ```bash
-pnpm --filter @noltri/mcp-server run verify
+pnpm --filter @noltri/extension build
 ```
 
-## 环境变量
+在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，选择「加载已解压的扩展程序」，再选解压后的文件夹（从源码构建时选择 `apps/extension/.output`）。浏览网页时右键选择“收集选中内容到知序”“收集此网页到知序”或“收集此图片到知序”，即可连同来源一并保存。
 
-| 变量 | 取值 | 说明 |
-| --- | --- | --- |
-| `PORT` | 默认 8787 | core 监听端口 |
-| `STORAGE_DRIVER` | `memory` \| `supabase` | 存储驱动；`supabase` 需要下一组变量 |
-| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | URL / JWT | Supabase REST 访问（service role，仅服务端） |
-| `AI_PROVIDER` | `offline` \| `openai` | `openai` 为 BYOK：OpenAI 兼容的 chat + embeddings |
-| `OPENAI_API_KEY` | sk-… | BYOK 密钥，仅服务端读取，绝不落库/落日志 |
-| `OPENAI_BASE_URL` | 默认官方 | 可指向任何 OpenAI 兼容网关 |
-| `OPENAI_CHAT_MODEL` / `OPENAI_EMBEDDING_MODEL` | 模型名 | 例如 `gpt-4o-mini` / `text-embedding-3-small` |
-| `MCP_HTTP_TOKEN` | 任意串 | MCP Bearer 令牌（常量时间比较，绝不回显） |
-| `MCP_HTTP_PORT` | 默认 3211 | MCP HTTP 端口 |
-| `KNOWLEDGE_API_URL` | URL | MCP → core 的基地址 |
-| `AUTH_MODE` | core 内部 | `supabase`（验证 JWT）\| `dev-token` \| `dev-open` |
+### 连接 Codex 或其他 Agent
 
-## 各工作区常用命令
+打开知序桌面应用或运行 `pnpm dev` 后，在 Codex 的 MCP 设置中添加本地 Streamable HTTP 服务；也可以写入 `~/.codex/config.toml`：
 
-```bash
-pnpm -r run typecheck                 # 全部 12 个工作区
-pnpm -r --no-bail run test            # 全部测试（PG 集成测试需 NOLTRI_PG_TEST_URL，缺失时自动 skip）
-pnpm gate                             # core 架构门禁
-pnpm build                            # turbo 全量构建
+```toml
+[mcp_servers.zhixu]
+url = "http://127.0.0.1:8790/mcp"
 ```
 
-单工作区示例：
+保存后重启 Codex。其他 Agent 也可以使用知序设置页提供的入口地址。若客户端只支持 stdio，可从仓库根目录启动：
 
-```bash
-pnpm --filter @noltri/knowledge-core run test
-pnpm --filter @noltri/web run test          # node --import tsx --test
-pnpm --filter noltri-desktop run test       # vitest
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+```toml
+[mcp_servers.zhixu]
+command = "pnpm"
+args = ["--filter", "@noltri/mcp-server", "exec", "tsx", "src/stdio.ts"]
+cwd = "/你的知序仓库绝对路径"
+env = { KNOWLEDGE_API_URL = "http://127.0.0.1:8787" }
 ```
 
-## BYOK 说明
+可参考 [Codex MCP 设置说明](https://developers.openai.com/codex/mcp)。
 
-系统默认不内置任何云服务凭据。`AI_PROVIDER=openai` 时由使用者自带
-`OPENAI_API_KEY`（兼容 OpenAI 接口规范的任意服务商皆可，通过 `OPENAI_BASE_URL` 切换）。
-密钥只存在于服务端进程环境；测试一律走 `offline` 提供方，不会产生真实计费调用。
-真实云数据库（Supabase）同理：代码与迁移已就绪并静态审查，但本仓库提交时不携带任何
-真实项目凭据，接入时自行配置 `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`。
+## 工作方式
 
-## 验证状态（诚实边界）
+每条资料都会保留原文和来源。知序把收集到的内容整理成便于浏览的摘要和研究点，再按学科归类到知识树中；你可以调整分类、搜索资料，并把相关内容并排对读。
 
-以下能力有自动化测试或运行时证据支撑；凡未列出的（真实浏览器加载扩展、桌面 GUI 实机
-运行、真实模型调用、真实 Supabase 实例、桌面打包签名）均未验证，详见 `FUNCTION_MAP.md`
-的「后续实现」。
+## 可以做什么
+
+- 从网页选中文字，连同标题和链接一起收进资料库；
+- 收集时可输入“社会科学 / 经济学 / 因果推断”这样的路径，直接创建学科树并完成归类；
+- 让 Codex 等 Agent 通过 MCP 保存回答或研究线索；
+- 收集论文段落，记录引用和研究方向；
+- 按知识树浏览、搜索、整理和比较资料。
+
+## 示例
+
+读论文时收集两篇文章关于同一研究问题的段落。知序会保留各自的来源，放进相应学科下；之后打开并排比较，就能快速查看两种方法和结论的异同。
+
+## License
+
+仓库当前没有提供 LICENSE 文件，使用、修改和再发布的授权方式尚未声明。

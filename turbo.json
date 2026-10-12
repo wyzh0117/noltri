@@ -4,14 +4,6 @@
   "globalEnv": [
     "NODE_ENV",
     "NOLTRI_ENV",
-    "SUPABASE_URL",
-    "SUPABASE_ANON_KEY",
-    "SUPABASE_SERVICE_ROLE_KEY",
-    "DATABASE_URL",
-    "DIRECT_URL",
-    "NEXT_PUBLIC_SUPABASE_URL",
-    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-    "NEXT_PUBLIC_KNOWLEDGE_API_URL",
     "KNOWLEDGE_API_URL",
     "NOLTRI_API_BASE_URL",
     "NOLTRI_ACCESS_TOKEN",
@@ -30,7 +22,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**", ".output/**"]
+      "outputs": ["dist/**", ".output/**"]
     },
     "typecheck": {
       "dependsOn": []

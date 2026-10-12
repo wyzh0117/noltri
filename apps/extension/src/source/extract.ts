@@ -69,16 +69,63 @@ export function productPlatform(hostname: string): string | undefined {
   return PRODUCT_PLATFORMS[registered] ?? PRODUCT_PLATFORMS[label];
 }
 
-const CONTENT_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:', 'file:']);
+const CONTENT_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:']);
 
 /** Only real content origins become source metadata; `chrome://` and friends carry no provenance. */
 export function parseHttpHref(href: string): URL | undefined {
   try {
     const url = new URL(href);
-    return CONTENT_PROTOCOLS.has(url.protocol) ? url : undefined;
+    return CONTENT_PROTOCOLS.has(url.protocol) && url.username === '' && url.password === '' ? url : undefined;
   } catch {
     return undefined;
   }
+}
+
+export interface PageCollectionContext {
+  readonly title: string;
+  readonly description?: string;
+  readonly previewImageUrl?: string;
+}
+
+/** Reads only explicit page metadata and never the page body or a screenshot. */
+export function readPageCollectionContext(): PageCollectionContext {
+  const meta = (...selectors: string[]): string | undefined => {
+    for (const selector of selectors) {
+      const value = document.querySelector<HTMLMetaElement>(selector)?.content.trim();
+      if (value) return value;
+    }
+    return undefined;
+  };
+  const image = meta('meta[property="og:image"]', 'meta[property="og:image:url"]', 'meta[name="twitter:image"]');
+  let previewImageUrl: string | undefined;
+  if (image) {
+    try {
+      const url = new URL(image, location.href);
+      if (url.protocol === 'https:' && url.username === '' && url.password === '') {
+        previewImageUrl = truncate(url.href, MAX_SOURCE_URL_LENGTH);
+      }
+    } catch {
+      // Invalid and non-HTTPS image metadata is only a missing preview.
+    }
+  }
+  const description = meta('meta[name="description"]', 'meta[property="og:description"]', 'meta[name="twitter:description"]');
+  return {
+    title: truncate(document.title.trim(), MAX_SOURCE_TITLE_LENGTH),
+    ...(description ? { description: truncate(normalizeKnowledgeText(description), 2_000) } : {}),
+    ...(previewImageUrl ? { previewImageUrl } : {}),
+  };
+}
+
+/** Reads only alt/title text from the image named by a context-menu click. */
+export function readImageAltText(imageHref: string): string | undefined {
+  const target = parseHttpHref(imageHref);
+  if (!target) return undefined;
+  const image = Array.from(document.images).find((candidate) => {
+    const current = parseHttpHref(candidate.currentSrc || candidate.src);
+    return current?.href === target.href;
+  });
+  const description = image?.alt.trim() || image?.title.trim();
+  return description ? truncate(normalizeKnowledgeText(description), 1_000) : undefined;
 }
 
 export interface SourcePageInput {

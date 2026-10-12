@@ -109,17 +109,14 @@ describe('MCP Streamable HTTP endpoint', () => {
     expect(listed.json.jsonrpc).toBe('2.0');
     expect(listed.json.id).toBe(2);
     const tools = (listed.json.result as Record<string, unknown>).tools as { name: string }[];
-    expect(tools.map((tool) => tool.name).sort()).toEqual(
-      [
-        'capture_knowledge',
-        'get_knowledge_node',
-        'get_knowledge_tree',
-        'get_node_context',
-        'move_knowledge_node',
-        'search_knowledge',
-        'update_knowledge_node',
-      ].sort(),
-    );
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'get_knowledge_item',
+      'get_knowledge_tree',
+      'relate_knowledge',
+      'remove_knowledge_relation',
+      'save_knowledge',
+      'search_knowledge',
+    ].sort());
   });
 
   it('rejects unauthenticated and mis-authenticated callers with 401', async () => {

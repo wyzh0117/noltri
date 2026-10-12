@@ -2,18 +2,27 @@ import { describe, expect, it } from 'vitest';
 import type { CaptureResult, CaptureResultItem } from '@noltri/schema';
 import {
   MAX_TOAST_ITEMS,
+  TOAST_DUPLICATE_HEADLINE,
   TOAST_INCOMPLETE_HEADLINE,
-  TOAST_SUCCESS_HEADLINE,
+  TOAST_PROCESSING_HEADLINE,
+  TOAST_QUEUED_HEADLINE,
+  TOAST_REVIEW_HEADLINE,
+  TOAST_SAVED_HEADLINE,
+  TOAST_STORED_HEADLINE,
   buildToastContent,
   renderNodePathLines,
   safeReasonLine,
   toastContentFromOutcome,
 } from '../src/overlay/toast-content';
 import { OFFLINE_MESSAGE } from '../src/api/client';
+import type { CaptureStage } from '@noltri/schema';
 
 function result(overrides: Partial<CaptureResult> = {}): CaptureResult {
   return {
     rawSourceId: 'rs-1',
+    requestId: 'req-toast-test-000001',
+    stage: 'completed',
+    duplicate: false,
     items: [
       {
         knowledgeItemId: 'ki-1',
@@ -43,7 +52,7 @@ describe('nodePath renders as the §10.5 tree', () => {
 
   it('shows the full path for a captured item', () => {
     const content = buildToastContent(result());
-    expect(content.headline).toBe(TOAST_SUCCESS_HEADLINE);
+    expect(content.headline).toBe(TOAST_STORED_HEADLINE);
     expect(content.tone).toBe('success');
     expect(content.lines).toEqual(['编程', '└── Python', '    └── 数据结构']);
   });
@@ -91,12 +100,56 @@ describe('failed and unreachable outcomes', () => {
 
   it('tells the user the tree is still being organised while processing', () => {
     const content = buildToastContent(result({ processingStatus: 'pending', items: [] }));
-    expect(content.headline).toBe(TOAST_SUCCESS_HEADLINE);
+    expect(content.headline).toBe(TOAST_STORED_HEADLINE);
     expect(content.lines).toEqual(['知识树整理中，稍后可在 App 查看']);
   });
 
   it('renders the offline message without a tree', () => {
-    const content = toastContentFromOutcome({ ok: false, message: OFFLINE_MESSAGE });
+    const content = toastContentFromOutcome({ ok: false, message: OFFLINE_MESSAGE, retryable: true, coreUnreachable: true });
     expect(content).toEqual({ headline: OFFLINE_MESSAGE, tone: 'error', lines: [] });
+  });
+
+  it('promises a queue only when the extension really kept one', () => {
+    const queued = toastContentFromOutcome({ ok: false, message: OFFLINE_MESSAGE, retryable: true, coreUnreachable: true, queued: true });
+    expect(queued.headline).toBe(TOAST_QUEUED_HEADLINE);
+    expect(queued.tone).toBe('warning');
+    expect(queued.lines.join('')).toContain('自动发送');
+    const dropped = toastContentFromOutcome({ ok: false, message: OFFLINE_MESSAGE, retryable: false, coreUnreachable: false, queued: false });
+    expect(dropped.headline).toBe(OFFLINE_MESSAGE);
+    expect(dropped.tone).toBe('error');
+  });
+});
+
+describe('the toast follows stage, not item counts', () => {
+  const stages: readonly (readonly [CaptureStage, string])[] = [
+    ['saved', TOAST_SAVED_HEADLINE],
+    ['processing', TOAST_PROCESSING_HEADLINE],
+    ['completed', TOAST_STORED_HEADLINE],
+    ['needs_review', TOAST_REVIEW_HEADLINE],
+  ];
+
+  it.each(stages)('says the §7.4 stage %s for an acked capture', (stage, headline) => {
+    const content = buildToastContent(result({ stage, items: [] }));
+    expect(content.headline).toBe(headline);
+    // A replayed capture answers with no items at all; that is not a failure and must not read like one.
+    expect(content.lines.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the tree lines for a completed capture and warns on the one to review', () => {
+    expect(buildToastContent(result({ stage: 'completed' })).lines).toEqual(['编程', '└── Python', '    └── 数据结构']);
+    expect(buildToastContent(result({ stage: 'needs_review' })).tone).toBe('warning');
+    expect(buildToastContent(result({ stage: 'saved' })).tone).toBe('success');
+  });
+
+  it('names a replay as already stored instead of claiming a new capture', () => {
+    const content = buildToastContent(result({ duplicate: true, stage: 'completed', items: [] }));
+    expect(content.headline).toBe(TOAST_DUPLICATE_HEADLINE);
+    expect(content.lines).toEqual([TOAST_STORED_HEADLINE]);
+  });
+
+  it('shows 需要复核 even when the model filed something, because confidence is the point', () => {
+    const content = buildToastContent(result({ stage: 'needs_review' }));
+    expect(content.headline).toContain('复核');
+    expect(content.tone).toBe('warning');
   });
 });

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "知序 Noltri",
   "version": "0.1.0",
-  "description": "选中网页文字，一键归纳进你自己的知识树。所有分类与知识树逻辑由 Knowledge Core 完成。",
+  "description": "收集选中的文字、网页简介或图片到自己的知识树。",
   "action": {
     "default_popup": "popup.html",
     "default_title": "知序 Noltri"

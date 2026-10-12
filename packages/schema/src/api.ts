@@ -11,6 +11,7 @@ import {
   contextScopeSchema,
   edgeRelationSchema,
   nodeStatusSchema,
+  processingStatusSchema,
   searchModeSchema,
   type NodeStatus,
 } from './enums';
@@ -28,21 +29,68 @@ export const apiErrorCodes = [
 export const apiErrorCodeSchema = z.enum(apiErrorCodes);
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;
 
+/**
+ * Whether resending the same request can possibly help. Codes the caller caused (a malformed body, a
+ * missing credential, a key that is already used) are never retryable; an upstream or storage fault is.
+ * Both Knowledge Core's envelope and `ApiClientError` read this table, so a client and the server cannot
+ * disagree about what a queue is allowed to resend.
+ */
+export const RETRYABLE_ERROR_CODES: ReadonlySet<ApiErrorCode> = new Set([
+  'provider_error',
+  'storage_error',
+  'rate_limited',
+  'internal_error',
+]);
+
 export const apiErrorSchema = z.object({
   error: z.object({
     code: apiErrorCodeSchema,
     message: z.string(),
+    retryable: z.boolean(),
+    /** Correlates the reply with the line the server logged; absent when no trace was started. */
+    traceId: z.string().optional(),
     details: z.unknown().optional(),
   }),
 });
 export type ApiError = z.infer<typeof apiErrorSchema>;
 
+/**
+ * What a caller has to be able to prove it is talking to. A port that answers JSON, or answers `ok`, is
+ * not evidence that *this* product is listening — local entry points check these three fields before
+ * forwarding a user's text.
+ */
+export const CORE_PRODUCT_ID = 'noltri-knowledge-core';
+
+/**
+ * Bumped when the wire contract changes in a way a client must know about. P3 added the capture request
+ * key, the stage reply and the retryable/traceId envelope, so this is the first published protocol.
+ */
+export const CORE_PROTOCOL_VERSION = '1';
+
 export const nodeIdParamsSchema = z.object({ id: z.string().min(1) });
+
+/**
+ * What the storage driver says about itself. Cheap and synchronous by contract: health is reachable
+ * without a credential, so this must never run a network query, a full scan or an integrity check, and
+ * it must never name a connection string. Primitives only, so a client can render it without knowing
+ * which driver produced it.
+ */
+export const storageHealthSchema = z.object({
+  driver: z.string(),
+  ok: z.boolean(),
+  detail: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+});
+export type StorageHealthPayload = z.infer<typeof storageHealthSchema>;
 
 export const healthResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
+  productId: z.string(),
+  /** Stable for the life of one process, different for every process: tells two Cores apart on one port history. */
+  instanceId: z.string(),
+  protocolVersion: z.string(),
   version: z.string(),
   storageDriver: z.string(),
+  storage: storageHealthSchema,
   aiProvider: z.string(),
   embeddingDim: z.number().int(),
   requiresAiKey: z.boolean(),
@@ -254,3 +302,57 @@ export const conversationMessagesResponseSchema = z.object({
 export const versionListResponseSchema = z.object({
   records: z.array(versionRecordSchema),
 });
+
+// --- GET /api/inbox --------------------------------------------------------
+/**
+ * The capture feed behind 收件箱. `status` is a comma-separated list of processing statuses because
+ * the router builds query objects with `Object.fromEntries`, which collapses repeated keys.
+ */
+export const inboxQuerySchema = z.object({
+  status: z.string().trim().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+export type InboxQuery = z.infer<typeof inboxQuerySchema>;
+
+export const inboxEntrySchema = z.object({
+  id: z.string(),
+  sourceType: rawSourceSchema.shape.sourceType,
+  sourcePlatform: z.string().nullable(),
+  sourceApp: z.string().nullable(),
+  sourceTitle: z.string().nullable(),
+  sourceUrl: z.string().nullable(),
+  capturedAt: z.string(),
+  processingStatus: processingStatusSchema,
+  errorReason: z.string().nullable(),
+  /** Preview only — the full text is one owner-scoped `GET /api/inbox/:id` away. */
+  textPreview: z.string(),
+  rawTextLength: z.number().int().min(0),
+});
+export type InboxEntry = z.infer<typeof inboxEntrySchema>;
+
+export const inboxCountsSchema = z.record(processingStatusSchema, z.number().int().min(0));
+export type InboxCounts = z.infer<typeof inboxCountsSchema>;
+
+export const inboxResponseSchema = z.object({
+  entries: z.array(inboxEntrySchema),
+  /** Whole-library totals per status, so paging never makes a badge lie. */
+  counts: inboxCountsSchema,
+  limit: z.number().int().min(1),
+  offset: z.number().int().min(0),
+});
+export type InboxResponse = z.infer<typeof inboxResponseSchema>;
+
+// --- POST /api/inbox/:id/assign -------------------------------------------
+export const assignSourceRequestSchema = z.object({
+  nodeId: z.string().min(1),
+  /** Defaults to the stored raw text; a person may file the sentence they actually want kept. */
+  text: z.string().trim().min(1).max(4000).optional(),
+});
+export type AssignSourceRequest = z.infer<typeof assignSourceRequestSchema>;
+
+export const assignSourceResponseSchema = z.object({
+  item: knowledgeItemSchema,
+  path: z.array(nodePathSegmentSchema),
+});
+export type AssignSourceResponse = z.infer<typeof assignSourceResponseSchema>;

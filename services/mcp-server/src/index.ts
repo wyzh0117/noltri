@@ -1,6 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import os from 'node:os';
 import { resolve } from 'node:path';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ApiClient } from '@noltri/api-client';
@@ -27,6 +30,32 @@ export interface McpHttpConfig {
   readonly host: string;
 }
 
+/** Loads local config for repo, packaged, and stdio runs; actual process env always wins. */
+export function loadMcpRootEnv(startFrom: string = path.dirname(fileURLToPath(import.meta.url))): void {
+  const findUp = (name: string): string | undefined => {
+    let cursor = startFrom;
+    for (let depth = 0; depth < 8; depth += 1) {
+      const candidate = path.join(cursor, name);
+      if (existsSync(candidate)) return candidate;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+    return undefined;
+  };
+  const data = process.env.NOLTRI_DATA_DIR?.trim();
+  const candidates = [
+    process.env.NOLTRI_ENV_FILE?.trim(),
+    findUp('.env.local'),
+    path.join(os.homedir(), '.noltri', '.env.local'),
+    ...(data ? [path.join(data, '.env.local')] : []),
+    findUp('.env'),
+    path.join(os.homedir(), '.noltri', '.env'),
+    ...(data ? [path.join(data, '.env')] : []),
+  ].filter((candidate): candidate is string => candidate !== undefined && existsSync(candidate));
+  for (const candidate of new Set(candidates)) dotenv.config({ path: candidate, quiet: true });
+}
+
 export function loadMcpConfig(env: EnvSource = currentEnv()): McpHttpConfig {
   const accessToken = envString(env, 'NOLTRI_ACCESS_TOKEN');
   const authRequired = envBoolean(env, 'AUTH_REQUIRED', false);
@@ -37,7 +66,7 @@ export function loadMcpConfig(env: EnvSource = currentEnv()): McpHttpConfig {
   }
   return {
     version: envString(env, 'MCP_VERSION', '0.1.0'),
-    apiBaseUrl: envString(env, 'KNOWLEDGE_API_URL'),
+    apiBaseUrl: envString(env, 'KNOWLEDGE_API_URL').trim() || 'http://127.0.0.1:8787',
     accessToken,
     authRequired,
     corsOrigin: envString(env, 'CORS_ORIGIN', '*'),
@@ -96,7 +125,7 @@ function healthBody(config: McpHttpConfig): Record<string, unknown> {
 
 /**
  * V1 serves MCP over stateless Streamable HTTP: a fresh Server + transport per POST /mcp request,
- * so no mcp-session-id and no SSE GET stream are needed, which keeps remote deploy (Vercel) simple.
+ * so no mcp-session-id and no SSE GET stream are needed — one POST carries a whole request.
  */
 async function handleMcpPost(
   req: IncomingMessage,
@@ -208,7 +237,7 @@ export function createMcpApp(config: McpHttpConfig, log: Logger = createLogger('
 }
 
 function main(): void {
-  dotenv.config({ quiet: true });
+  loadMcpRootEnv();
   const log = createLogger('noltri-mcp');
   let config: McpHttpConfig;
   try {

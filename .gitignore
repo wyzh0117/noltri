@@ -9,7 +9,38 @@ target/
 .env
 .env.local
 .env.*.local
+# Local credentials belong in ignored .env files; only the documented template is tracked.
+.env.*
+!.env.example
 .DS_Store
 *.log
 coverage/
 apps/extension/.output/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/resources/
+
+# Local databases and generated application state.
+*.sqlite
+*.sqlite-*
+*.db
+.local/
+.workspace/
+project.json
+project.bak
+vibe_images/
+
+# Internal development notes and delivery reports are not product documentation.
+AGENTS.md
+**/AGENTS.md
+FUNCTION_MAP.md
+PROJECT_MASTER.md
+V1_DEVELOPMENT.md
+Noltri*Development*.md
+*开发文档.md
+docs/*Delivery_Report.*
+docs/*-report.*
+docs/*audit*.md
+docs/*baseline-and-recovery.md
+docs/research-contract.md
+docs/*DECISION*.md
+docs/PATCH_*.md
