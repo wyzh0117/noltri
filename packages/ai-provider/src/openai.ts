@@ -48,7 +48,6 @@ const SUMMARY_CHARS = 160;
 const TITLE_CHARS = 28;
 const REASON_CHARS = 120;
 const RAW_SNIPPET_CHARS = 240;
-const DEGRADED_CONFIDENCE = 0.25;
 
 const chatResponseSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string().nullish() }) })).min(1),
@@ -323,7 +322,7 @@ export class OpenAiCompatibleProvider implements AIProvider {
       ];
       const second = await this.classifyOnce(corrected, input);
       if (second.kind === 'decision') return second.decision;
-      return this.degradeToCreate(input, `${first.problem}；重试后仍失败：${second.problem}`);
+      throw knowledgeError('provider_error', `classifyKnowledge: 模型未返回有效知识体系路径（${second.problem}）`);
     });
   }
 
@@ -415,6 +414,10 @@ export class OpenAiCompatibleProvider implements AIProvider {
     };
     if (options.wantsJson && options.structured) {
       payload.response_format = { type: 'json_object' };
+    }
+    // DeepSeek enables thinking by default; keep the JSON budget for the actual result.
+    if (options.wantsJson && new URL(this.chatEndpoint).origin === 'https://api.deepseek.com') {
+      payload.thinking = { type: 'disabled' };
     }
     return payload;
   }
@@ -553,14 +556,11 @@ export class OpenAiCompatibleProvider implements AIProvider {
         };
       }
       if (data.confidence < input.attachThreshold) {
-        return {
-          kind: 'decision',
-          decision: this.createDecision(
-            data,
-            input,
-            `匹配把握度 ${String(roundTo(data.confidence, 2))} 低于归档阈值 ${String(input.attachThreshold)}`,
-          ),
-        };
+        const reason = `匹配把握度 ${String(roundTo(data.confidence, 2))} 低于归档阈值 ${String(input.attachThreshold)}`;
+        const decision = this.createDecision(data, reason);
+        return decision === undefined
+          ? { kind: 'invalid', problem: `${reason}，请提供知识体系路径`, payload: data }
+          : { kind: 'decision', decision };
       }
       return {
         kind: 'decision',
@@ -572,33 +572,24 @@ export class OpenAiCompatibleProvider implements AIProvider {
         },
       };
     }
-    return { kind: 'decision', decision: this.createDecision(data, input, data.reason) };
+    const decision = this.createDecision(data, data.reason);
+    return decision === undefined
+      ? { kind: 'invalid', problem: 'create 必须提供学科/领域到具体主题的 newNodePath', payload: data }
+      : { kind: 'decision', decision };
   }
 
-  private createDecision(data: ClassifyPayload, input: ClassifyInput, reason: string): ClassifyDecision {
-    const title = truncate(
-      data.newNodeTitle?.trim() || input.suggestedTitle?.trim() || deriveTitle(input.itemText, TITLE_CHARS),
-      TITLE_CHARS,
-    );
+  private createDecision(data: ClassifyPayload, reason: string): ClassifyDecision | undefined {
     const path = (data.newNodePath ?? []).map((segment) => segment.trim()).filter((segment) => segment.length > 0);
-    if (path.length === 0 || path[path.length - 1] !== title) path.push(title);
+    const title = data.newNodeTitle?.trim() || path.at(-1);
+    if (title === undefined || path.length === 0) return undefined;
+    if (path.at(-1) !== title) path.push(title);
+    if (path.length < 2 || path.length > 6 || path.some((segment) => segment.length > 200)) return undefined;
     return {
       action: 'create',
       newNodeTitle: title,
-      newNodePath: path.slice(0, 4),
+      newNodePath: path,
       confidence: roundTo(clamp(data.confidence, 0, 1), 3),
       reason: truncate(reason, REASON_CHARS),
-    };
-  }
-
-  private degradeToCreate(input: ClassifyInput, problem: string): ClassifyDecision {
-    const title = truncate(input.suggestedTitle?.trim() || deriveTitle(input.itemText, TITLE_CHARS), TITLE_CHARS);
-    return {
-      action: 'create',
-      newNodeTitle: title,
-      newNodePath: [title],
-      confidence: DEGRADED_CONFIDENCE,
-      reason: `模型未返回可映射的候选节点，降级为新建（${truncate(problem, REASON_CHARS - 20)}）`,
     };
   }
 }

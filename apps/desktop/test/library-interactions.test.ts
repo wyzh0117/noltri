@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import type { LibraryItem } from '@noltri/schema';
+import ModelSettings from '../src/workbench/ModelSettings';
+import { describeError } from '../src/workbench/api';
 import { isWithinPath, parseSubjectPath, toggleComparedItems } from '../src/workbench/WorkbenchApp';
 
 function paper(id: string, title: string, content: string, url: string): LibraryItem {
@@ -20,6 +24,27 @@ function paper(id: string, title: string, content: string, url: string): Library
 }
 
 describe('library navigation and comparison', () => {
+  it('renders the model welcome screen with a selected profile and masked API key', () => {
+    const modelProfiles = ['flash', 'pro'].map((id) => ({
+      id, name: id, provider: 'deepseek' as const, baseUrl: 'https://api.deepseek.com',
+      apiKey: 'test-only', model: id === 'flash' ? 'deepseek-flash' : 'deepseek-v4-pro',
+    }));
+    const html = renderToStaticMarkup(createElement(ModelSettings, {
+      settings: { apiBaseUrl: '', apiToken: '', mcpEndpoint: '', modelProfiles, activeModelId: 'pro', runtimeStatus: 'managed' },
+      outsideTauri: false, welcome: true, onSaved: () => {}, onDone: () => {},
+    }));
+    expect(html).toContain('先连接你的 AI 模型');
+    expect(html).toContain('<option value="pro" selected="">pro · deepseek-v4-pro</option>');
+    expect(html).toContain('type="password"');
+    for (const label of ['API Key', '添加模型', '保存并启用', '进入知识库']) expect(html).toContain(label);
+  });
+
+  it('preserves native command error messages', () => {
+    expect(describeError('请选择当前使用的模型。')).toBe('请选择当前使用的模型。');
+    expect(describeError(new Error('网络不可用'))).toBe('网络不可用');
+    expect(describeError('  ')).toBe('发生未知错误。');
+  });
+
   it('keeps an empty category unfiltered and matches selected subject paths by ancestry', () => {
     expect(isWithinPath(['经济学', '金融'], [])).toBe(true);
     expect(isWithinPath(['经济学', '金融'], ['经济学'])).toBe(true);

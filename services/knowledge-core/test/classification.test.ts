@@ -9,6 +9,7 @@ import { cosineSimilarity } from '@noltri/shared';
 import type { ClassifyInput } from '@noltri/ai-provider';
 import type { Script } from './fakes';
 import { captureOf, makeHarness, repoCalls, testConfig, thresholdsOf } from './fakes';
+import { createLibraryItem, patchLibraryItem, readLibraryItem } from '../src/services/library';
 
 const ORIGINAL = '浓缩咖啡的粉水比通常控制在一比十八左右，萃取时间约二十五秒。';
 const NEAR_DUPLICATE = '手冲咖啡的粉水比通常控制在一比十八左右，萃取时间约二十五秒。';
@@ -196,10 +197,57 @@ describe('classification', () => {
     const harness = makeHarness({ script: attachScript('missing-node-id') });
     const result = await harness.core.capture(captureOf(PYTHON_TEXT), harness.actor);
 
-    expect(result.items[0]?.action).toBe('created');
-    const node = await harness.repository.findNode(String(result.items[0]?.nodeId), harness.actor.userId);
-    expect(node).not.toBeNull();
-    expect(node?.title.length).toBeGreaterThan(0);
+    expect(result.processingStatus).toBe('failed');
+    expect(result.items).toEqual([]);
+    expect(await harness.repository.listNodes(harness.actor.userId)).toEqual([]);
+    expect((await harness.repository.findRawSource(result.rawSourceId, harness.actor.userId))?.rawText).toBe(PYTHON_TEXT);
+  });
+
+  it.each([undefined, []])('classifies chat-only captures with subjectPath %j and returns the AI path', async (subjectPath) => {
+    const path = ['计算机科学', 'Python', '容器类型'];
+    const harness = makeHarness({ config: testConfig({ embeddingEnabled: false }), script: createScript(path) });
+    const { item } = await createLibraryItem(harness.core, harness.actor, {
+      content: PYTHON_TEXT,
+      kind: 'knowledge',
+      source: { type: 'manual' },
+      ...(subjectPath === undefined ? {} : { subjectPath }),
+    });
+    expect(harness.provider.embedInputs).toEqual([]);
+    expect(harness.provider.classifyInputs).toHaveLength(1);
+    expect(item.subjectPath).toEqual(path);
+    expect(item.aiStatus).toBe('ready');
+
+    const manualPath = ['个人知识', '待研究的容器'];
+    await patchLibraryItem(harness.core, harness.actor, item.id, { subjectPath: manualPath });
+    const retried = await harness.core.retryCapture(item.id, harness.actor);
+    expect(retried.items.every((entry) => entry.nodePath.join('/') === manualPath.join('/'))).toBe(true);
+    expect(harness.provider.classifyInputs).toHaveLength(1);
+    expect((await readLibraryItem(harness.core, harness.actor, item.id)).subjectPath).toEqual(manualPath);
+  });
+
+  it.each([false, true])('honors a correction during AI classification (model failure: %s)', async (fail) => {
+    const harness = makeHarness({ config: testConfig({ embeddingEnabled: false }) });
+    let begin!: () => void;
+    const started = new Promise<void>((resolve) => { begin = resolve; });
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    harness.provider.classifyKnowledge = async () => {
+      begin();
+      await gate;
+      if (fail) throw new Error('model unavailable');
+      return { action: 'create', newNodePath: ['计算机科学', 'Python'], confidence: 0.9, reason: '模型分类' };
+    };
+    const capture = harness.core.capture(captureOf(PYTHON_TEXT), harness.actor);
+    await started;
+    const [source] = await harness.repository.listInbox({ userId: harness.actor.userId });
+    const manualPath = ['个人知识', '人工分类'];
+    await patchLibraryItem(harness.core, harness.actor, String(source?.id), { subjectPath: manualPath });
+    finish();
+    const result = await capture;
+    expect(result.processingStatus).toBe('done');
+    expect(result.items[0]?.nodePath).toEqual(manualPath);
+    const nodes = await harness.repository.listNodes(harness.actor.userId);
+    expect(nodes.map((node) => node.title).sort()).toEqual([...manualPath].sort());
   });
 
   it('links a captured point back to its provenance and its neighbours', async () => {

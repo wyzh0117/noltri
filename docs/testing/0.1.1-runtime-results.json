@@ -1,0 +1,289 @@
+{
+  "testedAt": "2026-10-15T13:00:27.137Z",
+  "appVersion": "0.1.1",
+  "configurationMethod": "本机 profile 文件切换并重新启动安装版应用；未执行 GUI 点击验收",
+  "modelSwitch": {
+    "configuredModel": "deepseek-v4-pro",
+    "fromConfiguredModel": "deepseek-flash",
+    "durationMs": 5659,
+    "health": {
+      "status": "ok",
+      "productId": "noltri-knowledge-core",
+      "instanceId": "35fcef8c-e0e9-44a4-a0d7-bd999d8732b8",
+      "protocolVersion": "1",
+      "version": "0.1.1",
+      "storageDriver": "sqlite",
+      "storage": {
+        "driver": "sqlite",
+        "ok": true,
+        "detail": {
+          "fileName": "noltri.sqlite",
+          "journalMode": "wal",
+          "synchronous": "full",
+          "busyTimeoutMs": 5000,
+          "schemaVersion": 6,
+          "expectedSchemaVersion": 6,
+          "sqliteVersion": "3.53.1",
+          "fts5": true,
+          "rawSources": 13,
+          "knowledgeItems": 27,
+          "knowledgeNodes": 54,
+          "vectors": 8,
+          "vectorWidths": "1536×8"
+        }
+      },
+      "aiProvider": "openai-compatible",
+      "embeddingDim": 1536,
+      "requiresAiKey": true
+    },
+    "capture": {
+      "rawSourceId": "097a9833-bec8-47d9-a92d-1c8f5a9a94b7",
+      "requestId": "acceptance-0.1.1-model-switch-pro",
+      "stage": "completed",
+      "duplicate": false,
+      "items": [
+        {
+          "knowledgeItemId": "df3404de-f397-414c-a0f9-6162952e4a0c",
+          "text": "Python 的 asyncio.TaskGroup 使用异步上下文管理器等待全部任务结束。",
+          "nodeId": "d26752ed-c092-445c-a5a3-297100df2dd6",
+          "nodePath": [
+            "计算机科学",
+            "Python",
+            "asyncio.TaskGroup"
+          ],
+          "action": "created",
+          "confidence": 0.6,
+          "confidenceTier": "medium"
+        },
+        {
+          "knowledgeItemId": "6686946b-c2e1-476a-aba9-449c02a7500f",
+          "text": "一个任务失败时会取消其余任务，并通过 ExceptionGroup 汇总错误。",
+          "nodeId": "1e7eeb43-3a62-4218-ae5c-dcc7c80f2c80",
+          "nodePath": [
+            "计算机科学",
+            "并发与并行",
+            "任务失败取消与错误汇总"
+          ],
+          "action": "created",
+          "confidence": 0.6,
+          "confidenceTier": "medium"
+        }
+      ],
+      "processingStatus": "done"
+    },
+    "item": {
+      "id": "097a9833-bec8-47d9-a92d-1c8f5a9a94b7",
+      "content": "Python 的 asyncio.TaskGroup 使用异步上下文管理器等待全部任务结束；一个任务失败时会取消其余任务，并通过 ExceptionGroup 汇总错误。",
+      "summary": "asyncio.TaskGroup 使用异步上下文管理器等待全部任务结束",
+      "kind": "knowledge",
+      "source": {
+        "type": "manual",
+        "title": "模型切换验收 · Python TaskGroup",
+        "url": null,
+        "platform": null,
+        "appName": null,
+        "capturedAt": "2026-10-15T13:00:13.783Z",
+        "citation": null,
+        "page": null,
+        "author": null,
+        "doi": null
+      },
+      "previewImageUrl": null,
+      "subjectPath": [
+        "计算机科学",
+        "Python",
+        "asyncio.TaskGroup"
+      ],
+      "researchPoint": null,
+      "tags": [],
+      "aiStatus": "ready",
+      "createdAt": "2026-10-15T13:00:13.805Z",
+      "archived": false
+    },
+    "passed": true,
+    "initialFailure": {
+      "stage": "failed",
+      "errorReason": "模型未返回文本内容 / empty message content",
+      "durationMs": 13348
+    },
+    "retriedAt": "2026-10-15T13:08:18.437Z"
+  },
+  "restartPersistence": {
+    "checkedAt": "2026-10-15T13:09:57.438Z",
+    "activeProfile": "deepseek-flash",
+    "cases": [
+      {
+        "case": "python",
+        "itemId": "c319ba07-a955-4ef8-ac77-b0308555598d",
+        "passed": true
+      },
+      {
+        "case": "typescript",
+        "itemId": "e8f395a0-040e-4ddd-a104-872b9aa92a9e",
+        "passed": true
+      },
+      {
+        "case": "rust",
+        "itemId": "30b8ab5e-3c68-4215-ae2b-38daa6192fc7",
+        "passed": true
+      },
+      {
+        "case": "go",
+        "itemId": "00d34230-5de2-4997-ae22-ffd2ae9700b3",
+        "passed": true
+      },
+      {
+        "case": "sql",
+        "itemId": "bc7854a9-f1d6-4d53-a66e-7cf567204419",
+        "passed": true
+      },
+      {
+        "case": "physics",
+        "itemId": "810b1ffe-1320-4547-a24c-70aa03589503",
+        "passed": true
+      },
+      {
+        "case": "econometrics",
+        "itemId": "040d300d-ce0b-4418-a867-c4f936b8f277",
+        "passed": true
+      },
+      {
+        "case": "biology",
+        "itemId": "b900b683-ac47-4c51-a6d0-799ba66ab36d",
+        "passed": true
+      },
+      {
+        "case": "psychology",
+        "itemId": "91c0a47a-88aa-4346-a47c-8d3b514b53d3",
+        "passed": true
+      }
+    ],
+    "passed": true,
+    "health": {
+      "status": "ok",
+      "productId": "noltri-knowledge-core",
+      "instanceId": "952c0168-3a5c-488b-a151-82e167e80743",
+      "protocolVersion": "1",
+      "version": "0.1.1",
+      "storageDriver": "sqlite",
+      "storage": {
+        "driver": "sqlite",
+        "ok": true,
+        "detail": {
+          "fileName": "noltri.sqlite",
+          "journalMode": "wal",
+          "synchronous": "full",
+          "busyTimeoutMs": 5000,
+          "schemaVersion": 6,
+          "expectedSchemaVersion": 6,
+          "sqliteVersion": "3.53.1",
+          "fts5": true,
+          "rawSources": 14,
+          "knowledgeItems": 30,
+          "knowledgeNodes": 54,
+          "vectors": 8,
+          "vectorWidths": "1536×8"
+        }
+      },
+      "aiProvider": "openai-compatible",
+      "embeddingDim": 1536,
+      "requiresAiKey": true
+    }
+  },
+  "flashAfterSwitch": {
+    "configuredModel": "deepseek-flash",
+    "durationMs": 4331,
+    "capture": {
+      "rawSourceId": "951c3bc4-be2e-4a21-a6e6-ca1940b95959",
+      "requestId": "acceptance-0.1.1-model-switch-flash-final",
+      "stage": "completed",
+      "duplicate": false,
+      "items": [
+        {
+          "knowledgeItemId": "4aff90ab-ff91-44e9-ac73-b65cb97af1e8",
+          "text": "在 Python 中，dict 的键必须可哈希。",
+          "nodeId": "965a4a2e-ade0-4a1a-a098-ff7f167bfae8",
+          "nodePath": [
+            "Python"
+          ],
+          "action": "attached",
+          "confidence": 0.9,
+          "confidenceTier": "high"
+        },
+        {
+          "knowledgeItemId": "4306edc8-5664-4aa1-a554-1f7926f6dfb5",
+          "text": "在 Python 中，可变的 list 不能直接作为 dict 的键。",
+          "nodeId": "965a4a2e-ade0-4a1a-a098-ff7f167bfae8",
+          "nodePath": [
+            "Python"
+          ],
+          "action": "attached",
+          "confidence": 0.9,
+          "confidenceTier": "high"
+        },
+        {
+          "knowledgeItemId": "44d9e321-e25b-47d8-acfa-08259c92c061",
+          "text": "在 Python 中，只含可哈希元素的 tuple 可以作为 dict 的键。",
+          "nodeId": "965a4a2e-ade0-4a1a-a098-ff7f167bfae8",
+          "nodePath": [
+            "Python"
+          ],
+          "action": "attached",
+          "confidence": 0.9,
+          "confidenceTier": "high"
+        }
+      ],
+      "processingStatus": "done"
+    },
+    "item": {
+      "id": "951c3bc4-be2e-4a21-a6e6-ca1940b95959",
+      "content": "在 Python 中，dict 的键必须可哈希；可变的 list 不能直接作为键，而只含可哈希元素的 tuple 可以作为键。",
+      "summary": "Python 中 dict 的键必须可哈希",
+      "kind": "knowledge",
+      "source": {
+        "type": "manual",
+        "title": "模型切换验收 · Python 可哈希键",
+        "url": null,
+        "platform": null,
+        "appName": null,
+        "capturedAt": "2026-10-15T13:09:53.078Z",
+        "citation": null,
+        "page": null,
+        "author": null,
+        "doi": null
+      },
+      "previewImageUrl": null,
+      "subjectPath": [
+        "Python"
+      ],
+      "researchPoint": null,
+      "tags": [],
+      "aiStatus": "ready",
+      "createdAt": "2026-10-15T13:09:53.137Z",
+      "archived": false
+    },
+    "passed": true
+  },
+  "existingDataPreserved": {
+    "originalRawSources": 3,
+    "unchanged": true,
+    "totalRawSourcesAfterTests": 14
+  },
+  "verification": {
+    "workspaceTestsPassed": 523,
+    "rustTestsPassed": 5,
+    "typecheckedWorkspaces": 10,
+    "modelSettingsRenderCheckPassed": true,
+    "guiClickAcceptancePerformed": false,
+    "installedAppMatchesFinalBuild": true,
+    "appSignatureIntegrity": "passed",
+    "dmgSignatureAndChecksum": "passed",
+    "bundledSqliteAndJit": "passed",
+    "appleNotarized": false,
+    "gatekeeper": "rejected (ad-hoc signature; manual first launch approval required)"
+  },
+  "distribution": {
+    "dmg": "noltri-0.1.1-macos-arm64.dmg",
+    "sha256": "234d24b7bc13b138ed8702538b887d482bf41ef95a36686372b8d49f20305bef"
+  }
+}

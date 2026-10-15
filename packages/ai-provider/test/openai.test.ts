@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AiProviderConfig } from '@noltri/shared';
 import { OpenAiCompatibleProvider } from '../src/openai';
 
@@ -157,6 +157,7 @@ async function startFake(respond: Responder): Promise<Fake> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const fake of open.splice(0)) await fake.close();
 });
 
@@ -381,25 +382,37 @@ describe('classifyKnowledge', () => {
     expect(decision.confidence).toBe(0.61);
   });
 
-  it('degrades an unknown nodeId: one corrective retry, then create', async () => {
+  it('rejects an unknown nodeId after one corrective retry without inventing a category', async () => {
     const fake = await startFake(() =>
       jsonReply({ action: 'attach', nodeId: 'node-that-does-not-exist', confidence: 0.9, reason: '看起来相关' }),
     );
-    const decision = await providerFor(fake.baseUrl).classifyKnowledge({
+    const caught = await expectRejection(() => providerFor(fake.baseUrl).classifyKnowledge({
       itemText: 'Rust 的所有权规则在编译期检查',
       suggestedTitle: 'Rust 所有权',
       candidates: CANDIDATES,
       attachThreshold: 0.7,
-    });
+    }));
     expect(fake.calls).toHaveLength(2);
     const retryMessages = messagesOf(fake.calls[1]);
     expect(retryMessages).toHaveLength(4);
     expect(retryMessages[2]?.role).toBe('assistant');
     expect(retryMessages[3]?.content).toContain('不在候选节点列表中');
-    expect(decision.action).toBe('create');
-    expect(decision.confidence).toBeLessThanOrEqual(0.25);
-    expect(decision.newNodeTitle).toBe('Rust 所有权');
-    expect(decision.reason).toContain('降级');
+    expect(caught.code).toBe('provider_error');
+    expect(caught.message).toContain('有效知识体系路径');
+  });
+
+  it('asks the model again when create only repeats the excerpt title', async () => {
+    const fake = await startFake((_call, index) => jsonReply(index === 0
+      ? { action: 'create', newNodeTitle: 'Rust 所有权', confidence: 0.8, reason: '新内容' }
+      : { action: 'create', newNodePath: ['计算机科学', 'Rust', '所有权'], confidence: 0.8, reason: '编程语言中的内存管理' }));
+    const decision = await providerFor(fake.baseUrl).classifyKnowledge({
+      itemText: 'Rust 的所有权规则在编译期检查',
+      suggestedTitle: 'Rust 所有权',
+      candidates: [],
+      attachThreshold: 0.7,
+    });
+    expect(fake.calls).toHaveLength(2);
+    expect(decision.newNodePath).toEqual(['计算机科学', 'Rust', '所有权']);
   });
 
   it('turns a below-threshold attach into create instead of trusting the model', async () => {
@@ -436,6 +449,52 @@ describe('classifyKnowledge', () => {
     );
     expect(caught.code).toBe('provider_error');
     expect(fake.calls).toHaveLength(1);
+  });
+});
+
+describe('DeepSeek JSON compatibility', () => {
+  it('disables default thinking for extraction, JSON fallback and classification correction, but preserves chat', async () => {
+    const fake = await startFake((_call, index) => {
+      if (index === 0) return { status: 400, body: { error: { message: 'Unsupported response_format' } } };
+      if (index === 1) return jsonReply({ items: [{ text: 'Rust 在编译期检查所有权', confidence: 0.9 }] });
+      if (index === 2) return jsonReply({ action: 'attach', nodeId: 'unknown', confidence: 0.9, reason: '需纠正' });
+      if (index === 3) return jsonReply({ action: 'attach', nodeId: 'node-rust', confidence: 0.9, reason: '所有权主题一致' });
+      return chatReply('好的');
+    });
+    const originalFetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((url, options) =>
+      originalFetch(`${fake.baseUrl}${new URL(String(url)).pathname}`, options),
+    );
+    const provider = providerFor('https://api.deepseek.com/v1', { chatModel: 'deepseek-v4-pro' });
+    await provider.extractKnowledge({ text: 'Rust 在编译期检查所有权', sourceLabel: '代码节选', sourceType: 'manual' });
+    await provider.classifyKnowledge({ itemText: 'Rust 在编译期检查所有权', candidates: CANDIDATES, attachThreshold: 0.7 });
+    await provider.chat({ messages: [{ role: 'user', content: '你好' }] });
+    expect(fake.calls).toHaveLength(5);
+    for (const call of fake.calls.slice(0, 4)) {
+      expect(call.path).toBe('/v1/chat/completions');
+      expect(call.body.thinking).toEqual({ type: 'disabled' });
+    }
+    expect(fake.calls[1]?.body.response_format).toBeUndefined();
+    expect(fake.calls[4]?.body.thinking).toBeUndefined();
+  });
+
+  it('does not send DeepSeek-only fields to other origins, even with a DeepSeek model name', async () => {
+    const fake = await startFake(() => jsonReply({ items: [] }));
+    const originalFetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, options) => originalFetch(`${fake.baseUrl}/chat/completions`, options));
+    for (const baseUrl of [
+      'https://api.openai.com/v1',
+      'https://api.deepseek.com.example.com/v1',
+      'https://example.com/api.deepseek.com',
+      'https://api.deepseek.com:444/v1',
+      'http://api.deepseek.com',
+    ]) {
+      await providerFor(baseUrl, { chatModel: 'deepseek-v4-pro' }).extractKnowledge({
+        text: 'Rust 在编译期检查所有权', sourceLabel: '代码节选', sourceType: 'manual',
+      });
+    }
+    expect(fake.calls).toHaveLength(5);
+    expect(fake.calls.every((call) => call.body.thinking === undefined)).toBe(true);
   });
 });
 

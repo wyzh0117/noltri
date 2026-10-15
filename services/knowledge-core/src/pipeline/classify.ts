@@ -65,11 +65,17 @@ export async function classifyPoint(deps: CoreDeps, args: ClassifyArgs): Promise
 }
 
 /** A provider that answers "attach" for a node that does not exist must not corrupt the tree. */
-export function assertDecisionUsable(deps: CoreDeps, decision: ClassifyResult): void {
+export function assertDecisionUsable(_deps: CoreDeps, decision: ClassifyResult): void {
   if (decision.action !== 'attach' && decision.action !== 'create') {
     throw knowledgeError('provider_error', `未知的分类动作 "${String(decision.action)}" / unknown classification action`);
   }
   if (decision.action === 'attach' && typeof decision.nodeId !== 'string') {
     throw knowledgeError('provider_error', '分类结果要求关联节点但没有给出 nodeId / attach without nodeId');
+  }
+  if (!Number.isFinite(decision.confidence) || decision.confidence < 0 || decision.confidence > 1) {
+    throw knowledgeError('provider_error', '分类结果的置信度无效 / invalid classification confidence');
+  }
+  if (decision.action === 'create' && !(decision.newNodePath?.length || decision.newNodeTitle?.trim())) {
+    throw knowledgeError('provider_error', '分类结果没有知识体系路径 / classification path missing');
   }
 }

@@ -6,10 +6,41 @@
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../../..');
 const outDir = path.resolve(here, '../src-tauri/resources');
+
+// Pin the sidecar too: Node 24 supplies node:sqlite in the packaged Core.
+// Checksums are from https://nodejs.org/dist/v24.18.0/SHASUMS256.txt.
+if (process.platform === 'darwin') {
+  const target = process.env.TAURI_ENV_TARGET_TRIPLE ?? (process.arch === 'arm64' ? 'aarch64-apple-darwin' : process.arch);
+  if (target !== 'aarch64-apple-darwin') throw new Error(`This release supports Apple Silicon only: ${target}`);
+  const checksum = 'e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1';
+  const name = 'node-v24.18.0-darwin-arm64';
+  const binDir = path.resolve(here, '../src-tauri/binaries');
+  const archive = path.join(binDir, `${name}.tar.gz`);
+  await mkdir(binDir, { recursive: true });
+  let bytes = await readFile(archive).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+  if (!bytes) {
+    const response = await fetch(`https://nodejs.org/dist/v24.18.0/${name}.tar.gz`, { signal: AbortSignal.timeout(120_000) });
+    if (!response.ok) throw new Error(`Node download failed: HTTP ${response.status}`);
+    bytes = Buffer.from(await response.arrayBuffer());
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== checksum) {
+    throw new Error(`Node checksum mismatch; remove ${archive} and retry`);
+  }
+  await writeFile(archive, bytes);
+  execFileSync('tar', ['-xzf', archive, '-C', binDir, `${name}/bin/node`]);
+  await rename(path.join(binDir, name, 'bin/node'), path.join(binDir, `noltri-runtime-${target}`));
+  await rm(path.join(binDir, name), { recursive: true });
+  console.log('verified Node 24.18.0 sidecar (arm64)');
+}
 
 const entries = [
   // The Core server uses the `server.mjs` suffix to recognise direct execution.

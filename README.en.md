@@ -11,9 +11,19 @@ Noltri is a local personal knowledge library. Save useful passages from webpages
 
 ## Quick start
 
-Version 0.1.0 is currently available for Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
+Version 0.1.1 is currently available for Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
 
-This build has not been notarized by Apple. If macOS says the developer cannot be verified, first make sure the download came from this repository's Releases. After trying to open the app, go to **System Settings → Privacy & Security → Open Anyway**, then confirm **Open**. See [Apple's instructions](https://support.apple.com/en-us/102445).
+Version 0.1.1 fixes the missing app resource seal and invalid bundled runtime signature in 0.1.0. The app and the copy inside the DMG are now strictly verified. This release uses ad-hoc signing and **has no Developer ID signature or Apple notarization**, so macOS may still block the first launch. Check the download against `SHA256SUMS.txt` in Releases, then follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445).
+
+If macOS still reports that the app is damaged, verify the download source and checksum, then remove quarantine for this app only:
+
+```bash
+codesign --verify --deep --strict "/Applications/知序.app"
+xattr -dr com.apple.quarantine "/Applications/知序.app"
+open "/Applications/知序.app"
+```
+
+Run the last two commands only after signature verification succeeds. Distribution without this manual approval requires Developer ID signing and Apple notarization; see [Tauri's macOS signing guide](https://v2.tauri.app/distribute/sign/macos/).
 
 ### Run from source
 
@@ -25,9 +35,9 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-The desktop window opens automatically. The first run stores notes in a local SQLite database and uses offline mode, so you can collect and organize notes without an AI key.
+The desktop opens with model settings. Choose DeepSeek or an OpenAI-compatible provider, enter the API key, base URL and model, and save. Add multiple profiles and switch between them with a dropdown. The library sidebar opens the same settings page. The layout follows [Cherry Studio provider settings](https://www.cherryai.com/docs/en/pre-basic/settings/providers/) using existing forms and native dropdowns.
 
-To use DeepSeek for automatic summaries and organization, add your own settings to `.env.local`:
+Saving restarts services managed by the packaged app. External/development services require a manual restart and matching `.env.local` settings:
 
 ```dotenv
 AI_PROVIDER=openai
@@ -37,11 +47,11 @@ AI_CHAT_MODEL=deepseek-flash
 AI_EMBEDDINGS_ENABLED=false
 ```
 
-For the installed app, put these settings in `~/.noltri/.env.local`. When running from source, use `.env.local` at the repository root. Restart Noltri after changing the file.
+Model profiles are stored locally in `~/Library/Application Support/com.noltri.companion/settings.json` on macOS. Automatic classification requires a configured model. Unconfigured or failed requests keep the original text for later retry or manual organization.
 
 ### Install the browser extension
 
-Download and extract `noltri-extension.zip` from [0.1.0 Releases](https://github.com/wyzh0117/noltri/releases/latest), or build it from source:
+Download and extract `noltri-extension.zip` from [0.1.1 Releases](https://github.com/wyzh0117/noltri/releases/latest), or build it from source:
 
 ```bash
 pnpm --filter @noltri/extension build
@@ -85,6 +95,18 @@ Each saved note keeps its original text and source. Noltri prepares summaries an
 ## Example
 
 Collect passages from two papers about the same question. Noltri keeps each source with the note and files them under the relevant subject. Open the notes side by side to compare their methods and findings.
+
+## Verification and builds
+
+The 0.1.1 live DeepSeek acceptance covers Python, TypeScript, Rust, Go, SQL and short excerpts from physics, econometrics, molecular biology and psychology papers. See the [test guide](docs/testing/README.md) and [recorded results](docs/testing/0.1.1-deepseek-results.json). The tested local library retains these cards; installers contain no test credentials or user data.
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm --filter @noltri/desktop release:mac
+```
+
+The build pins and checksum-verifies Node 24, then verifies app/DMG signature integrity and bundled SQLite/JIT operation. A fully signed and notarized distribution must also pass `pnpm --filter @noltri/desktop verify:mac --require-notarization`.
 
 ## License
 

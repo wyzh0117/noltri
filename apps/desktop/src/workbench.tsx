@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ReactElement } from 'react';
 import { commands } from './lib/tauri';
+import type { DesktopSettings } from './lib/tauri';
+import ModelSettings from './workbench/ModelSettings';
 import { createWorkbenchApi } from './workbench/api';
 import WorkbenchApp from './workbench/WorkbenchApp';
 import './workbench/workbench.css';
@@ -13,6 +15,7 @@ interface Booted {
   readonly mcpEndpoint: string;
   readonly tokenConfigured: boolean;
   readonly outsideTauri: boolean;
+  readonly settings: DesktopSettings;
 }
 
 const DEV_CORE_URL: string = import.meta.env.VITE_NOLTRI_CORE_URL ?? 'http://localhost:8787';
@@ -24,6 +27,7 @@ function isTauri(): boolean {
 
 function WorkbenchBoot(): ReactElement {
   const [booted, setBooted] = useState<Booted | null>(null);
+  const [showWelcome, setShowWelcome] = useState(true);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
@@ -38,6 +42,7 @@ function WorkbenchBoot(): ReactElement {
           mcpEndpoint: DEV_MCP_URL,
           tokenConfigured: false,
           outsideTauri: true,
+          settings: { apiBaseUrl: DEV_CORE_URL, apiToken: '', mcpEndpoint: DEV_MCP_URL, modelProfiles: [], activeModelId: null, runtimeStatus: 'dev' },
         });
         return;
       }
@@ -50,6 +55,7 @@ function WorkbenchBoot(): ReactElement {
           mcpEndpoint: settings.mcpEndpoint,
           tokenConfigured: settings.apiToken.trim().length > 0,
           outsideTauri: false,
+          settings,
         });
       } catch (failure) {
         if (!cancelled) setProblem(failure instanceof Error ? failure.message : '无法读取本机设置。');
@@ -73,9 +79,19 @@ function WorkbenchBoot(): ReactElement {
 
   if (booted === null) {
     return (
-      <main className="boot-loading"><span className="loader" />正在打开你的知识库…</main>
+      <main className="boot-loading"><span className="loader" />正在打开模型设置…</main>
     );
   }
+
+  const modelSettings = <ModelSettings
+    settings={booted.settings}
+    outsideTauri={booted.outsideTauri}
+    welcome={showWelcome}
+    onSaved={(models, runtimeStatus) => setBooted((current) => current ? { ...current, settings: { ...current.settings, ...models, runtimeStatus } } : current)}
+    {...(showWelcome ? { onDone: () => setShowWelcome(false) } : {})}
+  />;
+
+  if (showWelcome) return <main className="model-onboarding">{modelSettings}</main>;
 
   return (
     <WorkbenchApp
@@ -84,6 +100,7 @@ function WorkbenchBoot(): ReactElement {
       mcpEndpoint={booted.mcpEndpoint}
       tokenConfigured={booted.tokenConfigured}
       outsideTauri={booted.outsideTauri}
+      modelSettings={modelSettings}
     />
   );
 }

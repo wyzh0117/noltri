@@ -52,7 +52,7 @@ async function subjectPathFor(
   userId: string,
   metadata: LibraryMetadata,
 ): Promise<string[]> {
-  if (metadata.subjectPath !== undefined) return metadata.subjectPath;
+  if (metadata.subjectPath && metadata.subjectPath.length > 0) return metadata.subjectPath;
   const points = await repository.listKnowledgeItemsForSource(source.id, userId);
   for (const point of points) {
     const links = await repository.listLinksForItem(point.id, userId);

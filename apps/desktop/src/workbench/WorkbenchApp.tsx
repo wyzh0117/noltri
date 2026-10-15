@@ -37,6 +37,7 @@ export interface WorkbenchAppProps {
   mcpEndpoint: string;
   tokenConfigured: boolean;
   outsideTauri: boolean;
+  modelSettings?: ReactNode;
 }
 
 export default function WorkbenchApp({
@@ -45,6 +46,7 @@ export default function WorkbenchApp({
   mcpEndpoint,
   tokenConfigured,
   outsideTauri,
+  modelSettings,
 }: WorkbenchAppProps): ReactElement {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -362,7 +364,7 @@ export default function WorkbenchApp({
 
         <div className="sidebar-bottom">
           <button type="button" className="settings-link" onClick={() => setOverlay('settings')}>
-            <span className="nav-glyph" aria-hidden="true">⚙</span>入口设置
+            <span className="nav-glyph" aria-hidden="true">⚙</span>设置
           </button>
           <div className="privacy-line"><span className={health === null ? 'connection-dot connection-dot-off' : 'connection-dot'} />
             {health === null ? '本机服务未连接' : '仅此设备保存'}</div>
@@ -377,8 +379,8 @@ export default function WorkbenchApp({
             <p>{view === 'organize' ? '归纳失败或仍在整理的内容会留在这里。' : '网页、Agent 对话和论文摘录，都能在这里找到。'}</p>
           </div>
           <div className="header-actions">
-            <button type="button" className="button-quiet" onClick={() => setOverlay('settings')} aria-label="打开入口设置">
-              <span aria-hidden="true">⌘</span>
+            <button type="button" className="button-quiet" onClick={() => setOverlay('settings')} aria-label="打开设置">
+              <span aria-hidden="true">⚙</span>
             </button>
             <button type="button" className="button-primary" onClick={() => setOverlay('collect')}>
               <span className="button-plus" aria-hidden="true">＋</span>快速收集
@@ -466,7 +468,7 @@ export default function WorkbenchApp({
       <dialog
         ref={dialogRef}
         className={`library-dialog ${overlay === 'detail' ? 'library-dialog-detail' : overlay === 'compare' ? 'library-dialog-compare' : ''}`}
-        aria-label={overlay === 'detail' ? '资料详情' : overlay === 'collect' ? '收集资料' : overlay === 'compare' ? '并排比较资料' : overlay === 'settings' ? '入口设置' : undefined}
+        aria-label={overlay === 'detail' ? '资料详情' : overlay === 'collect' ? '收集资料' : overlay === 'compare' ? '并排比较资料' : overlay === 'settings' ? '模型与入口设置' : undefined}
         onCancel={handleDialogCancel}
         onClick={(event) => { if (event.target === dialogRef.current) closeOverlay(); }}
       >
@@ -499,6 +501,7 @@ export default function WorkbenchApp({
         ) : null}
         {overlay === 'settings' ? (
           <SettingsDialog
+            modelSettings={modelSettings}
             apiBaseUrl={apiBaseUrl}
             mcpEndpoint={mcpEndpoint}
             tokenConfigured={tokenConfigured}
@@ -711,7 +714,7 @@ function CaptureDialog({ api, paths, onClose, onCreated, onError }: {
   return (
     <section className="dialog-content capture-dialog" aria-labelledby="collect-title">
       <DialogHeader eyebrow="放进知识库" title="收集一条资料" onClose={onClose} />
-      <p className="dialog-intro">先保存原文，再慢慢补充它属于哪里、解决什么问题。</p>
+      <p className="dialog-intro">保存原文后，AI 会自动判断学科与研究方向；你也可以手动指定或稍后修改。</p>
       <form className="capture-form" onSubmit={(event) => void submit(event)}>
         <div className="form-field">
           <label>资料类型</label>
@@ -727,9 +730,9 @@ function CaptureDialog({ api, paths, onClose, onCreated, onError }: {
               <option value="manual">手动摘录</option><option value="web">网页</option><option value="agent">Agent 对话</option><option value="desktop_app">桌面应用</option>
             </select>
           </div>
-          <div className="form-field"><label htmlFor="capture-category">放入学科</label>
+          <div className="form-field"><label htmlFor="capture-category">学科与研究方向</label>
             <select id="capture-category" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-              <option value="">之后再分类</option>{paths.map((path) => <option key={path.id} value={path.id}>{path.title}</option>)}
+              <option value="">由 AI 自动判断</option>{paths.map((path) => <option key={path.id} value={path.id}>{path.title}</option>)}
             </select>
           </div>
         </div>
@@ -775,6 +778,8 @@ function ItemDetailDialog({ api, item, items, paths, compareSelected, busy, onCl
   const [categoryId, setCategoryId] = useState(currentCategory?.id ?? '');
   const [subjectPathInput, setSubjectPathInput] = useState('');
   const [researchPoint, setResearchPoint] = useState(item.researchPoint ?? '');
+  const [editTitle, setEditTitle] = useState(item.source.title ?? '');
+  const [editContent, setEditContent] = useState(item.content);
   const [relations, setRelations] = useState<ItemRelation[]>([]);
   const [relationsError, setRelationsError] = useState<string | null>(null);
   const [relationTarget, setRelationTarget] = useState('');
@@ -787,6 +792,8 @@ function ItemDetailDialog({ api, item, items, paths, compareSelected, busy, onCl
     setSubjectPathInput('');
     setResearchPoint(item.researchPoint ?? '');
   }, [currentCategory?.id, item.id, item.researchPoint]);
+
+  useEffect(() => { setEditTitle(item.source.title ?? ''); setEditContent(item.content); }, [item.id, item.content, item.source.title]);
 
   useEffect(() => {
     let cancelled = false;
@@ -808,6 +815,19 @@ function ItemDetailDialog({ api, item, items, paths, compareSelected, busy, onCl
         subjectPath: newPath.length > 0 ? newPath : path?.labels ?? [],
         researchPoint: researchPoint.trim() || null,
       });
+      onUpdated(result.item);
+    } catch (error) {
+      onError(`保存失败：${describeError(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveContent(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const result = await api.patchItem(item.id, { content: editContent.trim(), source: { title: editTitle.trim() || null } });
       onUpdated(result.item);
     } catch (error) {
       onError(`保存失败：${describeError(error)}`);
@@ -849,6 +869,11 @@ function ItemDetailDialog({ api, item, items, paths, compareSelected, busy, onCl
         {item.summary ? <section className="detail-summary"><div className="section-eyebrow">快速回忆</div><p>{item.summary}</p></section> : null}
         {item.researchPoint ? <section className="detail-point"><div className="section-eyebrow">研究点</div><p>{item.researchPoint}</p></section> : null}
         <section className="detail-original"><div className="section-eyebrow">原文摘录</div><blockquote>{item.content}</blockquote></section>
+        <details className="detail-content-editor"><summary>编辑原文与标题</summary><form className="capture-form" onSubmit={(event) => void saveContent(event)}>
+          <div className="form-field"><label htmlFor="detail-edit-title">标题</label><input id="detail-edit-title" value={editTitle} maxLength={600} onChange={(event) => setEditTitle(event.target.value)} /></div>
+          <div className="form-field"><label htmlFor="detail-edit-content">原文或摘录</label><textarea id="detail-edit-content" rows={8} minLength={8} maxLength={40000} required value={editContent} onChange={(event) => setEditContent(event.target.value)} /></div>
+          <button className="button-soft" type="submit" disabled={saving || editContent.trim().length < 8}>{saving ? '正在保存…' : '保存内容'}</button>
+        </form></details>
         {item.source.citation ? <section className="detail-citation"><div className="section-eyebrow">引用出处</div><p>{item.source.citation}</p>{item.source.doi ? <span>DOI：{item.source.doi}</span> : null}</section> : null}
         <section className="detail-origin"><div className="section-eyebrow">来源</div>
           {item.source.title ? <p>{item.source.title}</p> : null}
@@ -914,7 +939,8 @@ function CompareDialog({ items, onClose }: { items: LibraryItem[]; onClose: () =
   );
 }
 
-function SettingsDialog({ apiBaseUrl, mcpEndpoint, tokenConfigured, outsideTauri, health, healthError, onClose, onCopyEndpoint, onRefresh }: {
+function SettingsDialog({ modelSettings, apiBaseUrl, mcpEndpoint, tokenConfigured, outsideTauri, health, healthError, onClose, onCopyEndpoint, onRefresh }: {
+  modelSettings?: ReactNode;
   apiBaseUrl: string;
   mcpEndpoint: string;
   tokenConfigured: boolean;
@@ -927,7 +953,9 @@ function SettingsDialog({ apiBaseUrl, mcpEndpoint, tokenConfigured, outsideTauri
 }): ReactElement {
   return (
     <section className="dialog-content settings-dialog-content" aria-labelledby="settings-title">
-      <DialogHeader eyebrow="连接你的入口" title="网页和 Agent 都能收进来" onClose={onClose} />
+      <DialogHeader eyebrow="偏好设置" title="模型与收集入口" onClose={onClose} />
+      {modelSettings}
+      <details className="connection-details"><summary>浏览器、Agent 与本机连接</summary>
       <p className="dialog-intro">收集入口接到同一个知识库。论文摘录也可以直接从这里粘贴保存。</p>
       <div className="setup-steps">
         <div className="setup-step"><span>01</span><div><strong>网页</strong><p>安装知序浏览器扩展。遇到有用的网页或段落时，点扩展即可收集来源和内容。</p></div></div>
@@ -940,6 +968,7 @@ function SettingsDialog({ apiBaseUrl, mcpEndpoint, tokenConfigured, outsideTauri
         {outsideTauri ? <small>当前是浏览器预览模式，读取不到应用内的本机连接设置。</small> : tokenConfigured ? <small>本机授权已配置，密钥不会显示在此处。</small> : null}
         <button type="button" className="text-action" onClick={onRefresh}>重新检查连接</button>
       </div>
+      </details>
     </section>
   );
 }

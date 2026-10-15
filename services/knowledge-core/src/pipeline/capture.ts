@@ -306,23 +306,8 @@ async function placePoint(
     ...(embedding === undefined ? {} : { embedding, model: deps.config.ai.embedModel }),
   };
 
-  // A user-selected path wins even when it arrives while this capture is being processed.
-  const latestSource = await deps.repository.findRawSource(rawSourceId, actor.userId);
-  const library = latestSource === null ? undefined : libraryMetadataSchema.safeParse(latestSource.metadata.library);
-  const manualPath = library?.success ? library.data.subjectPath : undefined;
-  if (manualPath && manualPath.length > 0) {
-    const resolved = await resolveNodeChain(deps, actor, manualPath, seed, point.confidence);
-    return (await persistPoint(deps, actor, {
-      rawSourceId,
-      point,
-      ...(embedding === undefined ? {} : { embedding }),
-      targetNodeId: resolved.node.id,
-      action: resolved.createdNodeIds.length > 0 ? 'created' : 'attached',
-      linkConfidence: roundConfidence(point.confidence),
-      provenanceNodeId: null,
-      relatedNodeId: null,
-    })).result;
-  }
+  const manual = await placeInManualPath(deps, actor, rawSourceId, point, seed);
+  if (manual !== undefined) return manual;
 
   // Dedupe rule first: a near-duplicate of an existing item joins that item's node and is reported as
   // "merged". The pre-existing item and its RawSource are left untouched (PROJECT_MASTER §2.2, §3.3).
@@ -342,7 +327,17 @@ async function placePoint(
   }
 
   const { candidates } = await buildCandidates(deps, actor.userId, similarity.nodeMatches);
-  const decision = await classifyPoint(deps, { itemText: point.text, suggestedTitle: point.title, candidates });
+  let decision: ClassifyResult;
+  try {
+    decision = await classifyPoint(deps, { itemText: point.text, suggestedTitle: point.title, candidates });
+  } catch (error) {
+    const corrected = await placeInManualPath(deps, actor, rawSourceId, point, seed);
+    if (corrected !== undefined) return corrected;
+    throw error;
+  }
+  // A person may correct the path while the model request is in flight.
+  const corrected = await placeInManualPath(deps, actor, rawSourceId, point, seed);
+  if (corrected !== undefined) return corrected;
   assertDecisionUsable(deps, decision);
 
   const provenanceNodeId =
@@ -366,12 +361,10 @@ async function placePoint(
       });
       return persisted.result;
     }
-    deps.logger.warn('classification pointed at a missing node, creating from the suggested path', {
-      nodeId: String(decision.nodeId),
-    });
+    throw knowledgeError('provider_error', '分类结果关联的节点已不存在，请重试 / classification target is unavailable');
   }
 
-  const titles = sanitizePath(pathOf(decision, point), point.title);
+  const titles = sanitizePath(pathOf(decision), '');
   const resolved = await resolveNodeChain(
     deps,
     actor,
@@ -394,8 +387,31 @@ async function placePoint(
   return persisted.result;
 }
 
-function pathOf(decision: ClassifyResult, point: NormalizedPoint): string[] {
+async function placeInManualPath(
+  deps: CoreDeps,
+  actor: ActorContext,
+  rawSourceId: string,
+  point: NormalizedPoint,
+  seed: EmbedSeed,
+): Promise<CaptureResultItem | undefined> {
+  const source = await deps.repository.findRawSource(rawSourceId, actor.userId);
+  const library = libraryMetadataSchema.safeParse(source?.metadata.library);
+  const path = library.success ? library.data.subjectPath : undefined;
+  if (!path?.length) return undefined;
+  const resolved = await resolveNodeChain(deps, actor, path, seed, 1);
+  return (await persistPoint(deps, actor, {
+    rawSourceId,
+    point,
+    ...(seed.embedding === undefined ? {} : { embedding: seed.embedding }),
+    targetNodeId: resolved.node.id,
+    action: resolved.createdNodeIds.length > 0 ? 'created' : 'attached',
+    linkConfidence: 1,
+    provenanceNodeId: null,
+    relatedNodeId: null,
+  })).result;
+}
+
+function pathOf(decision: ClassifyResult): string[] {
   const provided = decision.newNodePath ?? [];
-  const fallback = decision.newNodeTitle ?? point.title;
-  return provided.length > 0 ? [...provided] : [fallback];
+  return provided.length > 0 ? [...provided] : [decision.newNodeTitle ?? ''];
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CaptureRequest, CaptureResult } from '@noltri/schema';
 import {
   QUEUE_DISABLED_MESSAGE,
@@ -14,6 +14,13 @@ import { buildExtensionCaptureRequest } from '../src/capture/build-request';
 import type { CaptureOutcome } from '../src/api/client';
 
 const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse('2026-10-05T12:00:00.000Z');
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
+});
+afterEach(() => { vi.useRealTimers(); });
 
 function requestOf(requestId: string): CaptureRequest {
   return buildExtensionCaptureRequest(
@@ -22,7 +29,7 @@ function requestOf(requestId: string): CaptureRequest {
   );
 }
 
-function entryOf(requestId: string, queuedAtMs = Date.parse('2026-10-05T12:00:00.000Z')): OutboxEntry {
+function entryOf(requestId: string, queuedAtMs = NOW): OutboxEntry {
   return { id: requestId, request: requestOf(requestId), queuedAt: new Date(queuedAtMs).toISOString(), tries: 0 };
 }
 

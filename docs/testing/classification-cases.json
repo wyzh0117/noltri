@@ -1,0 +1,86 @@
+[
+  {
+    "id": "python",
+    "label": "Python 列表推导式",
+    "kind": "knowledge",
+    "url": "https://docs.python.org/3/tutorial/datastructures.html",
+    "content": "squares = [x**2 for x in range(10)]",
+    "expected": "Python",
+    "pathPattern": "python"
+  },
+  {
+    "id": "typescript",
+    "label": "TypeScript 泛型函数",
+    "kind": "knowledge",
+    "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html",
+    "content": "function firstElement<Type>(arr: Type[]): Type | undefined {\n  return arr[0];\n}",
+    "expected": "TypeScript / 类型系统或泛型",
+    "pathPattern": "typescript|泛型|类型系统"
+  },
+  {
+    "id": "rust",
+    "label": "Rust 所有权转移",
+    "kind": "knowledge",
+    "url": "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html",
+    "content": "fn main() {\n    let s1 = String::from(\"hello\");\n    let s2 = s1;\n}",
+    "expected": "Rust / 所有权",
+    "pathPattern": "rust|所有权"
+  },
+  {
+    "id": "go",
+    "label": "Go 通道并发",
+    "kind": "knowledge",
+    "url": "https://go.dev/tour/concurrency/2",
+    "content": "c := make(chan int)\ngo sum(s[:len(s)/2], c)\ngo sum(s[len(s)/2:], c)\nx, y := <-c, <-c",
+    "expected": "Go / 并发与通道",
+    "pathPattern": "\\bgo\\b|golang|并发|通道"
+  },
+  {
+    "id": "sql",
+    "label": "SQL 分组聚合",
+    "kind": "knowledge",
+    "url": "https://www.postgresql.org/docs/current/tutorial-agg.html",
+    "content": "SELECT city, count(*), max(temp_lo)\n    FROM weather\n    GROUP BY city;",
+    "expected": "数据库 / SQL",
+    "pathPattern": "数据库|sql|database"
+  },
+  {
+    "id": "physics",
+    "label": "引力波观测论文节选",
+    "kind": "paper_excerpt",
+    "url": "https://arxiv.org/abs/1602.03837",
+    "doi": "10.1103/PhysRevLett.116.061102",
+    "content": "This is the first direct detection of gravitational waves and the first observation of a binary black hole merger.",
+    "expected": "物理学 / 天体物理 / 引力波",
+    "pathPattern": "物理|天文|引力波|physics|astronomy"
+  },
+  {
+    "id": "econometrics",
+    "label": "双重机器学习论文节选",
+    "kind": "paper_excerpt",
+    "url": "https://arxiv.org/abs/1608.00060",
+    "content": "Examples of such parameters include individual regression coefficients, average treatment effects, average lifts, and demand or supply elasticities.",
+    "expected": "计量经济学 / 统计学 / 因果推断",
+    "pathPattern": "经济|计量|统计|因果|econom|statistic|causal"
+  },
+  {
+    "id": "biology",
+    "label": "CRISPR 基因编辑论文节选",
+    "kind": "paper_excerpt",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/22745249/",
+    "doi": "10.1126/science.1225829",
+    "content": "The dual-tracrRNA:crRNA, when engineered as a single RNA chimera, also directs sequence-specific Cas9 dsDNA cleavage.",
+    "expected": "生物学 / 分子生物学 / 基因编辑",
+    "pathPattern": "生物|遗传|基因|biology|genetic"
+  },
+  {
+    "id": "psychology",
+    "label": "心理学可重复性论文节选",
+    "kind": "paper_excerpt",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/26315443/",
+    "doi": "10.1126/science.aac4716",
+    "content": "We conducted replications of 100 experimental and correlational studies published in three psychology journals using high-powered designs and original materials when available.",
+    "expected": "心理学 / 科研可重复性",
+    "pathPattern": "心理|psycholog|可重复|可复现"
+  }
+]

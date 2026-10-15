@@ -1,0 +1,505 @@
+{
+  "testedAt": "2026-10-15T12:56:01.686Z",
+  "version": "0.1.1",
+  "health": {
+    "status": "ok",
+    "productId": "noltri-knowledge-core",
+    "instanceId": "2267e8e6-b640-4977-a9ef-5f259a762429",
+    "protocolVersion": "1",
+    "version": "0.1.1",
+    "storageDriver": "sqlite",
+    "storage": {
+      "driver": "sqlite",
+      "ok": true,
+      "detail": {
+        "fileName": "noltri.sqlite",
+        "journalMode": "wal",
+        "synchronous": "full",
+        "busyTimeoutMs": 5000,
+        "schemaVersion": 6,
+        "expectedSchemaVersion": 6,
+        "sqliteVersion": "3.53.1",
+        "fts5": true,
+        "rawSources": 3,
+        "knowledgeItems": 4,
+        "knowledgeNodes": 4,
+        "vectors": 8,
+        "vectorWidths": "1536×8"
+      }
+    },
+    "aiProvider": "openai-compatible",
+    "embeddingDim": 1536,
+    "requiresAiKey": true
+  },
+  "cases": [
+    {
+      "id": "python",
+      "expected": "Python",
+      "entrypoint": "/api/items",
+      "passed": true,
+      "durationMs": 4545,
+      "item": {
+        "id": "c319ba07-a955-4ef8-ac77-b0308555598d",
+        "content": "squares = [x**2 for x in range(10)]",
+        "summary": "Python 代码示例：squares = [x**2 for x in range(10)]",
+        "kind": "knowledge",
+        "source": {
+          "type": "web",
+          "title": "Python 列表推导式",
+          "url": "https://docs.python.org/3/tutorial/datastructures.html",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:01.699Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": null
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "Python",
+          "基础语法",
+          "列表推导式"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:01.702Z",
+        "archived": false
+      }
+    },
+    {
+      "id": "typescript",
+      "expected": "TypeScript / 类型系统或泛型",
+      "entrypoint": "/api/capture",
+      "passed": true,
+      "durationMs": 4318,
+      "item": {
+        "id": "e8f395a0-040e-4ddd-a104-872b9aa92a9e",
+        "content": "function firstElement<Type>(arr: Type[]): Type | undefined {\n  return arr[0];\n}",
+        "summary": "泛型函数 firstElement 接收 Type[]，返回 Type | undefined",
+        "kind": "knowledge",
+        "source": {
+          "type": "web",
+          "title": "TypeScript 泛型函数",
+          "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:06.238Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": null
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "TypeScript",
+          "泛型",
+          "firstElement 泛型函数"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:06.240Z",
+        "archived": false
+      },
+      "capture": {
+        "rawSourceId": "e8f395a0-040e-4ddd-a104-872b9aa92a9e",
+        "requestId": "acceptance-0.1.1-typescript",
+        "stage": "completed",
+        "duplicate": false,
+        "items": [
+          {
+            "knowledgeItemId": "5f04a5c1-4585-482c-af79-b38c993dbb76",
+            "text": "function firstElement<Type>(arr: Type[]): Type | undefined { return arr[0]; }",
+            "nodeId": "f6f3b413-b58c-47f0-a27f-37f4d0418ddd",
+            "nodePath": [
+              "TypeScript",
+              "泛型",
+              "firstElement 泛型函数"
+            ],
+            "action": "created",
+            "confidence": 0.62,
+            "confidenceTier": "medium"
+          }
+        ],
+        "processingStatus": "done"
+      }
+    },
+    {
+      "id": "rust",
+      "expected": "Rust / 所有权",
+      "entrypoint": "/api/items",
+      "passed": true,
+      "durationMs": 11550,
+      "item": {
+        "id": "30b8ab5e-3c68-4215-ae2b-38daa6192fc7",
+        "content": "fn main() {\n    let s1 = String::from(\"hello\");\n    let s2 = s1;\n}",
+        "summary": "代码片段定义了名为 main 的函数",
+        "kind": "knowledge",
+        "source": {
+          "type": "web",
+          "title": "Rust 所有权转移",
+          "url": "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:10.560Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": null
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "Rust",
+          "所有权与移动语义",
+          "Rust 所有权与移动语义"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:10.561Z",
+        "archived": false
+      }
+    },
+    {
+      "id": "go",
+      "expected": "Go / 并发与通道",
+      "entrypoint": "/api/capture",
+      "passed": true,
+      "durationMs": 14491,
+      "item": {
+        "id": "00d34230-5de2-4997-ae22-ffd2ae9700b3",
+        "content": "c := make(chan int)\ngo sum(s[:len(s)/2], c)\ngo sum(s[len(s)/2:], c)\nx, y := <-c, <-c",
+        "summary": "make(chan int) 创建 chan int 通道 c",
+        "kind": "knowledge",
+        "source": {
+          "type": "web",
+          "title": "Go 通道并发",
+          "url": "https://go.dev/tour/concurrency/2",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:22.108Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": null
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "编程语言",
+          "Go",
+          "创建 chan int 通道"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:22.112Z",
+        "archived": false
+      },
+      "capture": {
+        "rawSourceId": "00d34230-5de2-4997-ae22-ffd2ae9700b3",
+        "requestId": "acceptance-0.1.1-go",
+        "stage": "completed",
+        "duplicate": false,
+        "items": [
+          {
+            "knowledgeItemId": "07015214-e20a-470f-abaf-0595bb4db587",
+            "text": "c := make(chan int) 创建一个 chan int 类型的通道，并赋值给变量 c。",
+            "nodeId": "7d384fe2-4f2b-4c72-a2b9-e5d16605694b",
+            "nodePath": [
+              "编程语言",
+              "Go",
+              "创建 chan int 通道"
+            ],
+            "action": "created",
+            "confidence": 0.62,
+            "confidenceTier": "medium"
+          },
+          {
+            "knowledgeItemId": "f322b630-641a-45a1-a174-ee85dbcdf6b6",
+            "text": "go sum(s[:len(s)/2], c) 使用 go 关键字调用 sum，传入切片 s 的前半部分 s[:len(s)/2] 和通道 c。",
+            "nodeId": "efb06557-6a27-4b77-aea4-6dc7093922cd",
+            "nodePath": [
+              "编程语言",
+              "Go",
+              "Go 关键字并发调用函数"
+            ],
+            "action": "created",
+            "confidence": 0.62,
+            "confidenceTier": "medium"
+          },
+          {
+            "knowledgeItemId": "1b26bd11-9340-4203-a2db-0500f0581966",
+            "text": "go sum(s[len(s)/2:], c) 使用 go 关键字调用 sum，传入切片 s 的后半部分 s[len(s)/2:] 和通道 c。",
+            "nodeId": "899b1ffc-3b0c-477f-a93c-2bbbb6b97be4",
+            "nodePath": [
+              "编程语言",
+              "Go",
+              "Go 并发与 goroutine"
+            ],
+            "action": "created",
+            "confidence": 0.68,
+            "confidenceTier": "medium"
+          },
+          {
+            "knowledgeItemId": "4ce63ebc-9560-457e-a3ad-2af78d1015f5",
+            "text": "x, y := <-c, <-c 从通道 c 连续接收两个值，分别赋给变量 x 和 y。",
+            "nodeId": "7554474c-13cc-45f2-ad69-a35474ca77bb",
+            "nodePath": [
+              "编程语言",
+              "Go 通道接收两个值"
+            ],
+            "action": "created",
+            "confidence": 0.75,
+            "confidenceTier": "high"
+          }
+        ],
+        "processingStatus": "done"
+      }
+    },
+    {
+      "id": "sql",
+      "expected": "数据库 / SQL",
+      "entrypoint": "/api/items",
+      "passed": true,
+      "durationMs": 7640,
+      "item": {
+        "id": "bc7854a9-f1d6-4d53-a66e-7cf567204419",
+        "content": "SELECT city, count(*), max(temp_lo)\n    FROM weather\n    GROUP BY city;",
+        "summary": "按 city 分组查询 weather 表的 SQL 语句",
+        "kind": "knowledge",
+        "source": {
+          "type": "web",
+          "title": "SQL 分组聚合",
+          "url": "https://www.postgresql.org/docs/current/tutorial-agg.html",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:36.603Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": null
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "数据库",
+          "SQL",
+          "SQL 分组聚合查询"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:36.603Z",
+        "archived": false
+      }
+    },
+    {
+      "id": "physics",
+      "expected": "物理学 / 天体物理 / 引力波",
+      "entrypoint": "/api/capture",
+      "passed": true,
+      "durationMs": 3593,
+      "item": {
+        "id": "810b1ffe-1320-4547-a24c-70aa03589503",
+        "content": "This is the first direct detection of gravitational waves and the first observation of a binary black hole merger.",
+        "summary": "首次直接探测引力波，并首次观测到双黑洞并合",
+        "kind": "paper_excerpt",
+        "source": {
+          "type": "web",
+          "title": "引力波观测论文节选",
+          "url": "https://arxiv.org/abs/1602.03837",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:44.240Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": "10.1103/PhysRevLett.116.061102"
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "物理学",
+          "引力波天文学",
+          "首次引力波直接探测"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:44.244Z",
+        "archived": false
+      },
+      "capture": {
+        "rawSourceId": "810b1ffe-1320-4547-a24c-70aa03589503",
+        "requestId": "acceptance-0.1.1-physics",
+        "stage": "completed",
+        "duplicate": false,
+        "items": [
+          {
+            "knowledgeItemId": "c7e47943-e0cd-4e45-a947-ea2d33834457",
+            "text": "这是首次对引力波的直接探测，也是首次观测到双黑洞并合。",
+            "nodeId": "7486bb69-a49c-4532-ad4b-29f1e1c512c3",
+            "nodePath": [
+              "物理学",
+              "引力波天文学",
+              "首次引力波直接探测"
+            ],
+            "action": "created",
+            "confidence": 0.8,
+            "confidenceTier": "high"
+          }
+        ],
+        "processingStatus": "done"
+      }
+    },
+    {
+      "id": "econometrics",
+      "expected": "计量经济学 / 统计学 / 因果推断",
+      "entrypoint": "/api/items",
+      "passed": true,
+      "durationMs": 9944,
+      "item": {
+        "id": "040d300d-ce0b-4418-a867-c4f936b8f277",
+        "content": "Examples of such parameters include individual regression coefficients, average treatment effects, average lifts, and demand or supply elasticities.",
+        "summary": "individual regression coefficients 为列举的参数示例",
+        "kind": "paper_excerpt",
+        "source": {
+          "type": "web",
+          "title": "双重机器学习论文节选",
+          "url": "https://arxiv.org/abs/1608.00060",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:47.836Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": null
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "统计学",
+          "回归分析",
+          "个体回归系数"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:47.836Z",
+        "archived": false
+      }
+    },
+    {
+      "id": "biology",
+      "expected": "生物学 / 分子生物学 / 基因编辑",
+      "entrypoint": "/api/capture",
+      "passed": true,
+      "durationMs": 4314,
+      "item": {
+        "id": "b900b683-ac47-4c51-a6d0-799ba66ab36d",
+        "content": "The dual-tracrRNA:crRNA, when engineered as a single RNA chimera, also directs sequence-specific Cas9 dsDNA cleavage.",
+        "summary": "单一RNA嵌合体形式的dual-tracrRNA:crRNA引导Cas9序列特异性切割dsDNA",
+        "kind": "paper_excerpt",
+        "source": {
+          "type": "web",
+          "title": "CRISPR 基因编辑论文节选",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/22745249/",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:56:57.778Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": "10.1126/science.1225829"
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "生物学",
+          "分子生物学",
+          "crRNA-tracrRNA嵌合体"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:56:57.782Z",
+        "archived": false
+      },
+      "capture": {
+        "rawSourceId": "b900b683-ac47-4c51-a6d0-799ba66ab36d",
+        "requestId": "acceptance-0.1.1-biology",
+        "stage": "completed",
+        "duplicate": false,
+        "items": [
+          {
+            "knowledgeItemId": "ba67a080-5f8e-4838-a512-3779a0ecfef1",
+            "text": "将 dual-tracrRNA:crRNA 改造成单一 RNA 嵌合体后，也能引导序列特异性的 Cas9 dsDNA 切割。",
+            "nodeId": "eb6b8503-3143-4bf5-ab3e-f0e6d7769d6c",
+            "nodePath": [
+              "生物学",
+              "分子生物学",
+              "crRNA-tracrRNA嵌合体"
+            ],
+            "action": "created",
+            "confidence": 0.62,
+            "confidenceTier": "medium"
+          }
+        ],
+        "processingStatus": "done"
+      }
+    },
+    {
+      "id": "psychology",
+      "expected": "心理学 / 科研可重复性",
+      "entrypoint": "/api/items",
+      "passed": true,
+      "durationMs": 12143,
+      "item": {
+        "id": "91c0a47a-88aa-4346-a47c-8d3b514b53d3",
+        "content": "We conducted replications of 100 experimental and correlational studies published in three psychology journals using high-powered designs and original materials when available.",
+        "summary": "对100项实验与相关研究做重复实验",
+        "kind": "paper_excerpt",
+        "source": {
+          "type": "web",
+          "title": "心理学可重复性论文节选",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/26315443/",
+          "platform": null,
+          "appName": null,
+          "capturedAt": "2026-10-15T12:57:02.095Z",
+          "citation": null,
+          "page": null,
+          "author": null,
+          "doi": "10.1126/science.aac4716"
+        },
+        "previewImageUrl": null,
+        "subjectPath": [
+          "科学研究方法",
+          "可重复性研究"
+        ],
+        "researchPoint": null,
+        "tags": [],
+        "aiStatus": "ready",
+        "createdAt": "2026-10-15T12:57:02.096Z",
+        "archived": false
+      }
+    }
+  ],
+  "manualEdit": {
+    "itemId": "c319ba07-a955-4ef8-ac77-b0308555598d",
+    "originalPath": [
+      "Python",
+      "基础语法",
+      "列表推导式"
+    ],
+    "editedPath": [
+      "计算机科学",
+      "编程语言",
+      "Python",
+      "用户修订分类"
+    ],
+    "researchPoint": "用户可修改 AI 分类和研究点",
+    "content": "squares = [x**2 for x in range(10)]\n用户校验编辑",
+    "title": "Python 列表推导式 · 已编辑",
+    "passed": true
+  },
+  "configuredModel": "deepseek-flash",
+  "providerBaseUrl": "https://api.deepseek.com"
+}

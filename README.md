@@ -11,9 +11,19 @@
 
 ## 快速开始
 
-知序 0.1.0 目前提供 Apple Silicon（arm64）版本，要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
+知序 0.1.1 目前提供 Apple Silicon（arm64）版本，要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
 
-此版本尚未通过 Apple 公证。若 macOS 提示无法验证开发者，请先确认文件来自本项目的 Releases；尝试打开后进入“系统设置”→“隐私与安全性”→“仍要打开”，再确认“打开”。更多说明见 [Apple 官方指引](https://support.apple.com/en-us/102445)。
+0.1.1 修复了 0.1.0 应用资源封印缺失及随包运行时签名无效的问题，构建时会对应用、运行时和 DMG 内的应用严格验签。当前发布采用 ad-hoc 签名，**尚未通过 Apple Developer ID 签名和公证**，macOS 仍可能拦截首次打开。请先对照 Releases 中的 `SHA256SUMS.txt` 校验下载文件，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)进入“系统设置”→“隐私与安全性”→“仍要打开”。
+
+若系统仍显示“已损坏”，确认下载来源和校验值后，可仅为此应用解除下载隔离：
+
+```bash
+codesign --verify --deep --strict "/Applications/知序.app"
+xattr -dr com.apple.quarantine "/Applications/知序.app"
+open "/Applications/知序.app"
+```
+
+只有第一条验签成功后才执行后两条。正式免拦截分发仍需 Developer ID 证书和 Apple 公证，详见 [Tauri macOS 签名文档](https://v2.tauri.app/distribute/sign/macos/)。
 
 ### 从源码运行
 
@@ -25,9 +35,9 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-知序桌面窗口会自动打开。首次运行使用本机 SQLite 保存资料，并采用离线模式；不填 AI 密钥也能收集和整理内容。
+知序桌面窗口会自动打开，首屏为模型设置。选择 DeepSeek 或兼容 OpenAI 的服务，填写 API Key、API 地址和模型后保存；可添加多组配置，通过下拉框切换模型。设置可随时从知识库侧栏打开，密钥仅保存于本机设置文件。界面参考 [Cherry Studio 的模型服务设置](https://www.cherryai.com/docs/en/pre-basic/settings/providers/)，复用现有表单和原生下拉框。
 
-如需使用 DeepSeek 自动整理内容，可在 `.env.local` 中填写自己的设置：
+安装版保存设置后会自动重启由应用管理的本机服务。使用外部服务或从源码开发时，页面会提示重启服务，需将相同设置写入 `.env.local`：
 
 ```dotenv
 AI_PROVIDER=openai
@@ -37,11 +47,11 @@ AI_CHAT_MODEL=deepseek-flash
 AI_EMBEDDINGS_ENABLED=false
 ```
 
-安装版如需启用 AI，请把这些设置写入 `~/.noltri/.env.local`；从源码运行则写入仓库根目录的 `.env.local`。修改后重启知序。
+模型配置保存在 macOS 的 `~/Library/Application Support/com.noltri.companion/settings.json`。自动知识体系分类需要配置模型；未配置或调用失败时保留原文，供稍后重试与人工整理。
 
 ### 安装浏览器扩展
 
-从 [0.1.0 Releases](https://github.com/wyzh0117/noltri/releases/latest) 下载并解压 `noltri-extension.zip`。也可以从源码构建：
+从 [0.1.1 Releases](https://github.com/wyzh0117/noltri/releases/latest) 下载并解压 `noltri-extension.zip`。也可以从源码构建：
 
 ```bash
 pnpm --filter @noltri/extension build
@@ -72,7 +82,7 @@ env = { KNOWLEDGE_API_URL = "http://127.0.0.1:8787" }
 
 ## 工作方式
 
-每条资料都会保留原文和来源。知序把收集到的内容整理成便于浏览的摘要和研究点，再按学科归类到知识树中；你可以调整分类、搜索资料，并把相关内容并排对读。
+每条资料都会保留原文和来源。配置模型后，AI 根据片段内容判断知识体系和分层学科路径，并生成摘要。你可以在资料详情中修改内容、标题、分类和研究点；手动指定的分类优先保留。调用失败时保留原文，不把摘录标题冒充 AI 分类。你还可以搜索资料，并把相关内容并排对读。
 
 ## 可以做什么
 
@@ -85,6 +95,18 @@ env = { KNOWLEDGE_API_URL = "http://127.0.0.1:8787" }
 ## 示例
 
 读论文时收集两篇文章关于同一研究问题的段落。知序会保留各自的来源，放进相应学科下；之后打开并排比较，就能快速查看两种方法和结论的异同。
+
+## 验证与构建
+
+0.1.1 使用真实 DeepSeek API 验收 Python、TypeScript、Rust、Go、SQL 及物理、计量经济学、分子生物学、心理学论文短摘录；片段附原始出处。见[测试说明](docs/testing/README.md)及[结果](docs/testing/0.1.1-deepseek-results.json)。本地测试资料保留在应用资料库中，不随安装包分发。
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm --filter @noltri/desktop release:mac
+```
+
+构建脚本校验固定版本 Node 24 运行时的 SHA256，生成应用后检查资源封印、DMG 完整性、随包 SQLite 与 JIT。具备签名和公证凭据的正式分发还需通过 `pnpm --filter @noltri/desktop verify:mac --require-notarization`。
 
 ## License
 

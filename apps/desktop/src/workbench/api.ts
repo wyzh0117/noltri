@@ -28,6 +28,7 @@ export function createWorkbenchApi(endpoint: WorkbenchEndpoint): WorkbenchApi {
 }
 
 export function describeError(error: unknown): string {
+  if (typeof error === 'string' && error.trim() !== '') return error;
   if (error instanceof Error && error.message.trim() !== '') return error.message;
   return '发生未知错误。';
 }

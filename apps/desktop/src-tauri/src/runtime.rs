@@ -36,7 +36,8 @@ pub enum CoreStatus {
 #[derive(Default)]
 pub struct CoreRuntimeHandle {
     status: Mutex<Option<CoreStatus>>,
-    children: Mutex<Vec<CommandChild>>,
+    children: Mutex<Vec<(&'static str, CommandChild)>>,
+    model_update: Mutex<()>,
 }
 
 impl CoreRuntimeHandle {
@@ -46,6 +47,12 @@ impl CoreRuntimeHandle {
             .unwrap_or(CoreStatus::Starting)
     }
 
+    pub fn begin_model_update(&self) -> Result<MutexGuard<'_, ()>, String> {
+        self.model_update
+            .try_lock()
+            .map_err(|_| "模型正在更新，请稍后再试。".to_owned())
+    }
+
     fn set(&self, status: CoreStatus) {
         *self.lock(&self.status) = Some(status);
     }
@@ -53,7 +60,7 @@ impl CoreRuntimeHandle {
     /// Kills only the children this process spawned. An external runtime (another app instance, a
     /// developer terminal) is never touched.
     pub fn stop(&self) {
-        for child in self.lock(&self.children).drain(..) {
+        for (_, child) in self.lock(&self.children).drain(..) {
             let _ = child.kill();
         }
     }
@@ -115,7 +122,7 @@ fn spawn_script(
     let (mut events, child) = command
         .spawn()
         .map_err(|error| format!("随包运行时启动失败（{script_name}）：{error}"))?;
-    handle.lock(&handle.children).push(child);
+    handle.lock(&handle.children).push((script_name, child));
 
     // Drain stdout/stderr so a chatty process can never block on a full pipe.
     std::thread::spawn(move || {
@@ -160,6 +167,7 @@ fn runtime_storage_env(
 /// Decides who owns the local runtime for this session and, in packaged builds with nobody
 /// answering, starts the bundled runtime. Never blocks the caller beyond the initial probe.
 pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
+    handle.set(CoreStatus::Starting);
     let core_ready = probe(DEFAULT_PORT);
     let mcp_ready = probe_mcp(MCP_PORT);
     if core_ready && mcp_ready {
@@ -179,8 +187,12 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
             return;
         }
     };
-    let (data_dir, core_envs) =
+    let (data_dir, mut core_envs) =
         runtime_storage_env(default_data_dir, |key| std::env::var(key).ok());
+    if let Ok(directory) = app.path().app_config_dir() {
+        let settings = crate::settings::load(Some(&crate::settings::directory(directory)));
+        core_envs.extend(model_env(&settings.models));
+    }
     if let Err(error) = std::fs::create_dir_all(&data_dir) {
         handle.set(CoreStatus::Failed(format!("数据目录不可写：{error}")));
         return;
@@ -207,6 +219,7 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
         }
     }
 
+    let owns_core = !core_ready;
     // Resolve readiness off the setup thread, allowing a competing app instance to win startup.
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + READY_TIMEOUT;
@@ -223,7 +236,11 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
                 mcp_ready = probe_mcp(MCP_PORT);
             }
             if core_ready && mcp_ready {
-                handle.set(CoreStatus::Managed);
+                handle.set(if owns_core {
+                    CoreStatus::Managed
+                } else {
+                    CoreStatus::External
+                });
                 eprintln!("[noltri] 随包运行时已就绪（Core :{DEFAULT_PORT}，MCP :{MCP_PORT}）");
                 return;
             }
@@ -236,6 +253,62 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
         };
         handle.set(CoreStatus::Failed(reason.to_string()));
     });
+}
+
+/// All profiles use the existing OpenAI-compatible chat provider; embeddings are optional.
+fn model_env(models: &crate::settings::ModelSettings) -> Vec<(&'static str, String)> {
+    let Some(profile) = models.active() else {
+        return Vec::new();
+    };
+    vec![
+        ("AI_PROVIDER", "openai".to_owned()),
+        ("AI_BASE_URL", profile.base_url.clone()),
+        ("AI_API_KEY", profile.api_key.clone()),
+        ("AI_CHAT_MODEL", profile.model.clone()),
+        ("AI_EMBEDDINGS_ENABLED", "false".to_owned()),
+    ]
+}
+
+/// Apply settings only to children owned by this app. Wait for the old listener to close before
+/// probing again, otherwise startup could mistake its own dying child for an external runtime.
+pub fn apply_models(app: AppHandle, handle: Arc<CoreRuntimeHandle>) -> Result<bool, String> {
+    let initial_deadline = std::time::Instant::now() + READY_TIMEOUT;
+    while handle.status() == CoreStatus::Starting && std::time::Instant::now() < initial_deadline {
+        std::thread::sleep(PROBE_INTERVAL);
+    }
+    if matches!(
+        handle.status(),
+        CoreStatus::External | CoreStatus::DevManual | CoreStatus::Starting
+    ) {
+        return Ok(false);
+    }
+    let owns_mcp = handle
+        .lock(&handle.children)
+        .iter()
+        .any(|(script, _)| *script == "mcp-server.mjs");
+    handle.set(CoreStatus::Starting);
+    handle.stop();
+    let deadline = std::time::Instant::now() + READY_TIMEOUT;
+    while probe(DEFAULT_PORT) || (owns_mcp && probe_mcp(MCP_PORT)) {
+        if std::time::Instant::now() >= deadline {
+            let reason = "模型已保存，但旧服务未能退出，请重新打开应用。".to_owned();
+            handle.set(CoreStatus::Failed(reason.clone()));
+            return Err(reason);
+        }
+        std::thread::sleep(PROBE_INTERVAL);
+    }
+    start(app, handle.clone());
+    while std::time::Instant::now() < deadline + READY_TIMEOUT {
+        match handle.status() {
+            CoreStatus::Managed => return Ok(true),
+            CoreStatus::Failed(reason) => {
+                return Err(format!("模型已保存，服务重启失败：{reason}"))
+            }
+            CoreStatus::External | CoreStatus::DevManual => return Ok(false),
+            CoreStatus::Starting => std::thread::sleep(PROBE_INTERVAL),
+        }
+    }
+    Err("模型已保存，服务仍在启动，请稍后检查连接。".to_owned())
 }
 
 #[cfg(test)]
@@ -254,6 +327,44 @@ mod tests {
         let handle = CoreRuntimeHandle::default();
         handle.stop();
         assert_eq!(handle.status(), CoreStatus::Starting);
+    }
+
+    #[test]
+    fn switching_model_profiles_changes_runtime_env_and_serializes_updates() {
+        use crate::settings::{ModelProfile, ModelSettings};
+        let mut models = ModelSettings {
+            model_profiles: vec![
+                ModelProfile {
+                    id: "flash".into(),
+                    name: "Flash".into(),
+                    provider: "deepseek".into(),
+                    base_url: "https://api.deepseek.com".into(),
+                    api_key: "test-flash".into(),
+                    model: "deepseek-flash".into(),
+                },
+                ModelProfile {
+                    id: "pro".into(),
+                    name: "Pro".into(),
+                    provider: "deepseek".into(),
+                    base_url: "https://api.deepseek.com".into(),
+                    api_key: "test-pro".into(),
+                    model: "deepseek-v4-pro".into(),
+                },
+            ],
+            active_model_id: Some("flash".into()),
+        };
+        assert!(model_env(&models).contains(&("AI_CHAT_MODEL", "deepseek-flash".into())));
+        models.active_model_id = Some("pro".into());
+        let envs = model_env(&models);
+        assert!(envs.contains(&("AI_PROVIDER", "openai".into())));
+        assert!(envs.contains(&("AI_CHAT_MODEL", "deepseek-v4-pro".into())));
+        assert!(envs.contains(&("AI_API_KEY", "test-pro".into())));
+        assert!(envs.contains(&("AI_EMBEDDINGS_ENABLED", "false".into())));
+        let runtime = CoreRuntimeHandle::default();
+        let guard = runtime.begin_model_update().unwrap();
+        assert!(runtime.begin_model_update().is_err());
+        drop(guard);
+        assert!(runtime.begin_model_update().is_ok());
     }
 
     #[test]
