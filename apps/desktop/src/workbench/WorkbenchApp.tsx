@@ -364,7 +364,7 @@ export default function WorkbenchApp({
 
         <div className="sidebar-bottom">
           <button type="button" className="settings-link" onClick={() => setOverlay('settings')}>
-            <span className="nav-glyph" aria-hidden="true">⚙</span>设置
+            <span className="nav-glyph" aria-hidden="true">⚙</span>Provider 管理
           </button>
           <div className="privacy-line"><span className={health === null ? 'connection-dot connection-dot-off' : 'connection-dot'} />
             {health === null ? '本机服务未连接' : '仅此设备保存'}</div>
@@ -379,7 +379,7 @@ export default function WorkbenchApp({
             <p>{view === 'organize' ? '归纳失败或仍在整理的内容会留在这里。' : '网页、Agent 对话和论文摘录，都能在这里找到。'}</p>
           </div>
           <div className="header-actions">
-            <button type="button" className="button-quiet" onClick={() => setOverlay('settings')} aria-label="打开设置">
+            <button type="button" className="button-quiet" onClick={() => setOverlay('settings')} aria-label="打开 Provider 管理">
               <span aria-hidden="true">⚙</span>
             </button>
             <button type="button" className="button-primary" onClick={() => setOverlay('collect')}>
@@ -468,7 +468,7 @@ export default function WorkbenchApp({
       <dialog
         ref={dialogRef}
         className={`library-dialog ${overlay === 'detail' ? 'library-dialog-detail' : overlay === 'compare' ? 'library-dialog-compare' : ''}`}
-        aria-label={overlay === 'detail' ? '资料详情' : overlay === 'collect' ? '收集资料' : overlay === 'compare' ? '并排比较资料' : overlay === 'settings' ? '模型与入口设置' : undefined}
+        aria-label={overlay === 'detail' ? '资料详情' : overlay === 'collect' ? '收集资料' : overlay === 'compare' ? '并排比较资料' : overlay === 'settings' ? 'Provider 管理与收集入口设置' : undefined}
         onCancel={handleDialogCancel}
         onClick={(event) => { if (event.target === dialogRef.current) closeOverlay(); }}
       >
@@ -953,7 +953,7 @@ function SettingsDialog({ modelSettings, apiBaseUrl, mcpEndpoint, tokenConfigure
 }): ReactElement {
   return (
     <section className="dialog-content settings-dialog-content" aria-labelledby="settings-title">
-      <DialogHeader eyebrow="偏好设置" title="模型与收集入口" onClose={onClose} />
+      <DialogHeader eyebrow="Provider 管理" title="模型服务与收集入口" onClose={onClose} />
       {modelSettings}
       <details className="connection-details"><summary>浏览器、Agent 与本机连接</summary>
       <p className="dialog-intro">收集入口接到同一个知识库。论文摘录也可以直接从这里粘贴保存。</p>

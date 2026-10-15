@@ -13,7 +13,57 @@ use tauri_plugin_shell::ShellExt;
 pub const DEFAULT_PORT: u16 = 8787;
 /// The MCP server's port (`MCP_PORT` default in `services/mcp-server`); the endpoint written into
 /// client configs is `http://127.0.0.1:8790/mcp`.
-pub const MCP_PORT: u16 = 8790;
+pub const DEFAULT_MCP_PORT: u16 = 8790;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimePorts {
+    pub core: u16,
+    pub mcp: u16,
+}
+
+impl Default for RuntimePorts {
+    fn default() -> Self {
+        Self {
+            core: DEFAULT_PORT,
+            mcp: DEFAULT_MCP_PORT,
+        }
+    }
+}
+
+pub fn parse_runtime_ports(
+    core_port: Option<&str>,
+    mcp_port: Option<&str>,
+) -> Result<RuntimePorts, String> {
+    fn parse(name: &str, value: Option<&str>, default: u16) -> Result<u16, String> {
+        let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
+            return Ok(default);
+        };
+        let port = value
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| format!("{name} 必须是 1 到 65535 之间的端口。"))?;
+        if port == 0 {
+            return Err(format!("{name} 必须是 1 到 65535 之间的端口。"));
+        }
+        Ok(port)
+    }
+
+    let ports = RuntimePorts {
+        core: parse("NOLTRI_CORE_PORT", core_port, DEFAULT_PORT)?,
+        mcp: parse("MCP_PORT", mcp_port, DEFAULT_MCP_PORT)?,
+    };
+    if ports.core == ports.mcp {
+        return Err("NOLTRI_CORE_PORT 与 MCP_PORT 必须使用不同端口。".to_owned());
+    }
+    Ok(ports)
+}
+
+pub fn resolve_runtime_ports() -> Result<RuntimePorts, String> {
+    parse_runtime_ports(
+        std::env::var("NOLTRI_CORE_PORT").ok().as_deref(),
+        std::env::var("MCP_PORT").ok().as_deref(),
+    )
+}
 
 /// How long the managed runtime gets to answer the health probes before it is declared failed.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -168,8 +218,15 @@ fn runtime_storage_env(
 /// answering, starts the bundled runtime. Never blocks the caller beyond the initial probe.
 pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
     handle.set(CoreStatus::Starting);
-    let core_ready = probe(DEFAULT_PORT);
-    let mcp_ready = probe_mcp(MCP_PORT);
+    let ports = match resolve_runtime_ports() {
+        Ok(ports) => ports,
+        Err(error) => {
+            handle.set(CoreStatus::Failed(error));
+            return;
+        }
+    };
+    let core_ready = probe(ports.core);
+    let mcp_ready = probe_mcp(ports.mcp);
     if core_ready && mcp_ready {
         handle.set(CoreStatus::External);
         eprintln!("[noltri] 检测到已运行的 Core 与 MCP，按外部运行时处理");
@@ -189,6 +246,7 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
     };
     let (data_dir, mut core_envs) =
         runtime_storage_env(default_data_dir, |key| std::env::var(key).ok());
+    core_envs.push(("PORT", ports.core.to_string()));
     if let Ok(directory) = app.path().app_config_dir() {
         let settings = crate::settings::load(Some(&crate::settings::directory(directory)));
         core_envs.extend(model_env(&settings.models));
@@ -208,9 +266,10 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
         let mcp_envs = [
             (
                 "KNOWLEDGE_API_URL",
-                format!("http://127.0.0.1:{DEFAULT_PORT}"),
+                format!("http://127.0.0.1:{}", ports.core),
             ),
             ("NOLTRI_DATA_DIR", data_dir),
+            ("MCP_PORT", ports.mcp.to_string()),
         ];
         if let Err(reason) = spawn_script(&app, &handle, "mcp-server.mjs", &mcp_envs) {
             handle.stop();
@@ -230,10 +289,10 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
                 return;
             }
             if !core_ready {
-                core_ready = probe(DEFAULT_PORT);
+                core_ready = probe(ports.core);
             }
             if !mcp_ready {
-                mcp_ready = probe_mcp(MCP_PORT);
+                mcp_ready = probe_mcp(ports.mcp);
             }
             if core_ready && mcp_ready {
                 handle.set(if owns_core {
@@ -241,7 +300,10 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
                 } else {
                     CoreStatus::External
                 });
-                eprintln!("[noltri] 随包运行时已就绪（Core :{DEFAULT_PORT}，MCP :{MCP_PORT}）");
+                eprintln!(
+                    "[noltri] 随包运行时已就绪（Core :{}，MCP :{}）",
+                    ports.core, ports.mcp
+                );
                 return;
             }
             std::thread::sleep(PROBE_INTERVAL);
@@ -255,16 +317,44 @@ pub fn start(app: AppHandle, handle: Arc<CoreRuntimeHandle>) {
     });
 }
 
-/// All profiles use the existing OpenAI-compatible chat provider; embeddings are optional.
+/// Always set the driver explicitly so an empty selection cannot fall back to inherited env values.
 fn model_env(models: &crate::settings::ModelSettings) -> Vec<(&'static str, String)> {
-    let Some(profile) = models.active() else {
-        return Vec::new();
+    let Some((provider, model)) = models.active() else {
+        return vec![
+            ("AI_PROVIDER", "disabled".to_owned()),
+            ("AI_API_KEY", String::new()),
+            ("AI_BASE_URL", String::new()),
+            ("AI_CHAT_MODEL", String::new()),
+            ("AI_MODEL_CONTEXT_WINDOW", String::new()),
+            ("AI_MODEL_MAX_TOKENS", String::new()),
+            ("AI_EMBEDDINGS_ENABLED", "false".to_owned()),
+        ];
+    };
+    let protocol = match provider.protocol {
+        crate::settings::ProviderProtocol::OpenAiCompletions => "openai-completions",
+        crate::settings::ProviderProtocol::OpenAiResponses => "openai-responses",
+        crate::settings::ProviderProtocol::AnthropicMessages => "anthropic-messages",
     };
     vec![
         ("AI_PROVIDER", "openai".to_owned()),
-        ("AI_BASE_URL", profile.base_url.clone()),
-        ("AI_API_KEY", profile.api_key.clone()),
-        ("AI_CHAT_MODEL", profile.model.clone()),
+        ("AI_PROTOCOL", protocol.to_owned()),
+        ("AI_BASE_URL", provider.base_url.clone()),
+        ("AI_API_KEY", provider.api_key.clone()),
+        ("AI_CHAT_MODEL", model.id.clone()),
+        (
+            "AI_MODEL_CONTEXT_WINDOW",
+            model
+                .context_window
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            "AI_MODEL_MAX_TOKENS",
+            model
+                .max_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ),
         ("AI_EMBEDDINGS_ENABLED", "false".to_owned()),
     ]
 }
@@ -272,6 +362,7 @@ fn model_env(models: &crate::settings::ModelSettings) -> Vec<(&'static str, Stri
 /// Apply settings only to children owned by this app. Wait for the old listener to close before
 /// probing again, otherwise startup could mistake its own dying child for an external runtime.
 pub fn apply_models(app: AppHandle, handle: Arc<CoreRuntimeHandle>) -> Result<bool, String> {
+    let ports = resolve_runtime_ports()?;
     let initial_deadline = std::time::Instant::now() + READY_TIMEOUT;
     while handle.status() == CoreStatus::Starting && std::time::Instant::now() < initial_deadline {
         std::thread::sleep(PROBE_INTERVAL);
@@ -289,7 +380,7 @@ pub fn apply_models(app: AppHandle, handle: Arc<CoreRuntimeHandle>) -> Result<bo
     handle.set(CoreStatus::Starting);
     handle.stop();
     let deadline = std::time::Instant::now() + READY_TIMEOUT;
-    while probe(DEFAULT_PORT) || (owns_mcp && probe_mcp(MCP_PORT)) {
+    while probe(ports.core) || (owns_mcp && probe_mcp(ports.mcp)) {
         if std::time::Instant::now() >= deadline {
             let reason = "模型已保存，但旧服务未能退出，请重新打开应用。".to_owned();
             handle.set(CoreStatus::Failed(reason.clone()));
@@ -316,6 +407,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn runtime_ports_default_validate_and_reject_invalid_or_conflicting_values() {
+        assert_eq!(parse_runtime_ports(None, None), Ok(RuntimePorts::default()));
+        assert_eq!(
+            parse_runtime_ports(Some("18787"), Some("18790")),
+            Ok(RuntimePorts {
+                core: 18787,
+                mcp: 18790,
+            })
+        );
+        assert!(parse_runtime_ports(Some("0"), None).is_err());
+        assert!(parse_runtime_ports(None, Some("65536")).is_err());
+        assert!(parse_runtime_ports(Some("nope"), None).is_err());
+        assert!(parse_runtime_ports(Some("18787"), Some("18787")).is_err());
+    }
+
+    #[test]
     fn probe_reports_nothing_on_a_port_nobody_listens_on() {
         // Port 9 (discard) is not served on macOS by default; an arbitrary high port is not
         // guaranteed to be free, this one is reserved and closed.
@@ -330,36 +437,57 @@ mod tests {
     }
 
     #[test]
-    fn switching_model_profiles_changes_runtime_env_and_serializes_updates() {
-        use crate::settings::{ModelProfile, ModelSettings};
-        let mut models = ModelSettings {
-            model_profiles: vec![
-                ModelProfile {
-                    id: "flash".into(),
+    fn switching_selected_models_changes_runtime_env_and_serializes_updates() {
+        use crate::settings::{
+            ModelInputTypes, ModelSettings, ProviderConfig, ProviderModel, ProviderProtocol,
+        };
+        let provider = |api_key: &str| ProviderConfig {
+            id: "deepseek".into(),
+            name: "DeepSeek".into(),
+            protocol: ProviderProtocol::OpenAiCompletions,
+            base_url: "https://api.deepseek.com".into(),
+            api_key: api_key.into(),
+            models: vec![
+                ProviderModel {
+                    id: "deepseek-chat".into(),
                     name: "Flash".into(),
-                    provider: "deepseek".into(),
-                    base_url: "https://api.deepseek.com".into(),
-                    api_key: "test-flash".into(),
-                    model: "deepseek-flash".into(),
+                    context_window: Some(64000),
+                    max_tokens: Some(8192),
+                    input: ModelInputTypes {
+                        text: true,
+                        image: false,
+                    },
                 },
-                ModelProfile {
-                    id: "pro".into(),
+                ProviderModel {
+                    id: "deepseek-v4-pro".into(),
                     name: "Pro".into(),
-                    provider: "deepseek".into(),
-                    base_url: "https://api.deepseek.com".into(),
-                    api_key: "test-pro".into(),
-                    model: "deepseek-v4-pro".into(),
+                    context_window: Some(128000),
+                    max_tokens: Some(8192),
+                    input: ModelInputTypes {
+                        text: true,
+                        image: false,
+                    },
                 },
             ],
-            active_model_id: Some("flash".into()),
         };
-        assert!(model_env(&models).contains(&("AI_CHAT_MODEL", "deepseek-flash".into())));
-        models.active_model_id = Some("pro".into());
+        let mut models = ModelSettings {
+            providers: vec![provider("test-key")],
+            active_provider_id: Some("deepseek".into()),
+            active_model_id: Some("deepseek-chat".into()),
+        };
+        let initial = model_env(&models);
+        assert!(initial.contains(&("AI_CHAT_MODEL", "deepseek-chat".into())));
+        assert!(initial.contains(&("AI_MODEL_MAX_TOKENS", "8192".into())));
+        assert!(initial.contains(&("AI_MODEL_CONTEXT_WINDOW", "64000".into())));
+        models.providers = vec![provider("updated-key")];
+        models.active_model_id = Some("deepseek-v4-pro".into());
         let envs = model_env(&models);
         assert!(envs.contains(&("AI_PROVIDER", "openai".into())));
         assert!(envs.contains(&("AI_CHAT_MODEL", "deepseek-v4-pro".into())));
-        assert!(envs.contains(&("AI_API_KEY", "test-pro".into())));
+        assert!(envs.contains(&("AI_API_KEY", "updated-key".into())));
         assert!(envs.contains(&("AI_EMBEDDINGS_ENABLED", "false".into())));
+        let disabled = model_env(&ModelSettings::default());
+        assert!(disabled.contains(&("AI_PROVIDER", "disabled".into())));
         let runtime = CoreRuntimeHandle::default();
         let guard = runtime.begin_model_update().unwrap();
         assert!(runtime.begin_model_update().is_err());

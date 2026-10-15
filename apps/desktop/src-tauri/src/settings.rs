@@ -2,22 +2,93 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProviderProtocol {
+    #[serde(rename = "openai-completions")]
+    OpenAiCompletions,
+    #[serde(rename = "openai-responses")]
+    OpenAiResponses,
+    #[serde(rename = "anthropic-messages")]
+    AnthropicMessages,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelProfile {
+pub struct ModelInputTypes {
+    pub text: bool,
+    pub image: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModel {
     pub id: String,
     pub name: String,
-    pub provider: String,
+    pub context_window: Option<u64>,
+    pub max_tokens: Option<u64>,
+    pub input: ModelInputTypes,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfig {
+    pub id: String,
+    pub name: String,
+    pub protocol: ProviderProtocol,
     pub base_url: String,
+    #[serde(default)]
     pub api_key: String,
-    pub model: String,
+    #[serde(default)]
+    pub models: Vec<ProviderModel>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderView {
+    pub id: String,
+    pub name: String,
+    pub protocol: ProviderProtocol,
+    pub base_url: String,
+    pub has_api_key: bool,
+    pub models: Vec<ProviderModel>,
+}
+
+impl From<&ProviderConfig> for ProviderView {
+    fn from(provider: &ProviderConfig) -> Self {
+        Self {
+            id: provider.id.clone(),
+            name: provider.name.clone(),
+            protocol: provider.protocol,
+            base_url: provider.base_url.clone(),
+            has_api_key: !provider.api_key.is_empty(),
+            models: provider.models.clone(),
+        }
+    }
+}
+
+/// Write-only API key field. Empty/omitted retains a saved key unless clear_api_key is true.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDraft {
+    pub id: String,
+    pub name: String,
+    pub protocol: ProviderProtocol,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub clear_api_key: bool,
+    #[serde(default)]
+    pub models: Vec<ProviderModel>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSettings {
     #[serde(default)]
-    pub model_profiles: Vec<ModelProfile>,
+    pub providers: Vec<ProviderConfig>,
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
     #[serde(default)]
     pub active_model_id: Option<String>,
 }
@@ -50,27 +121,144 @@ fn setting(value: Option<&serde_json::Value>, key: &str, env: &str, fallback: &s
         .unwrap_or_else(|| fallback.to_owned())
 }
 
+fn is_local_host(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host == "::1"
+        || host.starts_with("fc")
+        || host.starts_with("fd")
+        || host.starts_with("fe80:")
+    {
+        return true;
+    }
+    let octets = host
+        .split('.')
+        .map(str::parse::<u8>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok([a, b, _, _]) = octets.as_deref() else {
+        return false;
+    };
+    *a == 10
+        || *a == 127
+        || (*a == 192 && *b == 168)
+        || (*a == 172 && (16..=31).contains(b))
+        || (*a == 169 && *b == 254)
+}
+
+fn default_connection_urls(ports: crate::runtime::RuntimePorts) -> (String, String) {
+    (
+        format!("http://127.0.0.1:{}", ports.core),
+        format!("http://127.0.0.1:{}/mcp", ports.mcp),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyProfile {
+    id: String,
+    name: String,
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+fn migrate_legacy(value: &serde_json::Value) -> ModelSettings {
+    let profiles = value
+        .get("modelProfiles")
+        .and_then(|profiles| serde_json::from_value::<Vec<LegacyProfile>>(profiles.clone()).ok())
+        .unwrap_or_default();
+    let active_legacy = value
+        .get("activeModelId")
+        .and_then(serde_json::Value::as_str);
+    let mut models = ModelSettings::default();
+    let mut active_pair = None;
+    for profile in profiles {
+        let base_url = profile.base_url.trim().trim_end_matches('/').to_owned();
+        let Some(provider) = models
+            .providers
+            .iter_mut()
+            .find(|provider| provider.base_url == base_url && provider.api_key == profile.api_key)
+        else {
+            let provider_id = format!("legacy-{}-{}", profile.provider, profile.id);
+            models.providers.push(ProviderConfig {
+                id: provider_id,
+                name: profile.provider.clone(),
+                protocol: ProviderProtocol::OpenAiCompletions,
+                base_url,
+                api_key: profile.api_key.clone(),
+                models: Vec::new(),
+            });
+            let provider = models.providers.last_mut().expect("just inserted provider");
+            if Some(profile.id.as_str()) == active_legacy {
+                active_pair = Some((provider.id.clone(), profile.model.clone()));
+            }
+            provider.models.push(ProviderModel {
+                id: profile.model,
+                name: profile.name,
+                context_window: None,
+                max_tokens: None,
+                input: ModelInputTypes {
+                    text: true,
+                    image: false,
+                },
+            });
+            continue;
+        };
+        if Some(profile.id.as_str()) == active_legacy {
+            active_pair = Some((provider.id.clone(), profile.model.clone()));
+        }
+        if !provider
+            .models
+            .iter()
+            .any(|model| model.id == profile.model)
+        {
+            provider.models.push(ProviderModel {
+                id: profile.model,
+                name: profile.name,
+                context_window: None,
+                max_tokens: None,
+                input: ModelInputTypes {
+                    text: true,
+                    image: false,
+                },
+            });
+        }
+    }
+    if let Some((provider_id, model_id)) = active_pair {
+        models.active_provider_id = Some(provider_id);
+        models.active_model_id = Some(model_id);
+    }
+    models
+}
+
 pub fn load(config_dir: Option<&Path>) -> DesktopSettings {
     let value = config_dir
         .and_then(|dir| std::fs::read(dir.join("settings.json")).ok())
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
     let models = value
         .as_ref()
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .and_then(|value| value.get("providers").map(|_| value))
+        .and_then(|value| serde_json::from_value::<ModelSettings>(value.clone()).ok())
+        .or_else(|| value.as_ref().map(migrate_legacy))
         .unwrap_or_default();
+    let ports = crate::runtime::resolve_runtime_ports().unwrap_or_default();
+    let (default_api_base_url, default_mcp_endpoint) = default_connection_urls(ports);
     DesktopSettings {
         api_base_url: setting(
             value.as_ref(),
             "apiBaseUrl",
             "NOLTRI_API_BASE_URL",
-            "http://127.0.0.1:8787",
+            &default_api_base_url,
         ),
         api_token: setting(value.as_ref(), "apiToken", "NOLTRI_ACCESS_TOKEN", ""),
         mcp_endpoint: setting(
             value.as_ref(),
             "mcpEndpoint",
             "NOLTRI_MCP_ENDPOINT",
-            "http://127.0.0.1:8790/mcp",
+            &default_mcp_endpoint,
         ),
         models,
     }
@@ -78,33 +266,29 @@ pub fn load(config_dir: Option<&Path>) -> DesktopSettings {
 
 impl ModelSettings {
     pub fn validate(&mut self) -> Result<(), String> {
-        if self.model_profiles.is_empty() || self.model_profiles.len() > 40 {
-            return Err("请保留 1 至 40 个模型配置。".to_owned());
+        if self.providers.len() > 40 {
+            return Err("最多可保存 40 个 Provider。".to_owned());
         }
-        let mut ids = HashSet::new();
-        for profile in &mut self.model_profiles {
-            profile.name = profile.name.trim().to_owned();
-            profile.base_url = profile.base_url.trim().trim_end_matches('/').to_owned();
-            profile.api_key = profile.api_key.trim().to_owned();
-            profile.model = profile.model.trim().to_owned();
-            if profile.id.trim().is_empty() || !ids.insert(profile.id.clone()) {
-                return Err("模型配置标识不能为空或重复。".to_owned());
+        let mut provider_ids = HashSet::new();
+        for provider in &mut self.providers {
+            provider.id = provider.id.trim().to_owned();
+            provider.name = provider.name.trim().to_owned();
+            provider.base_url = provider.base_url.trim().trim_end_matches('/').to_owned();
+            provider.api_key = provider.api_key.trim().to_owned();
+            if provider.id.is_empty() || !provider_ids.insert(provider.id.clone()) {
+                return Err("Provider 标识不能为空或重复。".to_owned());
             }
-            if profile.id.len() > 200
-                || profile.name.len() > 400
-                || profile.model.len() > 800
-                || profile.api_key.len() > 8000
-                || profile.base_url.len() > 8000
+            if provider.id.len() > 200
+                || provider.name.len() > 400
+                || provider.base_url.len() > 8000
+                || provider.api_key.len() > 8000
             {
-                return Err("模型配置字段过长，请检查输入。".to_owned());
+                return Err("Provider 字段过长，请检查输入。".to_owned());
             }
-            if profile.name.is_empty() || profile.model.is_empty() || profile.api_key.is_empty() {
-                return Err("请填写模型名称、Model ID 和 API Key。".to_owned());
+            if provider.name.is_empty() {
+                return Err("请填写 Provider 名称。".to_owned());
             }
-            if !matches!(profile.provider.as_str(), "deepseek" | "openai-compatible") {
-                return Err("请选择支持的模型服务商。".to_owned());
-            }
-            let url = tauri::Url::parse(&profile.base_url).map_err(|_| "API 地址格式无效。")?;
+            let url = tauri::Url::parse(&provider.base_url).map_err(|_| "API 地址格式无效。")?;
             if !matches!(url.scheme(), "http" | "https")
                 || url.host_str().is_none()
                 || !url.username().is_empty()
@@ -116,32 +300,124 @@ impl ModelSettings {
                     "API 地址应为 http(s) Base URL，不包含账号、查询参数或片段。".to_owned(),
                 );
             }
-            if url
-                .path()
-                .trim_end_matches('/')
-                .ends_with("/chat/completions")
+            if provider.api_key.is_empty() && !is_local_host(url.host_str().unwrap_or_default()) {
+                return Err("远程模型服务需要 API Key；本地或内网服务可以留空。".to_owned());
+            }
+            let path = url.path().trim_end_matches('/');
+            if path.ends_with("/chat/completions")
+                || path.ends_with("/responses")
+                || path.ends_with("/messages")
+                || path.ends_with("/models")
             {
-                return Err(
-                    "请填写 Base URL，例如 https://api.deepseek.com，不包含 /chat/completions。"
-                        .to_owned(),
-                );
+                return Err("请填写 API Base URL，不要包含具体 API 路径。".to_owned());
+            }
+            let mut model_ids = HashSet::new();
+            for model in &mut provider.models {
+                model.id = model.id.trim().to_owned();
+                model.name = model.name.trim().to_owned();
+                if model.id.is_empty() || !model_ids.insert(model.id.clone()) {
+                    return Err("Model ID 不能为空或重复。".to_owned());
+                }
+                if model.id.len() > 800 || model.name.len() > 800 {
+                    return Err("模型字段过长，请检查输入。".to_owned());
+                }
+                if !model.input.text && !model.input.image {
+                    return Err("模型至少要支持一种输入类型。".to_owned());
+                }
+                if model.context_window == Some(0)
+                    || model.max_tokens == Some(0)
+                    || model
+                        .context_window
+                        .is_some_and(|value| value > 1_000_000_000)
+                    || model.max_tokens.is_some_and(|value| value > 1_000_000_000)
+                    || model
+                        .context_window
+                        .zip(model.max_tokens)
+                        .is_some_and(|(context, output)| output > context)
+                {
+                    return Err(
+                        "模型上下文窗口和输出上限必须为正数，且输出上限不能超过上下文窗口。"
+                            .to_owned(),
+                    );
+                }
             }
         }
-        if !self
-            .active_model_id
-            .as_ref()
-            .is_some_and(|id| ids.contains(id))
-        {
-            return Err("请选择当前使用的模型。".to_owned());
+        match (&self.active_provider_id, &self.active_model_id) {
+            (None, None) => Ok(()),
+            (Some(provider_id), Some(model_id)) => {
+                let model = self
+                    .providers
+                    .iter()
+                    .find(|provider| &provider.id == provider_id)
+                    .and_then(|provider| {
+                        provider.models.iter().find(|model| &model.id == model_id)
+                    });
+                match model {
+                    Some(model) if model.input.text => Ok(()),
+                    Some(_) => Err("当前模型必须支持文本输入。".to_owned()),
+                    None => Err("当前 Provider 和模型必须同时存在。".to_owned()),
+                }
+            }
+            _ => Err("当前 Provider 和模型必须同时选择或同时清空。".to_owned()),
         }
-        Ok(())
     }
 
-    pub fn active(&self) -> Option<&ModelProfile> {
-        self.model_profiles
+    pub fn active(&self) -> Option<(&ProviderConfig, &ProviderModel)> {
+        let provider_id = self.active_provider_id.as_ref()?;
+        let model_id = self.active_model_id.as_ref()?;
+        let provider = self
+            .providers
             .iter()
-            .find(|profile| Some(&profile.id) == self.active_model_id.as_ref())
+            .find(|provider| &provider.id == provider_id)?;
+        let model = provider.models.iter().find(|model| &model.id == model_id)?;
+        Some((provider, model))
     }
+}
+
+pub fn apply_drafts(
+    current: &ModelSettings,
+    drafts: Vec<ProviderDraft>,
+    clear_active: bool,
+) -> Result<ModelSettings, String> {
+    let mut providers = Vec::with_capacity(drafts.len());
+    for draft in drafts {
+        let existing = current
+            .providers
+            .iter()
+            .find(|provider| provider.id == draft.id);
+        let api_key = if draft.clear_api_key {
+            String::new()
+        } else if let Some(key) = draft.api_key.filter(|key| !key.trim().is_empty()) {
+            key.trim().to_owned()
+        } else {
+            existing
+                .map(|provider| provider.api_key.clone())
+                .unwrap_or_default()
+        };
+        providers.push(ProviderConfig {
+            id: draft.id,
+            name: draft.name,
+            protocol: draft.protocol,
+            base_url: draft.base_url,
+            api_key,
+            models: draft.models,
+        });
+    }
+    let mut next = ModelSettings {
+        providers,
+        active_provider_id: if clear_active {
+            None
+        } else {
+            current.active_provider_id.clone()
+        },
+        active_model_id: if clear_active {
+            None
+        } else {
+            current.active_model_id.clone()
+        },
+    };
+    next.validate()?;
+    Ok(next)
 }
 
 pub fn save(config_dir: &Path, models: &ModelSettings) -> Result<(), String> {
@@ -153,9 +429,15 @@ pub fn save(config_dir: &Path, models: &ModelSettings) -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
         Err(error) => return Err(format!("无法读取设置：{error}")),
     };
+    value.remove("modelProfiles");
+    value.remove("activeModelId");
     value.insert(
-        "modelProfiles".to_owned(),
-        serde_json::to_value(&models.model_profiles).map_err(|error| error.to_string())?,
+        "providers".to_owned(),
+        serde_json::to_value(&models.providers).map_err(|error| error.to_string())?,
+    );
+    value.insert(
+        "activeProviderId".to_owned(),
+        serde_json::to_value(&models.active_provider_id).map_err(|error| error.to_string())?,
     );
     value.insert(
         "activeModelId".to_owned(),
@@ -185,44 +467,125 @@ pub fn save(config_dir: &Path, models: &ModelSettings) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn model(id: &str) -> ProviderModel {
+        ProviderModel {
+            id: id.into(),
+            name: id.into(),
+            context_window: None,
+            max_tokens: None,
+            input: ModelInputTypes {
+                text: true,
+                image: false,
+            },
+        }
+    }
+
     #[test]
-    fn model_profiles_validate_and_preserve_existing_connection_settings() {
-        let directory =
-            std::env::temp_dir().join(format!("noltri-settings-check-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(
-            directory.join("settings.json"),
-            r#"{"apiBaseUrl":"http://localhost:9000","custom":true}"#,
+    fn default_connection_urls_follow_runtime_ports() {
+        assert_eq!(
+            default_connection_urls(crate::runtime::RuntimePorts {
+                core: 18787,
+                mcp: 18790,
+            }),
+            (
+                "http://127.0.0.1:18787".to_owned(),
+                "http://127.0.0.1:18790/mcp".to_owned(),
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_profiles_migrate_without_losing_active_selection_or_key() {
+        let value: serde_json::Value = serde_json::from_str(r#"{"modelProfiles":[{"id":"one","name":"DeepSeek","provider":"deepseek","baseUrl":"https://api.deepseek.com/","apiKey":"secret","model":"deepseek-chat"}],"activeModelId":"one"}"#).unwrap();
+        let settings = migrate_legacy(&value);
+        let (provider, model) = settings.active().unwrap();
+        assert_eq!(provider.api_key, "secret");
+        assert_eq!(provider.base_url, "https://api.deepseek.com");
+        assert_eq!(model.id, "deepseek-chat");
+    }
+
+    #[test]
+    fn legacy_duplicate_model_ids_collapse_and_active_profile_maps_to_the_model() {
+        let value: serde_json::Value = serde_json::json!({
+            "modelProfiles": [
+                { "id": "first", "name": "Primary", "provider": "deepseek", "baseUrl": "https://api.deepseek.com", "apiKey": "secret", "model": "deepseek-chat" },
+                { "id": "second", "name": "Alias", "provider": "deepseek", "baseUrl": "https://api.deepseek.com/", "apiKey": "secret", "model": "deepseek-chat" }
+            ],
+            "activeModelId": "second"
+        });
+        let settings = migrate_legacy(&value);
+        assert_eq!(settings.providers[0].models.len(), 1);
+        assert_eq!(settings.active().unwrap().1.id, "deepseek-chat");
+    }
+
+    #[test]
+    fn blank_key_retains_saved_key_and_view_redacts_it() {
+        let current = ModelSettings {
+            providers: vec![ProviderConfig {
+                id: "p".into(),
+                name: "P".into(),
+                protocol: ProviderProtocol::OpenAiCompletions,
+                base_url: "https://example.com/v1".into(),
+                api_key: "secret".into(),
+                models: vec![model("m")],
+            }],
+            active_provider_id: Some("p".into()),
+            active_model_id: Some("m".into()),
+        };
+        let next = apply_drafts(
+            &current,
+            vec![ProviderDraft {
+                id: "p".into(),
+                name: "P".into(),
+                protocol: ProviderProtocol::OpenAiCompletions,
+                base_url: "https://example.com/v1".into(),
+                api_key: Some(String::new()),
+                clear_api_key: false,
+                models: vec![model("m")],
+            }],
+            false,
         )
         .unwrap();
-        let mut models = ModelSettings {
-            model_profiles: vec![ModelProfile {
-                id: "one".into(),
-                name: "DeepSeek".into(),
-                provider: "deepseek".into(),
-                base_url: "https://api.deepseek.com/".into(),
-                api_key: "test-only".into(),
-                model: "deepseek-flash".into(),
+        assert_eq!(next.providers[0].api_key, "secret");
+        let view = ProviderView::from(&next.providers[0]);
+        let serialized = serde_json::to_string(&view).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert!(view.has_api_key);
+    }
+
+    #[test]
+    fn keyless_local_provider_is_allowed_but_remote_provider_is_rejected() {
+        let mut local = ModelSettings {
+            providers: vec![ProviderConfig {
+                id: "local".into(),
+                name: "Local".into(),
+                protocol: ProviderProtocol::OpenAiCompletions,
+                base_url: "http://127.0.0.1:11434/v1".into(),
+                api_key: String::new(),
+                models: vec![model("local-model")],
             }],
-            active_model_id: Some("one".into()),
+            active_provider_id: None,
+            active_model_id: None,
         };
-        models.validate().unwrap();
-        save(&directory, &models).unwrap();
-        let loaded = load(Some(&directory));
-        assert_eq!(loaded.api_base_url, "http://localhost:9000");
-        assert_eq!(
-            loaded.models.active().unwrap().base_url,
-            "https://api.deepseek.com"
-        );
+        assert!(local.validate().is_ok());
+        local.providers[0].base_url = "https://api.example.com/v1".into();
+        assert!(local.validate().unwrap_err().contains("API Key"));
+    }
+
+    #[test]
+    fn save_preserves_other_settings_and_removes_legacy_keys() {
+        let directory =
+            std::env::temp_dir().join(format!("noltri-settings-v2-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("settings.json"), r#"{"apiBaseUrl":"http://localhost:9000","modelProfiles":[],"activeModelId":null,"custom":true}"#).unwrap();
+        let settings = ModelSettings::default();
+        save(&directory, &settings).unwrap();
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(directory.join("settings.json")).unwrap())
                 .unwrap();
         assert_eq!(value["custom"], true);
-        models.model_profiles.push(models.model_profiles[0].clone());
-        assert!(models.validate().is_err());
-        models.model_profiles.pop();
-        models.model_profiles[0].base_url = "https://api.deepseek.com/chat/completions".into();
-        assert!(models.validate().is_err());
+        assert!(value.get("modelProfiles").is_none());
+        assert_eq!(value["providers"], serde_json::json!([]));
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

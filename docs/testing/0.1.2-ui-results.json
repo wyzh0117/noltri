@@ -1,0 +1,29 @@
+{
+  "version": "0.1.2",
+  "result": "PASS",
+  "runner": "Headless Chrome loading the built desktop UI with an isolated mock Tauri invoke bridge; no native app, production service, external provider, or user data was used.",
+  "assertions": [
+    "Provider management opens with an existing provider.",
+    "Third-party and custom API modes retain separate drafts.",
+    "Fetch, search, select-visible, deselect-all, and Add selected update the draft only.",
+    "Duplicate model IDs are rejected before a save command is issued.",
+    "Apply saves provider configuration without activating a model.",
+    "Explicit Use activates the selected model and refreshes state.",
+    "Dirty-editor cancel can be declined or accepted.",
+    "Delete confirmation names the provider; cancel retains it and confirm clears the active provider/model.",
+    "Fetch loading disables provider/model fields and Save, then restores controls when complete.",
+    "An empty Fetch response shows an empty state.",
+    "A Fetch failure preserves the editor and can be retried successfully.",
+    "Fetch retains a stored key only when requested; clear-key intent omits both providerId and apiKey."
+  ],
+  "layoutHitTest": {
+    "actionsOverlapActiveBadge": false,
+    "editButtonTopmostAtCenter": true,
+    "deleteButtonTopmostAtCenter": true
+  },
+  "screenshots": "Three temporary screenshots were produced under /private/tmp/noltri-ui-mock-qa/ (provider list, editor, fetch candidates); they are not committed.",
+  "limitations": [
+    "This is built-UI browser automation with a mock Tauri bridge, not native-app/Tauri-command GUI validation.",
+    "Native System Events access to the candidate process returned macOS error -10827; no permission changes were made."
+  ]
+}

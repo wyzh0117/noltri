@@ -19,7 +19,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
-            commands::save_model_settings
+            commands::save_model_settings,
+            commands::use_model,
+            commands::fetch_available_models
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Tauri app");

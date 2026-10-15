@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { LibraryItem } from '@noltri/schema';
-import ModelSettings from '../src/workbench/ModelSettings';
+import ModelSettings, { createFetchModelsInput, hasProviderIdConflict } from '../src/workbench/ModelSettings';
 import { describeError } from '../src/workbench/api';
 import { isWithinPath, parseSubjectPath, toggleComparedItems } from '../src/workbench/WorkbenchApp';
 
@@ -24,19 +24,35 @@ function paper(id: string, title: string, content: string, url: string): Library
 }
 
 describe('library navigation and comparison', () => {
-  it('renders the model welcome screen with a selected profile and masked API key', () => {
-    const modelProfiles = ['flash', 'pro'].map((id) => ({
-      id, name: id, provider: 'deepseek' as const, baseUrl: 'https://api.deepseek.com',
-      apiKey: 'test-only', model: id === 'flash' ? 'deepseek-flash' : 'deepseek-v4-pro',
-    }));
+  it('allows using a saved provider while rejecting a duplicate id on creation', () => {
+    const savedProviders = [{ id: 'openai' }];
+    expect(hasProviderIdConflict('openai', savedProviders, false)).toBe(false);
+    expect(hasProviderIdConflict('openai', savedProviders, true)).toBe(true);
+    expect(hasProviderIdConflict('anthropic', savedProviders, true)).toBe(false);
+  });
+
+  it('uses a saved key for existing providers unless the draft explicitly clears it', () => {
+    const draft = { id: 'openai', name: 'OpenAI', protocol: 'openai-responses' as const, baseUrl: 'https://api.openai.com/v1', models: [], apiKey: '' };
+    expect(createFetchModelsInput(draft, false)).toEqual({ providerId: 'openai', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1' });
+    expect(createFetchModelsInput({ ...draft, apiKey: 'typed-key', clearApiKey: true }, false)).toEqual({ protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1' });
+  });
+
+  it('renders provider management and the current model without exposing credentials', () => {
     const html = renderToStaticMarkup(createElement(ModelSettings, {
-      settings: { apiBaseUrl: '', apiToken: '', mcpEndpoint: '', modelProfiles, activeModelId: 'pro', runtimeStatus: 'managed' },
+      settings: {
+        apiBaseUrl: '', apiToken: '', mcpEndpoint: '', runtimeStatus: 'managed',
+        providers: [{ id: 'openai', name: 'OpenAI', protocol: 'openai-responses', baseUrl: 'https://api.openai.com/v1', hasApiKey: true, models: [{ id: 'gpt-model', name: 'GPT Model', contextWindow: null, maxTokens: null, input: { text: true, image: false } }] }],
+        activeProviderId: 'openai', activeModelId: 'gpt-model',
+      },
       outsideTauri: false, welcome: true, onSaved: () => {}, onDone: () => {},
     }));
     expect(html).toContain('先连接你的 AI 模型');
-    expect(html).toContain('<option value="pro" selected="">pro · deepseek-v4-pro</option>');
-    expect(html).toContain('type="password"');
-    for (const label of ['API Key', '添加模型', '保存并启用', '进入知识库']) expect(html).toContain(label);
+    expect(html).toContain('Provider 管理');
+    expect(html).toContain('OpenAI');
+    expect(html).toContain('当前模型');
+    expect(html).toContain('API Key 已保存');
+    expect(html).toContain('添加 Provider');
+    expect(html).not.toContain('test-only');
   });
 
   it('preserves native command error messages', () => {

@@ -11,6 +11,7 @@ import path from 'node:path';
 import type { ScopeTokenBudget, Thresholds } from '@noltri/schema';
 import {
   currentEnv,
+  aiInputTokenLimit,
   envBoolean,
   envFloat,
   envInt,
@@ -28,7 +29,7 @@ export const CORE_PACKAGE_NAME = '@noltri/knowledge-core';
 
 /** Fallbacks for knobs that belong to Core itself (not to the frozen Thresholds contract). */
 export const CORE_DEFAULTS = {
-  version: '0.1.1',
+  version: '0.1.2',
   port: 8787,
   corsOrigin: '*',
   devUser: 'local-dev-user',
@@ -118,6 +119,15 @@ const positive = (value: number, fallback: number): number =>
 export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
   const ai = loadAiConfig(env);
   const driver = loadStorageDriver(env);
+  const inputTokenLimit = aiInputTokenLimit(ai);
+  const budget = (value: number) => inputTokenLimit === null ? value : Math.max(0, Math.min(value, inputTokenLimit));
+  const rawBudgets = loadScopeBudgets(env);
+  const scopeBudgets: ScopeTokenBudget = {
+    current_node: budget(rawBudgets.current_node),
+    section: budget(rawBudgets.section),
+    tree: budget(rawBudgets.tree),
+    whole_library: budget(rawBudgets.whole_library),
+  };
 
   const storage: RepositoryOptions = {
     driver,
@@ -130,7 +140,7 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
     storage,
     ai,
     thresholds: loadThresholds(env),
-    scopeBudgets: loadScopeBudgets(env),
+    scopeBudgets,
     devUser: envString(env, 'NOLTRI_DEV_USER_ID', CORE_DEFAULTS.devUser),
     devTokenRequired: envBoolean(env, 'NOLTRI_DEV_REQUIRE_TOKEN', false),
     devToken: envString(env, 'NOLTRI_DEV_TOKEN'),

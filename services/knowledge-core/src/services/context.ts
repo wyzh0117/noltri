@@ -15,7 +15,7 @@ import {
   type NodeContext,
   type NodeContextRequest,
 } from '@noltri/schema';
-import { estimateTokens, knowledgeError, truncate } from '@noltri/shared';
+import { aiInputTokenLimit, estimateTokens, knowledgeError, truncate } from '@noltri/shared';
 import { capText, type ActorContext, type CoreDeps } from '../types';
 
 type ContextSource = NodeContext['sources'][number];
@@ -84,7 +84,11 @@ export async function buildNodeContext(
   const ancestors = await ancestorChain(deps, actor, node);
   const rootNodeId = ancestors.length > 0 ? ancestors[0].id : node.id;
   const assembled = await collectScope(deps, actor, node, ancestors, request.scope);
-  const tokenBudget = request.tokenBudget ?? budgetForScope(request.scope, deps.config.scopeBudgets);
+  const requestedBudget = request.tokenBudget ?? budgetForScope(request.scope, deps.config.scopeBudgets);
+  const modelInputLimit = aiInputTokenLimit(deps.config.ai);
+  const tokenBudget = modelInputLimit === null
+    ? requestedBudget
+    : Math.max(0, Math.min(requestedBudget, modelInputLimit));
 
   const blocks: string[] = [];
   const items: KnowledgeItem[] = [];

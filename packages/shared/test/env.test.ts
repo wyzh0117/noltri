@@ -4,7 +4,7 @@
  * a store that dies with the process.
  */
 import { describe, expect, it } from 'vitest';
-import { loadStorageDriver, loadAiConfig, loadThresholds } from '../src/env';
+import { aiInputTokenLimit, loadStorageDriver, loadAiConfig, loadThresholds } from '../src/env';
 
 describe('STORAGE_DRIVER', () => {
   it('accepts every driver a build can actually open', () => {
@@ -24,6 +24,12 @@ describe('STORAGE_DRIVER', () => {
     expect(loadAiConfig({}).driver).toBe('offline');
     expect(loadAiConfig({ AI_PROVIDER: 'openai', AI_API_KEY: 'sk-test' }).apiKey).toBe('sk-test');
     expect(() => loadAiConfig({ AI_PROVIDER: 'anthropic' })).toThrow(/AI_PROVIDER "anthropic"/);
+  });
+
+  it('reserves output tokens from a model context window without overflowing small windows', () => {
+    expect(aiInputTokenLimit({ contextWindow: 2_000, maxTokens: 512 })).toBe(1_488);
+    expect(aiInputTokenLimit({ contextWindow: 512, maxTokens: null })).toBe(0);
+    expect(aiInputTokenLimit({ contextWindow: null, maxTokens: 32 })).toBeNull();
   });
 
   it('clamps thresholds and never lets the medium bar exceed the high one', () => {

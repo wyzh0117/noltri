@@ -23,6 +23,8 @@ interface RecordedCall {
   path: string;
   body: JsonMap;
   authorization?: string;
+  apiKey?: string;
+  anthropicVersion?: string;
 }
 
 interface Fake {
@@ -123,6 +125,8 @@ async function startFake(respond: Responder): Promise<Fake> {
         path: (request.url ?? '/').split('?')[0],
         body,
         authorization: typeof request.headers.authorization === 'string' ? request.headers.authorization : undefined,
+        apiKey: typeof request.headers['x-api-key'] === 'string' ? request.headers['x-api-key'] : undefined,
+        anthropicVersion: typeof request.headers['anthropic-version'] === 'string' ? request.headers['anthropic-version'] : undefined,
       };
       calls.push(call);
       const reply = respond(call, calls.length - 1);
@@ -177,7 +181,11 @@ describe('constructor guards (BYOK config)', () => {
     it(`rejects a missing ${field} naming ${envVar}`, () => {
       let caught: unknown;
       try {
-        new OpenAiCompatibleProvider({ ...BASE_CONFIG, [field]: '  ' } as AiProviderConfig);
+        new OpenAiCompatibleProvider({
+          ...BASE_CONFIG,
+          ...(field === 'apiKey' ? { baseUrl: 'https://api.openai.com/v1' } : {}),
+          [field]: '  ',
+        } as AiProviderConfig);
       } catch (error) {
         caught = error;
       }
@@ -185,6 +193,11 @@ describe('constructor guards (BYOK config)', () => {
       expect(asCaught(caught).message).toContain(envVar);
     });
   }
+
+  it('allows a keyless local endpoint', () => {
+    const provider = new OpenAiCompatibleProvider({ ...BASE_CONFIG, apiKey: '' });
+    expect(provider.capabilities.chat).toBe(true);
+  });
 
   it('rejects a non-numeric embedding dim naming AI_EMBEDDING_DIM', () => {
     let caught: unknown;
@@ -599,6 +612,40 @@ describe('chat', () => {
       providerFor(fake.baseUrl).chat({ messages: [{ role: 'user', content: '你好' }] }),
     );
     expect(caught.code).toBe('provider_error');
+  });
+
+  it('uses OpenAI Responses path, model and capped output tokens', async () => {
+    const fake = await startFake(() => ({
+      body: { output_text: 'Responses 已解析', model: 'gpt-responses', usage: { input_tokens: 9, output_tokens: 4 } },
+    }));
+    const provider = providerFor(fake.baseUrl, { protocol: 'openai-responses', maxTokens: 64 });
+    const result = await provider.chat({ messages: [{ role: 'user', content: '你好' }], maxOutputTokens: 512 });
+    expect(fake.calls[0]?.path).toBe('/responses');
+    expect(fake.calls[0]?.authorization).toBe('Bearer sk-test-key');
+    expect(fake.calls[0]?.body.model).toBe('gpt-test');
+    expect(fake.calls[0]?.body.max_output_tokens).toBe(64);
+    expect(fake.calls[0]?.body.input).toEqual([{ role: 'user', content: '你好' }]);
+    expect(result).toEqual({ text: 'Responses 已解析', model: 'gpt-responses', promptTokens: 9, completionTokens: 4 });
+  });
+
+  it('uses Anthropic Messages path and headers, maps system and output limit', async () => {
+    const fake = await startFake(() => ({
+      body: { content: [{ type: 'text', text: 'Anthropic 已解析' }], model: 'claude-test', usage: { input_tokens: 8, output_tokens: 3 } },
+    }));
+    const provider = providerFor(fake.baseUrl, { protocol: 'anthropic-messages', maxTokens: 96 });
+    const result = await provider.chat({
+      messages: [{ role: 'system', content: '请简短回答' }, { role: 'user', content: '你好' }],
+      maxOutputTokens: 512,
+    });
+    expect(fake.calls[0]?.path).toBe('/v1/messages');
+    expect(fake.calls[0]?.apiKey).toBe('sk-test-key');
+    expect(fake.calls[0]?.authorization).toBeUndefined();
+    expect(fake.calls[0]?.anthropicVersion).toBe('2023-06-01');
+    expect(fake.calls[0]?.body.model).toBe('gpt-test');
+    expect(fake.calls[0]?.body.max_tokens).toBe(96);
+    expect(fake.calls[0]?.body.system).toBe('请简短回答');
+    expect(fake.calls[0]?.body.messages).toEqual([{ role: 'user', content: '你好' }]);
+    expect(result).toEqual({ text: 'Anthropic 已解析', model: 'claude-test', promptTokens: 8, completionTokens: 3 });
   });
 });
 

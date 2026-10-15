@@ -1,0 +1,48 @@
+{
+  "version": "0.1.2",
+  "result": "PASS",
+  "environment": "Packaged managed Core/MCP with isolated temporary settings/data and a local mock API; no external provider or user data was used.",
+  "protocolRuns": [
+    {
+      "protocol": "openai-completions",
+      "httpStatus": 200,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "mock-chat",
+      "maxOutputTokens": 128,
+      "authorizationMatchesFakeKey": true,
+      "capture": { "httpStatus": 200, "stage": "completed", "processingStatus": "done", "items": 1 }
+    },
+    {
+      "protocol": "openai-responses",
+      "httpStatus": 200,
+      "method": "POST",
+      "path": "/v1/responses",
+      "model": "mock-responses",
+      "maxOutputTokens": 128,
+      "authorizationMatchesFakeKey": true
+    },
+    {
+      "protocol": "anthropic-messages",
+      "httpStatus": 200,
+      "method": "POST",
+      "path": "/v1/messages",
+      "model": "mock-anthropic",
+      "maxOutputTokens": 128,
+      "xApiKeyMatchesFakeKey": true,
+      "anthropicVersionPresent": true
+    }
+  ],
+  "fullRestartPersistence": {
+    "result": "PASS",
+    "providerId": "qa-anthropic",
+    "modelId": "mock-anthropic",
+    "subsequentRequestPath": "/v1/messages",
+    "httpStatus": 200
+  },
+  "security": "Request bodies and credential values were not recorded; only fake-key match booleans were retained.",
+  "limitations": [
+    "The runtime profile was pre-seeded, so this proves persisted runtime routing but does not by itself prove the UI Use button path.",
+    "Only local mock endpoints were contacted."
+  ]
+}

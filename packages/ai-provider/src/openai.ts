@@ -6,6 +6,7 @@ import {
   normalizeKnowledgeText,
   truncate,
   type AiProviderConfig,
+  type AiProtocol,
 } from '@noltri/shared';
 import {
   buildClassifyUserPrompt,
@@ -60,6 +61,22 @@ const chatResponseSchema = z.object({
     .optional(),
 });
 
+const responsesResponseSchema = z.object({
+  output_text: z.string().optional(),
+  output: z.array(z.object({
+    type: z.string().optional(),
+    content: z.array(z.object({ type: z.string().optional(), text: z.string().optional() }).passthrough()).optional(),
+  }).passthrough()).optional(),
+  model: z.string().optional(),
+  usage: z.object({ input_tokens: z.number().nonnegative().optional(), output_tokens: z.number().nonnegative().optional() }).optional(),
+}).passthrough();
+
+const anthropicResponseSchema = z.object({
+  content: z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()).min(1),
+  model: z.string().optional(),
+  usage: z.object({ input_tokens: z.number().nonnegative().optional(), output_tokens: z.number().nonnegative().optional() }).optional(),
+}).passthrough();
+
 const embeddingResponseSchema = z.object({
   data: z
     .array(
@@ -88,7 +105,7 @@ const classifyPayloadSchema = z.object({
   reason: z.string().min(1),
 });
 
-type ChatResponse = z.infer<typeof chatResponseSchema>;
+type ChatResponse = { text: string; model?: string; promptTokens?: number; completionTokens?: number };
 type ClassifyPayload = z.infer<typeof classifyPayloadSchema>;
 
 type RequestFailure =
@@ -140,6 +157,22 @@ function endpoint(baseUrl: string, segment: string): string {
   return url.toString();
 }
 
+function versionedEndpoint(baseUrl: string, segment: string): string {
+  const pathname = new URL(baseUrl).pathname.replace(/\/+$/, '');
+  return endpoint(baseUrl, `${pathname.endsWith('/v1') ? '' : 'v1/'}${segment}`);
+}
+
+function isLocalEndpoint(baseUrl: string): boolean {
+  let hostname = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const octets = hostname.split('.').map(Number);
+  const privateIpv4 = octets.length === 4 && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)
+    && (octets[0] === 10 || octets[0] === 127 || (octets[0] === 192 && octets[1] === 168)
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 169 && octets[1] === 254));
+  return hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')
+    || hostname === '::1' || hostname.startsWith('fc') || hostname.startsWith('fd') || hostname.startsWith('fe80:') || privateIpv4;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -164,6 +197,16 @@ function messageField(error: z.ZodError): string {
 function errorText(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function scrub(value: unknown, secret: string): unknown {
+  if (secret.length === 0) return value;
+  if (typeof value === 'string') return value.replaceAll(secret, '[redacted]');
+  if (Array.isArray(value)) return value.map((entry) => scrub(entry, secret));
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, scrub(entry, secret)]));
+  }
+  return value;
 }
 
 function isAbortLike(error: unknown): boolean {
@@ -217,38 +260,49 @@ function toProviderError(error: unknown, label: string) {
   return knowledgeError('provider_error', `${label}: ${truncate(errorText(error), 200)}`);
 }
 
-/**
- * BYOK adapter for any OpenAI-compatible endpoint (`/chat/completions` + `/embeddings`).
- * Global fetch only: no provider SDK may leak into Knowledge Core (PROJECT_MASTER §8).
- */
-export class OpenAiCompatibleProvider implements AIProvider {
-  readonly id = 'openai-compatible';
-  readonly capabilities: ProviderCapabilities = {
-    embeddings: true,
-    chat: true,
-    structuredOutput: true,
-  };
+/** One adapter for the supported text generation protocols. */
+export class ProtocolProvider implements AIProvider {
+  readonly id: string;
+  readonly capabilities: ProviderCapabilities;
 
   private readonly config: AiProviderConfig;
   private readonly chatEndpoint: string;
-  private readonly embedEndpoint: string;
+  private readonly embedEndpoint: string | null;
+  private readonly protocol: AiProtocol;
   private readonly maxRetries: number;
   private readonly backoffBaseMs: number;
 
   constructor(config: AiProviderConfig, options: OpenAiProviderOptions = {}) {
-    const apiKey = requireConfigValue(config.apiKey, 'AI_API_KEY', 'BYOK 密钥');
     const baseUrl = requireConfigValue(config.baseUrl, 'AI_BASE_URL', '模型服务 endpoint');
     const chatModel = requireConfigValue(config.chatModel, 'AI_CHAT_MODEL', '对话模型名');
-    const embedModel = requireConfigValue(config.embedModel, 'AI_EMBED_MODEL', '向量模型名');
-    if (!Number.isInteger(config.embeddingDim) || config.embeddingDim <= 0) {
+    const protocol = config.protocol ?? 'openai-completions';
+    const apiKey = (config.apiKey ?? '').trim();
+    if (apiKey.length === 0 && !isLocalEndpoint(baseUrl)) {
+      throw knowledgeError('invalid_request', '远程模型服务需要配置 AI_API_KEY / AI_API_KEY is required for remote providers');
+    }
+    const embedModel = protocol === 'anthropic-messages'
+      ? (config.embedModel ?? '').trim()
+      : requireConfigValue(config.embedModel, 'AI_EMBED_MODEL', '向量模型名');
+    if (protocol !== 'anthropic-messages' && (!Number.isInteger(config.embeddingDim) || config.embeddingDim <= 0)) {
       throw knowledgeError(
         'invalid_request',
         `AI_EMBEDDING_DIM 必须是正整数，实际为 ${String(config.embeddingDim)}`,
       );
     }
+    this.protocol = protocol;
+    this.id = this.protocol === 'openai-completions' ? 'openai-compatible' : this.protocol;
+    this.capabilities = {
+      embeddings: this.protocol !== 'anthropic-messages',
+      chat: true,
+      structuredOutput: this.protocol !== 'anthropic-messages',
+    };
     this.config = { ...config, apiKey, baseUrl, chatModel, embedModel };
-    this.chatEndpoint = endpoint(baseUrl, 'chat/completions');
-    this.embedEndpoint = endpoint(baseUrl, 'embeddings');
+    this.chatEndpoint = this.protocol === 'openai-completions'
+      ? endpoint(baseUrl, 'chat/completions')
+      : this.protocol === 'openai-responses'
+        ? endpoint(baseUrl, 'responses')
+        : versionedEndpoint(baseUrl, 'messages');
+    this.embedEndpoint = this.protocol === 'anthropic-messages' ? null : endpoint(baseUrl, 'embeddings');
     this.maxRetries = clamp(Math.trunc(options.maxRetries ?? 2), 0, 5);
     this.backoffBaseMs = Math.max(1, options.backoffBaseMs ?? 250);
   }
@@ -329,6 +383,9 @@ export class OpenAiCompatibleProvider implements AIProvider {
   async embed(texts: string[]): Promise<number[][]> {
     return this.guarded('embed', async () => {
       if (texts.length === 0) return [];
+      if (this.embedEndpoint === null) {
+        throw knowledgeError('invalid_request', 'Anthropic Messages 协议不提供向量接口 / embeddings are unavailable');
+      }
       const vectors: number[][] = [];
       for (const batch of chunk(texts, EMBED_BATCH_SIZE)) {
         const json = await this.request(this.embedEndpoint, {
@@ -384,12 +441,11 @@ export class OpenAiCompatibleProvider implements AIProvider {
       const response = await this.complete(
         this.chatPayload(messages, { wantsJson: false, structured: false, maxOutputTokens: input.maxOutputTokens }),
       );
-      const text = contentOf(response);
       return {
-        text,
+        text: contentOf(response),
         model: response.model ?? this.config.chatModel,
-        promptTokens: response.usage?.prompt_tokens,
-        completionTokens: response.usage?.completion_tokens,
+        promptTokens: response.promptTokens,
+        completionTokens: response.completionTokens,
       };
     });
   }
@@ -398,7 +454,13 @@ export class OpenAiCompatibleProvider implements AIProvider {
     try {
       return await run();
     } catch (error) {
-      throw toProviderError(error, label);
+      const mapped = toProviderError(error, label);
+      if (this.config.apiKey.length === 0) throw mapped;
+      throw knowledgeError(
+        mapped.code,
+        String(scrub(mapped.message, this.config.apiKey)),
+        scrub(mapped.details, this.config.apiKey),
+      );
     }
   }
 
@@ -406,11 +468,35 @@ export class OpenAiCompatibleProvider implements AIProvider {
     messages: ChatMessage[],
     options: { wantsJson: boolean; structured: boolean; maxOutputTokens?: number },
   ): JsonMap {
+    const maxTokens = Math.trunc(clamp(
+      options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      1,
+      Math.min(this.config.maxTokens ?? 32_000, 32_000),
+    ));
+    if (this.protocol === 'anthropic-messages') {
+      const system = messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n\n');
+      return {
+        model: this.config.chatModel,
+        ...(system.length > 0 ? { system } : {}),
+        messages: messages.filter((message) => message.role !== 'system').map((message) => ({ role: message.role, content: message.content })),
+        temperature: this.config.temperature,
+        max_tokens: maxTokens,
+      };
+    }
+    if (this.protocol === 'openai-responses') {
+      return {
+        model: this.config.chatModel,
+        input: messages.map((message) => ({ role: message.role, content: message.content })),
+        temperature: this.config.temperature,
+        max_output_tokens: maxTokens,
+        ...(options.wantsJson && options.structured ? { text: { format: { type: 'json_object' } } } : {}),
+      };
+    }
     const payload: JsonMap = {
       model: this.config.chatModel,
       messages: messages.map((message) => ({ role: message.role, content: message.content })),
       temperature: this.config.temperature,
-      max_tokens: Math.trunc(clamp(options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 1, 32_000)),
+      max_tokens: maxTokens,
     };
     if (options.wantsJson && options.structured) {
       payload.response_format = { type: 'json_object' };
@@ -424,22 +510,61 @@ export class OpenAiCompatibleProvider implements AIProvider {
 
   private async complete(payload: JsonMap): Promise<ChatResponse> {
     const json = await this.request(this.chatEndpoint, payload);
+    if (this.protocol === 'anthropic-messages') {
+      const parsed = anthropicResponseSchema.safeParse(json);
+      if (!parsed.success) {
+        throw knowledgeError('provider_error', 'Anthropic Messages 响应契约不符 / unexpected response shape', {
+          issue: messageField(parsed.error),
+        });
+      }
+      return {
+        text: parsed.data.content.filter((entry) => entry.type === 'text').map((entry) => entry.text ?? '').join(''),
+        model: parsed.data.model,
+        promptTokens: parsed.data.usage?.input_tokens,
+        completionTokens: parsed.data.usage?.output_tokens,
+      };
+    }
+    if (this.protocol === 'openai-responses') {
+      const parsed = responsesResponseSchema.safeParse(json);
+      if (!parsed.success) {
+        throw knowledgeError('provider_error', 'OpenAI Responses 响应契约不符 / unexpected response shape', {
+          issue: messageField(parsed.error),
+        });
+      }
+      const text = parsed.data.output_text ?? parsed.data.output?.flatMap((item) => item.content ?? [])
+        .filter((entry) => entry.type === 'output_text').map((entry) => entry.text ?? '').join('') ?? '';
+      return {
+        text,
+        model: parsed.data.model,
+        promptTokens: parsed.data.usage?.input_tokens,
+        completionTokens: parsed.data.usage?.output_tokens,
+      };
+    }
     const parsed = chatResponseSchema.safeParse(json);
     if (!parsed.success) {
       throw knowledgeError('provider_error', 'chat/completions 响应契约不符 / unexpected shape', {
         issue: messageField(parsed.error),
       });
     }
-    return parsed.data;
+    return {
+      text: parsed.data.choices[0]?.message.content ?? '',
+      model: parsed.data.model,
+      promptTokens: parsed.data.usage?.prompt_tokens,
+      completionTokens: parsed.data.usage?.completion_tokens,
+    };
   }
 
   /** One JSON-mode chat call; falls back once when response_format is unsupported. */
   private async requestJsonObject(messages: ChatMessage[], label: string): Promise<unknown> {
+    if (this.protocol === 'anthropic-messages') {
+      const response = await this.complete(this.chatPayload(withJsonOnlyReminder(messages), { wantsJson: true, structured: false }));
+      return parseModelJson(response.text, label);
+    }
     try {
       const response = await this.complete(
         this.chatPayload(messages, { wantsJson: true, structured: true }),
       );
-      return parseModelJson(contentOf(response), label);
+      return parseModelJson(response.text, label);
     } catch (error) {
       if (!(error instanceof UpstreamHttpError) || error.status !== 400) throw error;
       if (!looksLikeFormatRejection(error.body)) throw error;
@@ -447,7 +572,7 @@ export class OpenAiCompatibleProvider implements AIProvider {
       const response = await this.complete(
         this.chatPayload(fallbackMessages, { wantsJson: true, structured: false }),
       );
-      return parseModelJson(contentOf(response), label);
+      return parseModelJson(response.text, label);
     }
   }
 
@@ -462,7 +587,12 @@ export class OpenAiCompatibleProvider implements AIProvider {
           headers: {
             'content-type': 'application/json',
             accept: 'application/json',
-            authorization: `Bearer ${this.config.apiKey}`,
+            ...(this.protocol === 'anthropic-messages'
+              ? {
+                  'anthropic-version': '2023-06-01',
+                  ...(this.config.apiKey.length > 0 ? { 'x-api-key': this.config.apiKey } : {}),
+                }
+              : this.config.apiKey.length > 0 ? { authorization: `Bearer ${this.config.apiKey}` } : {}),
           },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(this.config.timeoutMs),
@@ -491,11 +621,11 @@ export class OpenAiCompatibleProvider implements AIProvider {
         if (response.status >= 500) {
           lastFailure = {
             kind: 'retryable_status',
-            message: `HTTP ${String(response.status)}: ${truncate(body, 200)}`,
+            message: `HTTP ${String(response.status)}: ${truncate(this.config.apiKey.length > 0 ? body.replaceAll(this.config.apiKey, '[redacted]') : body, 200)}`,
           };
           continue;
         }
-        throw new UpstreamHttpError(response.status, body, url);
+        throw new UpstreamHttpError(response.status, this.config.apiKey.length > 0 ? body.replaceAll(this.config.apiKey, '[redacted]') : body, url);
       } catch (error) {
         if (isKnowledgeError(error) || error instanceof UpstreamHttpError) throw error;
         if (isAbortLike(error)) {
@@ -595,11 +725,10 @@ export class OpenAiCompatibleProvider implements AIProvider {
 }
 
 function contentOf(response: ChatResponse): string {
-  const content = response.choices[0]?.message?.content;
-  if (typeof content !== 'string' || content.trim().length === 0) {
+  if (response.text.trim().length === 0) {
     throw knowledgeError('provider_error', '模型未返回文本内容 / empty message content');
   }
-  return content;
+  return response.text;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -607,5 +736,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function createOpenAiProvider(config: AiProviderConfig, options?: OpenAiProviderOptions): AIProvider {
-  return new OpenAiCompatibleProvider(config, options);
+  return new ProtocolProvider(config, options);
 }
+
+/** Backwards-compatible name used by existing integrations and tests. */
+export class OpenAiCompatibleProvider extends ProtocolProvider {}

@@ -76,30 +76,49 @@ export function loadStorageDriver(env: EnvSource = currentEnv()): StorageDriver 
   return found;
 }
 
-export type AiDriver = 'openai' | 'offline';
+export type AiDriver = 'openai' | 'offline' | 'disabled';
+export type AiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
 
 export interface AiProviderConfig {
   driver: AiDriver;
+  protocol?: AiProtocol;
   apiKey: string;
   baseUrl: string;
   chatModel: string;
+  contextWindow?: number | null;
+  maxTokens?: number | null;
   embedModel: string;
   embeddingDim: number;
   timeoutMs: number;
   temperature: number;
 }
 
+export function aiInputTokenLimit(config: Pick<AiProviderConfig, 'contextWindow' | 'maxTokens'>): number | null {
+  if (config.contextWindow == null) return null;
+  const output = Math.min(config.contextWindow, config.maxTokens ?? 1_024);
+  return Math.max(0, config.contextWindow - output);
+}
+
 export function loadAiConfig(env: EnvSource = currentEnv()): AiProviderConfig {
   const raw = envString(env, 'AI_PROVIDER', 'offline').toLowerCase();
-  if (raw !== 'openai' && raw !== 'offline') {
-    throw new Error(`Unknown AI_PROVIDER "${raw}" — expected "openai" or "offline"`);
+  if (raw !== 'openai' && raw !== 'offline' && raw !== 'disabled') {
+    throw new Error(`Unknown AI_PROVIDER "${raw}" — expected "openai", "offline" or "disabled"`);
   }
+  const protocolRaw = envString(env, 'AI_PROTOCOL', 'openai-completions').toLowerCase();
+  if (protocolRaw !== 'openai-completions' && protocolRaw !== 'openai-responses' && protocolRaw !== 'anthropic-messages') {
+    throw new Error(`Unknown AI_PROTOCOL "${protocolRaw}"`);
+  }
+  const contextWindow = envInt(env, 'AI_MODEL_CONTEXT_WINDOW', 0);
+  const maxTokens = envInt(env, 'AI_MODEL_MAX_TOKENS', 0);
   const driver: AiDriver = raw;
   return {
     driver,
+    protocol: protocolRaw,
     apiKey: envString(env, 'AI_API_KEY'),
     baseUrl: envString(env, 'AI_BASE_URL', 'https://api.openai.com/v1'),
     chatModel: envString(env, 'AI_CHAT_MODEL', 'gpt-4o-mini'),
+    contextWindow: contextWindow > 0 ? contextWindow : null,
+    maxTokens: maxTokens > 0 ? maxTokens : null,
     embedModel: envString(env, 'AI_EMBED_MODEL', 'text-embedding-3-small'),
     embeddingDim: envInt(env, 'AI_EMBEDDING_DIM', 1536),
     timeoutMs: envInt(env, 'AI_REQUEST_TIMEOUT_MS', 45_000),

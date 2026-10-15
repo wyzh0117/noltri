@@ -11,9 +11,9 @@ Noltri is a local personal knowledge library. Save useful passages from webpages
 
 ## Quick start
 
-Version 0.1.1 is currently available for Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
+Version 0.1.2 targets Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
 
-Version 0.1.1 fixes the missing app resource seal and invalid bundled runtime signature in 0.1.0. The app and the copy inside the DMG are now strictly verified. This release uses ad-hoc signing and **has no Developer ID signature or Apple notarization**, so macOS may still block the first launch. Check the download against `SHA256SUMS.txt` in Releases, then follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445).
+Version 0.1.2 redesigns model setup around provider management. Configure a provider's API URL and write-only key, then fetch available models or add one manually. It supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages. Apply saves provider and model settings; **Use this model** selects the global model before Noltri processes content. The build continues to verify the app resource seal and bundled runtime signature fixes from 0.1.1. This release uses ad-hoc signing and **has no Developer ID signature or Apple notarization**, so macOS may still block the first launch. Check the download against `SHA256SUMS.txt` in Releases, then follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445).
 
 If macOS still reports that the app is damaged, verify the download source and checksum, then remove quarantine for this app only:
 
@@ -35,7 +35,7 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-The desktop opens with model settings. Choose DeepSeek or an OpenAI-compatible provider, enter the API key, base URL and model, and save. Add multiple profiles and switch between them with a dropdown. The library sidebar opens the same settings page. The layout follows [Cherry Studio provider settings](https://www.cherryai.com/docs/en/pre-basic/settings/providers/) using existing forms and native dropdowns.
+The desktop opens with provider management. Add a provider, fetch available models or add one manually, then Apply to save its configuration. The model settings support OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages. Choose **Use this model** to set the global active model before processing content. API keys are stored only in local settings. You can reopen model management from the library settings.
 
 Saving restarts services managed by the packaged app. External/development services require a manual restart and matching `.env.local` settings:
 
@@ -47,11 +47,11 @@ AI_CHAT_MODEL=deepseek-flash
 AI_EMBEDDINGS_ENABLED=false
 ```
 
-Model profiles are stored locally in `~/Library/Application Support/com.noltri.companion/settings.json` on macOS. Automatic classification requires a configured model. Unconfigured or failed requests keep the original text for later retry or manual organization.
+Provider configurations are stored locally in `~/Library/Application Support/com.noltri.companion/settings.json` on macOS. Automatic classification requires an active model. Unconfigured or failed requests keep the original text for later retry or manual organization.
 
 ### Install the browser extension
 
-Download and extract `noltri-extension.zip` from [0.1.1 Releases](https://github.com/wyzh0117/noltri/releases/latest), or build it from source:
+Download and extract `noltri-extension.zip` from [Releases](https://github.com/wyzh0117/noltri/releases/latest), or build it from source:
 
 ```bash
 pnpm --filter @noltri/extension build
@@ -98,7 +98,7 @@ Collect passages from two papers about the same question. Noltri keeps each sour
 
 ## Verification and builds
 
-The 0.1.1 live DeepSeek acceptance covers Python, TypeScript, Rust, Go, SQL and short excerpts from physics, econometrics, molecular biology and psychology papers. See the [test guide](docs/testing/README.md) and [recorded results](docs/testing/0.1.1-deepseek-results.json). The tested local library retains these cards; installers contain no test credentials or user data.
+The 0.1.1 live DeepSeek acceptance covers Python, TypeScript, Rust, Go, SQL and short excerpts from physics, econometrics, molecular biology and psychology papers. See the [test guide](docs/testing/README.md) and [recorded results](docs/testing/0.1.1-deepseek-results.json). The 0.1.2 automated checks, isolated protocol/restart tests, and built-UI mock-bridge workflows passed; native GUI automation was unavailable. See the [test guide](docs/testing/README.md) for scope. Installers contain no test credentials or user data.
 
 ```bash
 pnpm typecheck

@@ -1,4 +1,20 @@
-# 0.1.1 分类验收
+# 0.1.2 模型服务验收
+
+状态：自动化检查、隔离 managed-runtime 协议/重启验证、built-UI headless 流程和 CSS 修正后的最终 macOS bundle/DMG 复核通过。原生 GUI 自动化未执行：System Events 对候选进程返回 macOS 错误 `-10827`，CUA 通道此前超时；没有操作已安装应用或其配置。
+
+- Provider 流程：从 Provider 管理添加配置，检查 provider id/name、Base URL、只写 API Key 和三种协议（OpenAI Chat Completions、OpenAI Responses、Anthropic Messages）。Fetch Available Models 应将候选留在草稿；选中后 Add selected 加入草稿；手动 Add Model 可设置 ID、显示名、上下文长度、最大输出及 text/image 输入能力；Apply 才保存草稿。
+- 当前模型：Apply 普通配置不得改变活动模型。“使用此模型”应保存全局活动模型；刷新与重启后仍选中该模型，之后的真实 AI 请求应使用其协议、Base URL、凭据和模型 ID。删除活动 provider/model 后应明确清空活动模型，不自动回退到默认模型。
+- 边界：验证空候选、Fetch 失败、重复模型 ID、删除 provider 的名称确认、确认弹窗取消及丢弃未保存草稿；按钮应显示加载状态并在请求结束后恢复。
+- 隔离：使用临时 `NOLTRI_SETTINGS_DIR`、`NOLTRI_DATA_DIR` 和本地兼容 API mock，避免访问用户配置、资料库或真实模型账单。GUI 验收应运行 packaged managed Core；`pnpm dev` 的开发 Core 由外部终端管理，不能证明自动应用模型配置。
+- 隔离 runtime 结果：[0.1.2-runtime-results.json](0.1.2-runtime-results.json)。三个协议的真实 HTTP 路由、模型 ID、128 输出 token 上限和假凭据匹配均通过；Anthropic 同时验证 `anthropic-version`。完整退出并重启后，活动 `qa-anthropic/mock-anthropic` 仍保留，且继续发出 `/v1/messages` 请求。测试使用临时 settings/data 目录和本地 mock，不接触外部 provider；请求体与凭据值均未记入证据。
+- 界面：[0.1.2-ui-results.json](0.1.2-ui-results.json) 记录 headless Chrome 对构建后桌面 UI 与 mock Tauri bridge 的 12 项断言：模式草稿、Fetch/搜索/选择/添加、重复模型 ID 拦截、Apply 不自动 Use、显式 Use、取消确认、删除确认与清除 active、loading 禁用与恢复、空/失败 Fetch 和重试、API key 保留/清除语义均通过。卡片操作区和 active badge 的矩形不重叠，编辑/删除按钮中心点均命中按钮。三张截图保留于本次临时目录 `/private/tmp/noltri-ui-mock-qa/`，未提交仓库。
+- 限制：headless bridge 不是原生 Tauri GUI。原生 System Events/CUA 点击未完成，因此不能宣称原生 GUI 已验收。
+
+自动检查结果：`PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm typecheck` 10/10 workspace packages 通过；同一环境下 `pnpm test` 10/10 packages 通过（531 tests；schema package 无测试文件）。`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` 12/12 通过，`cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` 与 `git diff --check` 通过。pnpm 环境变量仅跳过 pnpm 11 的依赖目录自动重装自检，未安装或升级依赖。历史真实付费 API 脚本未运行。
+
+macOS 最终 CSS 修复版构建及 bundle/DMG 验证通过。`pnpm --filter @noltri/desktop release:mac` 与 `verify-macos` 均 exit 0；app 版本为 0.1.2，app/Node 签名检查通过，extension 为 0.1.2 且包含 8 个文件，staging 未发现 secrets、数据库或 settings。CSS 修复前后随包 Core/MCP resource hash 一致，因此上方隔离 runtime 证据适用于最终包。该验证不代表 Apple 公证。
+
+# 0.1.1 分类验收（历史记录）
 
 使用真实 DeepSeek API 与应用随包 Core，经过 HTTP 收集、SQLite 持久化、读取与人工编辑完整流程。测试输入和结果不含 API 密钥；本地模型配置不提交 Git，也不打入安装包。
 

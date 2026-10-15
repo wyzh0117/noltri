@@ -42,7 +42,7 @@ function WorkbenchBoot(): ReactElement {
           mcpEndpoint: DEV_MCP_URL,
           tokenConfigured: false,
           outsideTauri: true,
-          settings: { apiBaseUrl: DEV_CORE_URL, apiToken: '', mcpEndpoint: DEV_MCP_URL, modelProfiles: [], activeModelId: null, runtimeStatus: 'dev' },
+          settings: { apiBaseUrl: DEV_CORE_URL, apiToken: '', mcpEndpoint: DEV_MCP_URL, providers: [], activeProviderId: null, activeModelId: null, runtimeStatus: 'dev' },
         });
         return;
       }
