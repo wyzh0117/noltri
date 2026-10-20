@@ -418,6 +418,40 @@ describe('the capture idempotency migration', () => {
     db.close();
   }
 
+  function seededV6(file: string): void {
+    const db = new DatabaseSync(file, { enableForeignKeyConstraints: true });
+    db.exec('pragma journal_mode = wal');
+    for (const migration of SQLITE_MIGRATIONS.slice(0, 6)) {
+      migration.apply(db);
+      db.exec(`pragma user_version = ${String(migration.version)}`);
+    }
+    const stamp = '2026-10-20T00:00:00.000Z';
+    db.prepare(
+      `insert into raw_sources (id, user_id, raw_text, source_type, captured_at, created_at)
+       values ('v6-source', 'v6-user', 'v6 原始来源', 'manual', ?, ?)`,
+    ).run(stamp, stamp);
+    const insertNode = db.prepare(
+      `insert into knowledge_nodes (id, user_id, title, node_type, parent_id, created_at, updated_at)
+       values (?, 'v6-user', ?, ?, ?, ?, ?)`,
+    );
+    insertNode.run('v6-discipline', '旧学科', 'discipline', null, stamp, stamp);
+    insertNode.run('v6-topic', '旧主题', 'topic', 'v6-discipline', stamp, stamp);
+    insertNode.run('v6-chapter', '旧章节', 'chapter', 'v6-topic', stamp, stamp);
+    db.prepare(
+      `insert into knowledge_edges (id, user_id, from_node_id, to_node_id, relation_type, source, created_at)
+       values ('v6-edge', 'v6-user', 'v6-chapter', 'v6-topic', 'part_of', 'topic_chapter', ?)`,
+    ).run(stamp);
+    db.prepare(
+      `insert into knowledge_items (id, user_id, raw_source_id, normalized_text, confidence, created_at, updated_at)
+       values ('v6-item', 'v6-user', 'v6-source', 'v6 已关联资料', 0.9, ?, ?)`,
+    ).run(stamp, stamp);
+    db.prepare(
+      `insert into item_node_links (id, user_id, item_id, node_id, relation_type, confidence, created_at)
+       values ('v6-link', 'v6-user', 'v6-item', 'v6-topic', 'primary', 0.9, ?)`,
+    ).run(stamp);
+    db.close();
+  }
+
   function columnsOf(db: DatabaseSync, table: string): string[] {
     return (db.prepare(`pragma table_info(${table})`).all() as Record<string, unknown>[]).map((row) =>
       String(row.name),
@@ -457,6 +491,32 @@ describe('the capture idempotency migration', () => {
     expect(reopened.schemaInfo.schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
     expect(await reopened.findRawSource(keyed.id, 'u')).toEqual(keyed);
     await reopened.close();
+  });
+
+  it('upgrades a complete v6 graph profile to v7 without changing nodes, edges or sources', async () => {
+    const file = fileInTempDir('upgrade-v6.sqlite');
+    seededV6(file);
+    const repo = new SqliteRepository({ file });
+    try {
+      expect(repo.storageStatus().schemaVersion).toBe(7);
+      expect(await repo.findNode('v6-topic', 'v6-user')).toMatchObject({ id: 'v6-topic', title: '旧主题' });
+      expect(await repo.findNode('v6-chapter', 'v6-user')).toMatchObject({ id: 'v6-chapter', parentId: 'v6-topic' });
+      expect(await repo.listEdges('v6-user')).toContainEqual(expect.objectContaining({
+        id: 'v6-edge',
+        fromNodeId: 'v6-chapter',
+        toNodeId: 'v6-topic',
+      }));
+      expect(await repo.findRawSource('v6-source', 'v6-user')).toMatchObject({ id: 'v6-source', rawText: 'v6 原始来源' });
+      expect(await repo.listKnowledgeItemsForSource('v6-source', 'v6-user')).toContainEqual(
+        expect.objectContaining({ id: 'v6-item', normalizedText: 'v6 已关联资料' }),
+      );
+      expect(await repo.listLinksForNode('v6-topic', 'v6-user')).toContainEqual(expect.objectContaining({
+        id: 'v6-link',
+        itemId: 'v6-item',
+      }));
+    } finally {
+      await repo.close();
+    }
   });
 
   it('refuses a second row for the same (user, client, request) key', () => {

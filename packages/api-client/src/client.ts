@@ -5,10 +5,18 @@ import {
   assignSourceResponseSchema,
   captureRequestSchema,
   captureResultSchema,
+  chapterResponseSchema,
+  chapterTargetSchema,
+  createChapterRequestSchema,
   conversationListResponseSchema,
   conversationMessagesResponseSchema,
   grantListResponseSchema,
   healthResponseSchema,
+  graphMembershipRequestSchema,
+  graphNoteSchema,
+  graphNoteIndexSchema,
+  graphScopeSchema,
+  graphSelectionSchema,
   inboxResponseSchema,
   createItemRelationInputSchema,
   createLibraryItemInputSchema,
@@ -26,17 +34,26 @@ import {
   nodeDetailSchema,
   patchLibraryItemInputSchema,
   rawSourceSchema,
+  resolveChapterRequestSchema,
   RETRYABLE_ERROR_CODES,
   revokeGrantResponseSchema,
   searchResponseSchema,
+  saveGraphNoteRequestSchema,
   treeResponseSchema,
   type AssignSourceRequest,
   type AssignSourceResponse,
   type CaptureRequest,
   type CaptureResult,
+  type ChapterResponse,
+  type ChapterTarget,
   type Conversation,
   type ConversationMessage,
+  type CreateChapterRequest,
   type HealthResponse,
+  type GraphNote,
+  type GraphNoteIndex,
+  type GraphScope,
+  type GraphSelection,
   type CreateItemRelationInput,
   type CreateLibraryItemInput,
   type ItemRelation,
@@ -58,6 +75,8 @@ import {
   type PatchLibraryItemInput,
   type PublicGrant,
   type RawSource,
+  type ResolveChapterRequest,
+  type SaveGraphNoteRequest,
   type SearchRequest,
   type SearchResponse,
   type TreeQuery,
@@ -80,6 +99,13 @@ export const apiRoutes = {
   itemRelation: (id: string, targetId: string) =>
     `/api/items/${encodeURIComponent(id)}/relations/${encodeURIComponent(targetId)}`,
   tree: '/api/tree',
+  graphSelect: '/api/graph/select',
+  graphResolveChapter: '/api/graph/resolve-chapter',
+  note: (topicId: string) => `/api/notes/${encodeURIComponent(topicId)}`,
+  noteChapters: (topicId: string) => `/api/notes/${encodeURIComponent(topicId)}/chapters`,
+  topicChapters: (topicId: string) => `/api/topics/${encodeURIComponent(topicId)}/chapters`,
+  chapterTopic: (chapterId: string, topicId: string) =>
+    `/api/chapters/${encodeURIComponent(chapterId)}/topics/${encodeURIComponent(topicId)}`,
   inbox: '/api/inbox',
   inboxSource: (id: string) => `/api/inbox/${encodeURIComponent(id)}`,
   inboxAssign: (id: string) => `/api/inbox/${encodeURIComponent(id)}/assign`,
@@ -310,6 +336,49 @@ export class ApiClient {
     if (query.depth) params.set('depth', String(query.depth));
     const suffix = params.toString();
     return this.request('GET', `${apiRoutes.tree}${suffix ? `?${suffix}` : ''}`, treeResponseSchema);
+  }
+
+  selectGraph(scope: GraphScope): Promise<GraphSelection> {
+    return this.request('POST', apiRoutes.graphSelect, graphSelectionSchema, {
+      body: validatedRequest(graphScopeSchema, scope, 'graph scope'),
+    });
+  }
+
+  resolveChapter(request: ResolveChapterRequest): Promise<ChapterTarget> {
+    return this.request('POST', apiRoutes.graphResolveChapter, chapterTargetSchema, {
+      body: validatedRequest(resolveChapterRequestSchema, request, 'resolve chapter'),
+    });
+  }
+
+  graphNote(topicId: string, chapterId: string | null = null): Promise<GraphNote> {
+    const suffix = chapterId === null ? '' : `?chapterId=${encodeURIComponent(chapterId)}`;
+    return this.request('GET', `${apiRoutes.note(topicId)}${suffix}`, graphNoteSchema);
+  }
+
+  listGraphNotes(topicId: string): Promise<GraphNoteIndex> {
+    return this.request('GET', apiRoutes.noteChapters(topicId), graphNoteIndexSchema);
+  }
+
+  saveGraphNote(topicId: string, input: SaveGraphNoteRequest): Promise<GraphNote> {
+    return this.request('PUT', apiRoutes.note(topicId), graphNoteSchema, {
+      body: validatedRequest(saveGraphNoteRequestSchema, input, 'save note'),
+    });
+  }
+
+  createChapter(topicId: string, input: CreateChapterRequest): Promise<ChapterResponse> {
+    return this.request('POST', apiRoutes.topicChapters(topicId), chapterResponseSchema, {
+      body: validatedRequest(createChapterRequestSchema, input, 'create chapter'),
+    });
+  }
+
+  connectChapter(chapterId: string, topicId: string): Promise<ChapterResponse> {
+    return this.request('PUT', apiRoutes.chapterTopic(chapterId, topicId), chapterResponseSchema, {
+      body: validatedRequest(graphMembershipRequestSchema, { chapterId, topicId }, 'chapter membership'),
+    });
+  }
+
+  async disconnectChapter(chapterId: string, topicId: string): Promise<void> {
+    await this.request('DELETE', apiRoutes.chapterTopic(chapterId, topicId), z.object({ ok: z.literal(true) }));
   }
 
   nodeDetail(id: string): Promise<NodeDetail> {

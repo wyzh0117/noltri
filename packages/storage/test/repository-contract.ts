@@ -916,6 +916,31 @@ export function describeKnowledgeRepository(
       });
     }, timeout);
 
+    it('stores one overview and one note per topic/chapter pair without crossing users', async () => {
+      await scope(async (repository, userId) => {
+        const parent = await repository.createNode({ userId, title: '学科', nodeType: 'discipline' });
+        const topic = await repository.createNode({ userId, title: '同名', parentId: parent.id, nodeType: 'topic' });
+        const otherTopic = await repository.createNode({ userId, title: '同名', parentId: parent.id, nodeType: 'topic' });
+        const chapter = await repository.createNode({ userId, title: '第一章', parentId: topic.id, nodeType: 'chapter' });
+
+        const overview = await repository.saveKnowledgeNote({ userId, topicId: topic.id, chapterId: null, content: '主题概览' });
+        const first = await repository.saveKnowledgeNote({ userId, topicId: topic.id, chapterId: chapter.id, content: '章节草稿' });
+        const updated = await repository.saveKnowledgeNote({ userId, topicId: topic.id, chapterId: chapter.id, content: '章节正文' });
+        const homonym = await repository.saveKnowledgeNote({ userId, topicId: otherTopic.id, chapterId: chapter.id, content: '同名主题独立笔记' });
+
+        expect((await repository.getKnowledgeNote(userId, topic.id, null))?.content).toBe('主题概览');
+        expect((await repository.getKnowledgeNote(userId, topic.id, chapter.id))?.content).toBe('章节正文');
+        expect(updated.createdAt).toBe(first.createdAt);
+        expect(homonym.topicId).toBe(otherTopic.id);
+        expect(await repository.getKnowledgeNote(foreignUser(), topic.id, chapter.id)).toBeNull();
+        expect(await repository.listKnowledgeNotes(foreignUser(), topic.id)).toEqual([]);
+        expect(await repository.listKnowledgeNotes(userId, topic.id)).toEqual([
+          { topicId: topic.id, chapterId: null, updatedAt: overview.updatedAt },
+          { topicId: topic.id, chapterId: chapter.id, updatedAt: updated.updatedAt },
+        ]);
+      });
+    }, timeout);
+
     it('states its own storage health without leaking a credential', async () => {
       await scope(async (repository, userId) => {
         await repository.createRawSource(sourceInput(userId, '健康检查'));

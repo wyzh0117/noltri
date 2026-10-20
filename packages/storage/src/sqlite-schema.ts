@@ -13,7 +13,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /** Bumped by appending a new entry to MIGRATIONS; stored in `PRAGMA user_version`. */
-export const SQLITE_SCHEMA_VERSION = 6;
+export const SQLITE_SCHEMA_VERSION = 7;
 
 export interface SqliteOpenOptions {
   /** Absolute path to the database file, or `:memory:`. */
@@ -569,6 +569,24 @@ create index if not exists library_item_relations_target_idx
   on library_item_relations (user_id, target_id);
 `;
 
+const DDL_V7 = `
+create table if not exists knowledge_notes (
+  user_id text not null,
+  topic_id text not null references knowledge_nodes (id) on delete restrict,
+  chapter_id text references knowledge_nodes (id) on delete restrict,
+  content text not null,
+  created_at text not null,
+  updated_at text not null,
+  constraint knowledge_notes_not_self_chapter_check check (chapter_id is null or chapter_id <> topic_id)
+);
+create unique index if not exists knowledge_notes_topic_idx
+  on knowledge_notes (user_id, topic_id) where chapter_id is null;
+create unique index if not exists knowledge_notes_chapter_idx
+  on knowledge_notes (user_id, topic_id, chapter_id) where chapter_id is not null;
+create index if not exists knowledge_notes_chapter_lookup_idx
+  on knowledge_notes (user_id, chapter_id) where chapter_id is not null;
+`;
+
 const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => void }> = [
   { version: 1, apply: (db) => db.exec(DDL_V1) },
   { version: 2, apply: (db) => db.exec(DDL_V2) },
@@ -576,6 +594,7 @@ const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => 
   { version: 4, apply: (db) => db.exec(DDL_V4) },
   { version: 5, apply: (db) => db.exec(DDL_V5) },
   { version: 6, apply: (db) => db.exec(DDL_V6) },
+  { version: 7, apply: (db) => db.exec(DDL_V7) },
 ];
 
 function readString(db: DatabaseSync, sql: string): string {
@@ -669,4 +688,5 @@ export {
   DDL_V3 as SQLITE_DDL_V3,
   DDL_V4 as SQLITE_DDL_V4,
   DDL_V5 as SQLITE_DDL_V5,
+  DDL_V7 as SQLITE_DDL_V7,
 };

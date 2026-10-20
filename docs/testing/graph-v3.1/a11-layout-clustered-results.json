@@ -1,0 +1,75 @@
+{
+  "browser": "Chrome/155.0.8059.85",
+  "viewport": {
+    "width": 1360,
+    "height": 900,
+    "dpr": 1
+  },
+  "url": "http://127.0.0.1:1434/main.html",
+  "api": "http://127.0.0.1:1431",
+  "build": {
+    "previewScript": "/assets/main-CNMyiAbG.js",
+    "sha256": "fb7968591fcaf2be1415e2a8b190b1977f6dfabf95f76d8e202c28c9532f1fa8"
+  },
+  "context": {
+    "id": "940597F5F1F0E843FD489A4212272CB6",
+    "cacheKeysBeforeExpand": [],
+    "scope": "A12 性能验收隔离学科"
+  },
+  "graphSelection": {
+    "fullNodes": 1200,
+    "fullEdges": 800,
+    "drawnNodes": 260,
+    "drawnEdges": 173,
+    "hiddenNodes": 940
+  },
+  "renderer": {
+    "svg": {
+      "x": 941,
+      "y": 0,
+      "width": 419,
+      "height": 900
+    },
+    "drawnNodes": 260,
+    "drawnEdges": 173,
+    "automaticLabels": 16
+  },
+  "layoutReconciliation": {
+    "domNodes": 260,
+    "matchedNodes": 260,
+    "maxWorldCoordinateDeviation": 7.389644451905042e-13,
+    "loadedScript": "/assets/main-CNMyiAbG.js"
+  },
+  "layoutMetrics": {
+    "runtime": "Node v22.23.2",
+    "runs": 10,
+    "durationMs": {
+      "median": 10.7442,
+      "max": 29.1775
+    },
+    "connectedEdgeDistance": {
+      "count": 173,
+      "median": 97.96743058022506,
+      "p90": 136.53649542400296,
+      "max": 169.4685728581899
+    },
+    "unconnectedPairDistance": {
+      "count": 33497,
+      "median": 305.0542398092783,
+      "p90": 485.8296596431601
+    },
+    "connectedToUnconnectedMedianRatio": 0.32114757900586755,
+    "freshBounds": {
+      "x": [
+        209.20031842555153,
+        790.7996815744484
+      ],
+      "y": [
+        40,
+        660
+      ]
+    },
+    "legacyClampBoundaryHits": 0
+  },
+  "screenshot": "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a11-large-graph-clustered-1360x900.png"
+}

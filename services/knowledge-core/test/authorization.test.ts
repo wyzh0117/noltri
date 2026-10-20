@@ -13,6 +13,8 @@ import {
   apiErrorSchema,
   captureResultSchema,
   grantListResponseSchema,
+  graphNoteIndexSchema,
+  graphSelectionSchema,
   inboxResponseSchema,
   issueGrantResponseSchema,
   nodeContextSchema,
@@ -282,6 +284,10 @@ describe('scope and project rules', () => {
     expect(scopeForAction('POST', 'api/nodes/:id/move')).toBe('mutate');
     expect(scopeForAction('POST', 'api/inbox/:id/assign')).toBe('mutate');
     expect(scopeForAction('POST', 'api/capture/:id/retry')).toBe('mutate');
+    expect(scopeForAction('POST', 'api/graph/select')).toBe('read');
+    expect(scopeForAction('GET', 'api/notes/:topicId/chapters')).toBe('read');
+    expect(scopeForAction('PUT', 'api/notes/:topicId')).toBe('mutate');
+    expect(scopeForAction('PUT', 'api/chapters/:chapterId/topics/:topicId')).toBe('mutate');
     expect(scopeForAction('GET', 'api/health')).toBeUndefined();
   });
 
@@ -317,6 +323,79 @@ function handlerOf(harness: Harness, store: GrantStore | null, options: { config
 }
 
 describe('authorization over the wire', () => {
+  it('authorizes scoped graph-note recovery reads and blocks writes before reading their body', async () => {
+    const harness = makeHarness();
+    const discipline = await harness.repository.createNode({
+      userId: harness.actor.userId,
+      title: '授权学科',
+      nodeType: 'discipline',
+    });
+    const subdiscipline = await harness.repository.createNode({
+      userId: harness.actor.userId,
+      title: '授权分支',
+      nodeType: 'subdiscipline',
+      parentId: discipline.id,
+    });
+    const topic = await harness.repository.createNode({
+      userId: harness.actor.userId,
+      title: '范围内主题',
+      nodeType: 'topic',
+      parentId: subdiscipline.id,
+    });
+    const chapter = await harness.repository.createNode({
+      userId: harness.actor.userId,
+      title: '脱离章节',
+      nodeType: 'chapter',
+    });
+    await harness.repository.createEdge({
+      userId: harness.actor.userId,
+      fromNodeId: chapter.id,
+      toNodeId: topic.id,
+      relationType: 'part_of',
+      source: 'topic_chapter',
+    });
+    await harness.core.saveGraphNote(topic.id, { chapterId: chapter.id, content: '保留的正文' }, harness.actor);
+    const store = new InMemoryGrantStore();
+    const { secret: rootOnlySecret } = await issueGrant(store, { label: '仅根范围', scopes: ['read'], nodeIds: [discipline.id] });
+    const { secret: topicOnlySecret } = await issueGrant(store, { label: '仅主题', scopes: ['read'], nodeIds: [topic.id] });
+    const { secret } = await issueGrant(store, {
+      label: '范围内完整节点',
+      scopes: ['read'],
+      nodeIds: [discipline.id, subdiscipline.id, topic.id, chapter.id],
+    });
+    const handle = handlerOf(harness, store);
+
+    const scope = { kind: 'discipline' as const, disciplineId: discipline.id };
+    const graphDenied = await handle(request('POST', '/api/graph/select', rootOnlySecret, scope));
+    expect(await errorOf(graphDenied)).toMatchObject({ status: 401, reason: 'node_not_granted' });
+    const resolveDenied = await handle(request('POST', '/api/graph/resolve-chapter', rootOnlySecret, { chapterId: chapter.id, scope }));
+    expect(await errorOf(resolveDenied)).toMatchObject({ status: 401, reason: 'node_not_granted' });
+    const chapterOnlyGrant = (await issueGrant(store, {
+      label: '章节但没有候选主题',
+      scopes: ['read'],
+      nodeIds: [discipline.id, subdiscipline.id, chapter.id],
+    })).secret;
+    const candidateDenied = await handle(request('POST', '/api/graph/resolve-chapter', chapterOnlyGrant, { chapterId: chapter.id, scope }));
+    expect(await errorOf(candidateDenied)).toMatchObject({ status: 401, reason: 'node_not_granted' });
+
+    const graphAllowed = await handle(request('POST', '/api/graph/select', secret, scope));
+    expect(graphSelectionSchema.parse(await graphAllowed.json()).nodes.map((node) => node.id)).toEqual(
+      expect.arrayContaining([topic.id, chapter.id]),
+    );
+    await harness.core.disconnectChapter(chapter.id, topic.id, harness.actor);
+    const recovered = await handle(request('GET', `/api/notes/${encodeURIComponent(topic.id)}/chapters`, secret));
+    expect(recovered.status).toBe(200);
+    expect(graphNoteIndexSchema.parse(await recovered.json())).toMatchObject({
+      notes: [{ chapterId: chapter.id, chapterTitle: '脱离章节', attached: false }],
+    });
+
+    const hiddenIndex = await handle(request('GET', `/api/notes/${encodeURIComponent(topic.id)}/chapters`, topicOnlySecret));
+    expect(await errorOf(hiddenIndex)).toMatchObject({ status: 401, reason: 'node_not_granted' });
+
+    const write = await handle(request('PUT', `/api/notes/${encodeURIComponent(topic.id)}`, secret));
+    expect(await errorOf(write)).toMatchObject({ status: 401, reason: 'scope_not_granted' });
+  });
+
   it('lets a read-only connection read, and refuses its write before the body is read', async () => {
     const harness = makeHarness();
     const store = new InMemoryGrantStore();

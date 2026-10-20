@@ -29,7 +29,7 @@ export const CORE_PACKAGE_NAME = '@noltri/knowledge-core';
 
 /** Fallbacks for knobs that belong to Core itself (not to the frozen Thresholds contract). */
 export const CORE_DEFAULTS = {
-  version: '0.1.2',
+  version: '0.1.3',
   port: 8787,
   corsOrigin: '*',
   devUser: 'local-dev-user',

@@ -1,0 +1,80 @@
+{
+  "a11": {
+    "hiddenCount": 1,
+    "hiddenDiagnostics": {
+      "focused": null,
+      "labelNodes": [
+        "A12 性能主题 0000，主题，2 个关系"
+      ],
+      "hovered": []
+    },
+    "hover": {
+      "labelCount": 2,
+      "ariaLabel": "A12 性能主题 0041，主题，2 个关系",
+      "svgLabel": "A12 性能主题 0041",
+      "hasLabel": true
+    },
+    "hoverCleared": {
+      "labelCount": 1,
+      "hovered": [],
+      "focused": "图显示设置"
+    },
+    "focus": {
+      "focused": true,
+      "ariaLabel": "A12 章节 0000-0，章节，1 个关系",
+      "selected": "false",
+      "hasLabel": true,
+      "labelCount": 1,
+      "verifiedAfterFocusStateCommit": true
+    },
+    "show": {
+      "labelCount": 260,
+      "pressed": "显示全部文字",
+      "renderedNodeCount": 260
+    },
+    "reducedMotion": {
+      "matches": true,
+      "labelTransition": "1e-05s",
+      "dotTransition": "1e-05s",
+      "graphAnimation": "1e-05s"
+    },
+    "auto": {
+      "labelCount": 21,
+      "renderedNodeCount": 260,
+      "pressed": "自动显示"
+    },
+    "layoutBounds": {
+      "rendered": 260,
+      "xMin": 20,
+      "xMax": 980,
+      "yMin": 20,
+      "yMax": 680,
+      "xAtClamp": 138,
+      "yAtClamp": 183,
+      "corners": 61
+    },
+    "screenshots": [
+      "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a11-hidden-hover.png",
+      "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a11-all-labels.png",
+      "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a11-auto-labels.png"
+    ]
+  },
+  "expansion": {
+    "elapsedToCanvasDomMs": 289.7000000476837,
+    "svgLabel": "知识关系图，已绘制 260 个节点",
+    "renderedNodes": 260,
+    "renderedTopics": 87,
+    "renderedChapters": 173,
+    "labels": 21,
+    "lateTargetInitiallyDrawn": false,
+    "svgRect": {
+      "x": 941,
+      "y": 0,
+      "width": 419,
+      "height": 900
+    },
+    "documentWidth": 1360,
+    "viewportWidth": 1360
+  },
+  "hiddenCount": "为保持流畅暂时折叠 940 个节点；选中节点及相邻关系会优先保留。"
+}

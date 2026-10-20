@@ -1,0 +1,117 @@
+.workbench-graph {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--ink-soft, #48534b);
+  background: transparent;
+}
+
+.workbench-graph-toolbar {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.workbench-graph-control,
+.workbench-graph-options > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 31px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line, #e8e8e0);
+  border-radius: 8px;
+  color: var(--ink-soft, #48534b);
+  background: var(--paper, #fffefa);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.workbench-graph-options > summary::-webkit-details-marker { display: none; }
+.workbench-graph-options > summary { font-size: 17px; line-height: 1; }
+.workbench-graph-control:hover,
+.workbench-graph-options > summary:hover { border-color: var(--green, #3d6853); }
+.workbench-graph-options > summary:focus-visible,
+.workbench-graph-control:focus-visible,
+.workbench-graph-options-menu button:focus-visible,
+.workbench-graph-canvas:focus-visible { outline: 2px solid var(--green, #3d6853); outline-offset: 2px; }
+
+.workbench-graph-options { position: relative; }
+.workbench-graph-options-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  gap: 3px;
+  width: max-content;
+  max-width: min(270px, 72vw);
+  padding: 8px;
+  border: 1px solid var(--line, #e8e8e0);
+  border-radius: 10px;
+  color: var(--ink-soft, #48534b);
+  background: var(--paper, #fffefa);
+  box-shadow: 0 9px 28px #2027221a;
+}
+.workbench-graph-options-label { padding: 3px 7px 5px; color: var(--muted, #899188); font-size: 10px; }
+.workbench-graph-options-menu button {
+  min-height: 29px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.workbench-graph-options-menu button:hover,
+.workbench-graph-options-menu button[aria-pressed="true"] { background: var(--green-pale, #e9f0e9); }
+.workbench-graph-limit-note { max-width: 240px; padding: 6px 7px 3px; border-top: 1px solid var(--line, #e8e8e0); color: var(--muted, #899188); font-size: 10px; line-height: 1.5; }
+
+.workbench-graph-canvas {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+.workbench-graph-world { transform-origin: 0 0; }
+.workbench-graph-edge { stroke: var(--line, #d8ddd4); stroke-width: 1.1; vector-effect: non-scaling-stroke; transition: stroke .16s, opacity .16s; }
+.workbench-graph-edge-active { stroke: var(--green, #3d6853); stroke-width: 1.45; opacity: .95; }
+.workbench-graph-node { cursor: grab; outline: none; transition: opacity .16s; }
+.workbench-graph-node:active { cursor: grabbing; }
+.workbench-graph-node.is-dimmed { opacity: .2; }
+.workbench-graph-node-hit { fill: transparent; pointer-events: all; }
+.workbench-graph-node-dot { fill: var(--paper, #fffefa); stroke: #89978c; stroke-width: 1.35; vector-effect: non-scaling-stroke; transition: fill .16s, stroke .16s, stroke-width .16s; }
+.workbench-graph-node-halo { fill: var(--green-pale, #e9f0e9); opacity: 0; transition: opacity .16s; }
+.workbench-graph-node:hover .workbench-graph-node-halo,
+.workbench-graph-node:focus-visible .workbench-graph-node-halo,
+.workbench-graph-node.is-selected .workbench-graph-node-halo { opacity: .82; }
+.workbench-graph-node:hover .workbench-graph-node-dot,
+.workbench-graph-node:focus-visible .workbench-graph-node-dot,
+.workbench-graph-node.is-selected .workbench-graph-node-dot { fill: var(--green-pale, #e9f0e9); stroke: var(--green, #3d6853); stroke-width: 2; }
+.workbench-graph-label { fill: var(--ink-soft, #48534b); font-family: inherit; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+.workbench-graph-node.has-label .workbench-graph-label { opacity: 1; }
+.workbench-graph-empty { fill: var(--muted, #899188); font-family: inherit; font-size: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-graph *,
+  .workbench-graph *::before,
+  .workbench-graph *::after { animation-duration: .01ms !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}

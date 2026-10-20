@@ -79,6 +79,16 @@ export const knowledgeEdgeSchema = z.object({
 });
 export type KnowledgeEdge = z.infer<typeof knowledgeEdgeSchema>;
 
+export const knowledgeNoteSchema = z.object({
+  userId: z.string(),
+  topicId: z.string(),
+  chapterId: z.string().nullable(),
+  content: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type KnowledgeNote = z.infer<typeof knowledgeNoteSchema>;
+
 export const itemNodeLinkSchema = z.object({
   id: z.string(),
   userId: z.string(),

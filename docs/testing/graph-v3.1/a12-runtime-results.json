@@ -1,0 +1,186 @@
+{
+  "browser": "Chrome/155.0.8059.84",
+  "url": "http://127.0.0.1:1433/main.html",
+  "viewport": {
+    "width": 1360,
+    "height": 900,
+    "deviceScaleFactor": 1
+  },
+  "isolation": {
+    "browserContextId": "1520BFD6B485E681C9A66E22149516E0",
+    "targetId": "752F552A563A27C7763F7F02E94988AB",
+    "apiBaseUrl": "http://127.0.0.1:1431"
+  },
+  "treeRequests": [
+    {
+      "durationMs": 22.09999990463257,
+      "path": "/api/tree"
+    }
+  ],
+  "scopeEntry": {
+    "scopeHeading": "A12 性能验收隔离学科",
+    "topicCards": 400,
+    "graphEntry": "展开graph view",
+    "apiSelection": {
+      "status": 200,
+      "durationMs": 24.700000047683716,
+      "scope": {
+        "kind": "discipline",
+        "disciplineId": "a12v31-20261020-discipline"
+      },
+      "nodeCount": 1200,
+      "topicCount": 400,
+      "chapterCount": 800,
+      "edgeCount": 800,
+      "jsonChars": 400984
+    },
+    "selectResource": [
+      {
+        "durationMs": 17.59999990463257,
+        "initiatorType": "fetch"
+      }
+    ]
+  },
+  "expansion": {
+    "elapsedToCanvasDomMs": 286,
+    "svgLabel": "知识关系图，已绘制 260 个节点",
+    "renderedNodes": 260,
+    "renderedTopics": 87,
+    "renderedChapters": 173,
+    "labels": 21,
+    "lateTargetInitiallyDrawn": false,
+    "svgRect": {
+      "x": 941,
+      "y": 0,
+      "width": 419,
+      "height": 900
+    },
+    "documentWidth": 1360,
+    "viewportWidth": 1360
+  },
+  "hiddenCount": "为保持流畅暂时折叠 940 个节点；选中节点及相邻关系会优先保留。",
+  "searchResult": {
+    "elapsedToStableHitMs": 249,
+    "hitCount": 3,
+    "targetResult": "A12 长标题目标主题 性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符（用于验证非常长的真实图节点标题在高密度图节点标签与右侧搜索结果中截断时仍然可读且不会撑开画布）\n晚序号图外目标 a12v31-20261020-topic-0399；标题长度 108 字符。\n知识节点",
+    "hitRect": {
+      "x": 286.796875,
+      "y": 289.1875,
+      "width": 612.40625,
+      "height": 116
+    },
+    "hitScrollWidth": 610,
+    "hitClientWidth": 610,
+    "summaryLineClamp": "3",
+    "targetPresentInGraphBeforeClick": false,
+    "documentWidth": 1360,
+    "viewportWidth": 1360,
+    "selectCount": 1,
+    "apiSearch": [
+      {
+        "durationMs": 21.09999990463257,
+        "path": "/api/search"
+      }
+    ]
+  },
+  "selectedTarget": {
+    "elapsedClickToOpenAndRenderMs": 301.5,
+    "heading": "A12 长标题目标主题 性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符（用于验证非常长的真实图节点标题在高密度图节点标签与右侧搜索结果中截断时仍然可读且不会撑开画布）",
+    "searchCleared": true,
+    "selectedNodeLabel": "A12 长标题目标主题 性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符性能验收字符（用于验证非常长的真实图节点标题在高密度图节点标签与右侧搜索结果中截断时仍然可读且不会撑开画布），主题，2 个关系",
+    "selectedNodeGroupRect": {
+      "x": 1339.6199951171875,
+      "y": 319.7443542480469,
+      "width": 1418.1021728515625,
+      "height": 24
+    },
+    "selectedCircleCenterInsideSvg": true,
+    "selectedCircleRect": {
+      "x": 1347.424072265625,
+      "y": 327.5483703613281,
+      "width": 8.391845703125,
+      "height": 8.3919677734375
+    },
+    "selectedLabelRect": {
+      "x": 1362.81591796875,
+      "y": 322.7443542480469,
+      "width": 1394.90625,
+      "height": 16
+    },
+    "renderedNodes": 260,
+    "svgLabel": "知识关系图，已绘制 260 个节点",
+    "realChapterNeighbors": [
+      "A12 长章节 跨范围搜索跨范围搜索跨范围搜索跨范围搜索跨范围搜索跨范围搜索跨范围搜索跨范围搜索跨范围搜索跨范围搜索跨范围搜索（目标章节），章节，1 个关系",
+      "A12 章节 0399-1，章节，1 个关系"
+    ],
+    "renderedEdges": 173,
+    "graphSelections": [
+      {
+        "status": 200,
+        "durationMs": 24.700000047683716,
+        "scope": {
+          "kind": "discipline",
+          "disciplineId": "a12v31-20261020-discipline"
+        },
+        "nodeCount": 1200,
+        "topicCount": 400,
+        "chapterCount": 800,
+        "edgeCount": 800,
+        "jsonChars": 400984
+      }
+    ],
+    "noteRequests": [
+      "/api/notes/a12v31-20261020-topic-0399",
+      "/api/notes/a12v31-20261020-topic-0399/chapters"
+    ],
+    "mainScrollWidth": 612,
+    "mainClientWidth": 612,
+    "documentWidth": 1360,
+    "viewportWidth": 1360
+  },
+  "duplicateChecks": [
+    {
+      "query": "a12v31-20261020-topic-0100",
+      "resultCount": 3,
+      "resultText": "A12 同名主题\n同名节点 100：ID 可检索且内容有稳定区分。\n知识节点",
+      "heading": "A12 同名主题",
+      "matchingNotePaths": [
+        "/api/notes/a12v31-20261020-topic-0100",
+        "/api/notes/a12v31-20261020-topic-0100/chapters"
+      ]
+    },
+    {
+      "query": "a12v31-20261020-topic-0101",
+      "resultCount": 3,
+      "resultText": "A12 同名主题\n同名节点 101：ID 可检索且内容有稳定区分。\n知识节点",
+      "heading": "A12 同名主题",
+      "matchingNotePaths": [
+        "/api/notes/a12v31-20261020-topic-0101",
+        "/api/notes/a12v31-20261020-topic-0101/chapters"
+      ]
+    }
+  ],
+  "crossScope": {
+    "heading": "A12 同名主题",
+    "foreignHit": false,
+    "selection": {
+      "status": 200,
+      "durationMs": 24.700000047683716,
+      "scope": {
+        "kind": "discipline",
+        "disciplineId": "a12v31-20261020-discipline"
+      },
+      "nodeCount": 1200,
+      "topicCount": 400,
+      "chapterCount": 800,
+      "edgeCount": 800,
+      "jsonChars": 400984
+    },
+    "svgLabel": "知识关系图，已绘制 260 个节点"
+  },
+  "screenshots": [
+    "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a12-large-graph-first-paint.png",
+    "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a12-out-of-window-search-hit.png",
+    "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a12-out-of-window-selected.png"
+  ]
+}

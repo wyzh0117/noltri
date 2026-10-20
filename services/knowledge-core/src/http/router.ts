@@ -10,6 +10,9 @@ import {
   captureRequestSchema,
   createItemRelationInputSchema,
   createLibraryItemInputSchema,
+  createChapterRequestSchema,
+  graphMembershipRequestSchema,
+  graphScopeSchema,
   inboxQuerySchema,
   libraryItemsQuerySchema,
   moveNodeRequestSchema,
@@ -17,6 +20,8 @@ import {
   nodeContextRequestSchema,
   patchNodeRequestSchema,
   patchLibraryItemInputSchema,
+  resolveChapterRequestSchema,
+  saveGraphNoteRequestSchema,
   searchRequestSchema,
   treeQuerySchema,
   type AssignSourceRequest,
@@ -82,6 +87,14 @@ const ROUTES: Route[] = [
   { method: 'POST', segments: ['api', 'items', ':id', 'relations'] },
   { method: 'DELETE', segments: ['api', 'items', ':id', 'relations', ':targetId'] },
   { method: 'GET', segments: ['api', 'tree'] },
+  { method: 'POST', segments: ['api', 'graph', 'select'] },
+  { method: 'POST', segments: ['api', 'graph', 'resolve-chapter'] },
+  { method: 'GET', segments: ['api', 'notes', ':topicId', 'chapters'] },
+  { method: 'GET', segments: ['api', 'notes', ':topicId'] },
+  { method: 'PUT', segments: ['api', 'notes', ':topicId'] },
+  { method: 'POST', segments: ['api', 'topics', ':topicId', 'chapters'] },
+  { method: 'PUT', segments: ['api', 'chapters', ':chapterId', 'topics', ':topicId'] },
+  { method: 'DELETE', segments: ['api', 'chapters', ':chapterId', 'topics', ':topicId'] },
   { method: 'GET', segments: ['api', 'inbox'] },
   { method: 'GET', segments: ['api', 'inbox', ':id'] },
   { method: 'POST', segments: ['api', 'inbox', ':id', 'assign'] },
@@ -307,6 +320,72 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       const query = parseWith(treeQuerySchema, Object.fromEntries(url.searchParams), 'tree query');
       requireNodeAccess(grant, query.rootId ?? null, '整棵知识树');
       return json(200, await core.getTree(query satisfies TreeQuery, actor), cors);
+    }
+    case 'api/graph/select': {
+      const scope = parseWith(graphScopeSchema, await readJsonBody(request), 'graph scope');
+      requireNodeAccess(grant, scope.disciplineId, '学科 Graph');
+      if (scope.kind === 'subdiscipline') requireNodeAccess(grant, scope.subdisciplineId, '二级学科 Graph');
+      if (scope.kind === 'topic') requireNodeAccess(grant, scope.anchorTopicId, '主题 Graph');
+      const selection = await core.selectGraph(scope, actor);
+      for (const node of selection.nodes) requireNodeAccess(grant, node.id, 'Graph 节点');
+      for (const edge of selection.edges) {
+        requireNodeAccess(grant, edge.fromNodeId, 'Graph 关系');
+        requireNodeAccess(grant, edge.toNodeId, 'Graph 关系');
+      }
+      return json(200, selection, cors);
+    }
+    case 'api/graph/resolve-chapter': {
+      const input = parseWith(resolveChapterRequestSchema, await readJsonBody(request), 'resolve chapter');
+      requireNodeAccess(grant, input.scope.disciplineId, '学科章节定位');
+      if (input.scope.kind === 'subdiscipline') requireNodeAccess(grant, input.scope.subdisciplineId, '二级学科章节定位');
+      if (input.scope.kind === 'topic') requireNodeAccess(grant, input.scope.anchorTopicId, '主题章节定位');
+      requireNodeAccess(grant, input.chapterId, '章节定位');
+      if (input.activeTopicId !== undefined) requireNodeAccess(grant, input.activeTopicId, '当前主题定位');
+      const target = await core.resolveChapter(input, actor);
+      if (target.kind === 'resolved') requireNodeAccess(grant, target.topicId, '章节候选主题');
+      if (target.kind === 'choose-topic') {
+        for (const topicId of target.topicIds) requireNodeAccess(grant, topicId, '章节候选主题');
+      }
+      return json(200, target, cors);
+    }
+    case 'api/notes/:topicId/chapters': {
+      const topicId = decodeURIComponent(paramAt(route, segments, 'topicId'));
+      requireNodeAccess(grant, topicId, '主题正文索引');
+      const notes = await core.listGraphNotes(topicId, actor);
+      for (const note of notes.notes) {
+        if (note.chapterId !== null) requireNodeAccess(grant, note.chapterId, '章节正文索引');
+      }
+      return json(200, notes, cors);
+    }
+    case 'api/notes/:topicId': {
+      const topicId = decodeURIComponent(paramAt(route, segments, 'topicId'));
+      requireNodeAccess(grant, topicId, '主题正文');
+      if (method === 'GET') {
+        const chapterId = url.searchParams.get('chapterId');
+        if (chapterId !== null) requireNodeAccess(grant, chapterId, '章节正文');
+        return json(200, await core.getGraphNote(topicId, chapterId, actor), cors);
+      }
+      const input = parseWith(saveGraphNoteRequestSchema, await readJsonBody(request), 'save note');
+      if (input.chapterId !== null) requireNodeAccess(grant, input.chapterId, '保存章节正文');
+      return json(200, await core.saveGraphNote(topicId, input, actor), cors);
+    }
+    case 'api/topics/:topicId/chapters': {
+      const topicId = decodeURIComponent(paramAt(route, segments, 'topicId'));
+      requireNodeAccess(grant, topicId, '创建章节');
+      const input = parseWith(createChapterRequestSchema, await readJsonBody(request), 'create chapter');
+      return json(200, await core.createChapter(topicId, input, actor), cors);
+    }
+    case 'api/chapters/:chapterId/topics/:topicId': {
+      const chapterId = decodeURIComponent(paramAt(route, segments, 'chapterId'));
+      const topicId = decodeURIComponent(paramAt(route, segments, 'topicId'));
+      requireNodeAccess(grant, chapterId, '章节归属');
+      requireNodeAccess(grant, topicId, '主题归属');
+      if (method === 'PUT') {
+        parseWith(graphMembershipRequestSchema, { chapterId, topicId }, 'chapter membership');
+        return json(200, await core.connectChapter(chapterId, topicId, actor), cors);
+      }
+      await core.disconnectChapter(chapterId, topicId, actor);
+      return json(200, { ok: true }, cors);
     }
     case 'api/inbox': {
       const query = parseWith(inboxQuerySchema, Object.fromEntries(url.searchParams), 'inbox query');

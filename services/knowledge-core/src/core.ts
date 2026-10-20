@@ -12,8 +12,15 @@ import type {
   AssignSourceResponse,
   CaptureRequest,
   CaptureResult,
+  ChapterResponse,
+  ChapterTarget,
   Conversation,
   ConversationMessage,
+  CreateChapterRequest,
+  GraphNote,
+  GraphNoteIndex,
+  GraphScope,
+  GraphSelection,
   HealthResponse,
   InboxQuery,
   InboxResponse,
@@ -25,6 +32,8 @@ import type {
   NodeDetail,
   PatchNodeRequest,
   RawSource,
+  ResolveChapterRequest,
+  SaveGraphNoteRequest,
   SearchRequest,
   SearchResponse,
   TreeQuery,
@@ -39,6 +48,7 @@ import type { CoreConfig } from './config';
 import type { ActorContext, CoreDeps } from './types';
 import { retryCapture, runCapture } from './pipeline/capture';
 import { getTree } from './services/tree';
+import { connectChapter, createChapter, disconnectChapter, getGraphNote, listGraphNotes, resolveChapter, saveGraphNote, selectGraph } from './services/graph';
 import { assignSource, listInbox, readRawSource } from './services/inbox';
 import { getNodeDetail, patchNode as patchNodeRecord } from './services/node';
 import { moveNode as moveNodeRecord } from './services/move';
@@ -60,6 +70,14 @@ export interface KnowledgeCore {
   /** Re-runs extraction onward from the stored raw text of a previously failed source. */
   retryCapture(rawSourceId: string, actor: ActorContext): Promise<CaptureResult>;
   getTree(query: TreeQuery, actor: ActorContext): Promise<TreeResponse>;
+  selectGraph(scope: GraphScope, actor: ActorContext): Promise<GraphSelection>;
+  resolveChapter(request: ResolveChapterRequest, actor: ActorContext): Promise<ChapterTarget>;
+  getGraphNote(topicId: string, chapterId: string | null, actor: ActorContext): Promise<GraphNote>;
+  listGraphNotes(topicId: string, actor: ActorContext): Promise<GraphNoteIndex>;
+  saveGraphNote(topicId: string, request: SaveGraphNoteRequest, actor: ActorContext): Promise<GraphNote>;
+  createChapter(topicId: string, request: CreateChapterRequest, actor: ActorContext): Promise<ChapterResponse>;
+  connectChapter(chapterId: string, topicId: string, actor: ActorContext): Promise<ChapterResponse>;
+  disconnectChapter(chapterId: string, topicId: string, actor: ActorContext): Promise<void>;
   /** Newest-first capture feed plus whole-library status counts — 收件箱. */
   listInbox(query: InboxQuery, actor: ActorContext): Promise<InboxResponse>;
   /** Full text of one capture for manual triage; null when it is not the caller's. */
@@ -92,6 +110,14 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
     capture: (input, actor) => runCapture(deps, actor, input),
     retryCapture: (rawSourceId, actor) => retryCapture(deps, actor, rawSourceId),
     getTree: (query, actor) => getTree(deps, actor, query),
+    selectGraph: (scope, actor) => selectGraph(deps, actor, scope),
+    resolveChapter: (request, actor) => resolveChapter(deps, actor, request),
+    getGraphNote: (topicId, chapterId, actor) => getGraphNote(deps, actor, topicId, chapterId),
+    listGraphNotes: (topicId, actor) => listGraphNotes(deps, actor, topicId),
+    saveGraphNote: (topicId, request, actor) => saveGraphNote(deps, actor, topicId, request),
+    createChapter: (topicId, request, actor) => createChapter(deps, actor, topicId, request),
+    connectChapter: (chapterId, topicId, actor) => connectChapter(deps, actor, chapterId, topicId),
+    disconnectChapter: (chapterId, topicId, actor) => disconnectChapter(deps, actor, chapterId, topicId),
     listInbox: (query, actor) => listInbox(deps, actor, query),
     readRawSource: (rawSourceId, actor) => readRawSource(deps, actor, rawSourceId),
     assignSource: (rawSourceId, request, actor) => assignSource(deps, actor, rawSourceId, request),

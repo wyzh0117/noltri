@@ -10,6 +10,7 @@ import type {
   ItemNodeLink,
   KnowledgeEdge,
   KnowledgeItem,
+  KnowledgeNote,
   KnowledgeNode,
   ItemRelation,
   ItemRelationKind,
@@ -105,6 +106,15 @@ export interface CreateEdgeInput {
   confidence?: number | null;
   source: string;
 }
+
+export interface SaveKnowledgeNoteInput {
+  userId: string;
+  topicId: string;
+  chapterId: string | null;
+  content: string;
+}
+
+export type KnowledgeNoteIndexEntry = Pick<KnowledgeNote, 'topicId' | 'chapterId' | 'updatedAt'>;
 
 export interface MoveNodeRecordInput {
   userId: string;
@@ -250,6 +260,12 @@ export interface KnowledgeRepository {
     relationType: EdgeRelation,
   ): Promise<KnowledgeEdge | null>;
   listEdgesForNode(userId: string, nodeId: string): Promise<KnowledgeEdge[]>;
+  listEdges(userId: string): Promise<KnowledgeEdge[]>;
+  deleteEdge(userId: string, fromNodeId: string, toNodeId: string, relationType: EdgeRelation): Promise<void>;
+
+  getKnowledgeNote(userId: string, topicId: string, chapterId: string | null): Promise<KnowledgeNote | null>;
+  listKnowledgeNotes(userId: string, topicId: string): Promise<KnowledgeNoteIndexEntry[]>;
+  saveKnowledgeNote(input: SaveKnowledgeNoteInput): Promise<KnowledgeNote>;
 
   searchSimilarItems(
     userId: string,

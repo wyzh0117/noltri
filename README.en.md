@@ -11,9 +11,9 @@ Noltri is a local personal knowledge library. Save useful passages from webpages
 
 ## Quick start
 
-Version 0.1.2 targets Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
+Version 0.1.3 targets Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
 
-Version 0.1.2 redesigns model setup around provider management. Configure a provider's API URL and write-only key, then fetch available models or add one manually. It supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages. Apply saves provider and model settings; **Use this model** selects the global model before Noltri processes content. The build continues to verify the app resource seal and bundled runtime signature fixes from 0.1.1. This release uses ad-hoc signing and **has no Developer ID signature or Apple notarization**, so macOS may still block the first launch. Check the download against `SHA256SUMS.txt` in Releases, then follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445).
+Version 0.1.3 adds direct reading and editing for knowledge topics and chapters, with graph browsing by subject scope and recovery for unsaved drafts. Version 0.1.2's provider management continues to support OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages. Configure a provider's API URL and write-only key, then fetch available models or add one manually. Apply saves provider and model settings; **Use this model** selects the global model before Noltri processes content. This release uses ad-hoc signing and **has no Developer ID signature or Apple notarization**, so macOS may still block the first launch. Check the download against `SHA256SUMS.txt` in Releases, then follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445).
 
 If macOS still reports that the app is damaged, verify the download source and checksum, then remove quarantine for this app only:
 
@@ -98,7 +98,7 @@ Collect passages from two papers about the same question. Noltri keeps each sour
 
 ## Verification and builds
 
-The 0.1.1 live DeepSeek acceptance covers Python, TypeScript, Rust, Go, SQL and short excerpts from physics, econometrics, molecular biology and psychology papers. See the [test guide](docs/testing/README.md) and [recorded results](docs/testing/0.1.1-deepseek-results.json). The 0.1.2 automated checks, isolated protocol/restart tests, and built-UI mock-bridge workflows passed; native GUI automation was unavailable. See the [test guide](docs/testing/README.md) for scope. Installers contain no test credentials or user data.
+The 0.1.1 live DeepSeek acceptance covers Python, TypeScript, Rust, Go, SQL and short excerpts from physics, econometrics, molecular biology and psychology papers. See the [test guide](docs/testing/README.md) and [recorded results](docs/testing/0.1.1-deepseek-results.json). The 0.1.2 automated checks, isolated protocol/restart tests, and built-UI mock-bridge workflows are recorded in the [test guide](docs/testing/README.md). Graph v3.1 follows the [development guide](Noltri_大模型开发指南_20261020.md) (Chinese); its 563 automated tests and 12 Rust tests pass, as do browser checks A01–A14 and the final More-entry UI review. A15/A16 describe original-stage capabilities that remain incomplete. See the [acceptance matrix](docs/testing/graph-v3.1/acceptance.md), [test guide](docs/testing/README.md), and [release notes](docs/releases/0.1.3.md). Installers contain no test credentials or user data.
 
 ```bash
 pnpm typecheck

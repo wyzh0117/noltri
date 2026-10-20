@@ -1,3 +1,11 @@
+# 0.1.3 Graph v3.1 发布验收
+
+Graph 的独立验收矩阵见 [A01–A16 记录](graph-v3.1/acceptance.md)。A01–A14 的真实界面／HTTP／SQLite 路径和三个 More 入口的 FE focused 独立复验均通过；A15/A16 是指南 §6 原阶段能力，整项未通过，不计为本轮通过。冻结构建与资产扫描、证据 ZIP 和 SHA256SUMS 已完成，具体清单见 [发布准备记录](graph-v3.1/release-preparation.md)。
+
+最终 v0.1.3 全仓结果：PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm typecheck 通过（Turbo 10/10）；env PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm test 通过（Turbo 10/10，**563 tests**：shared 61、API client 30、extension 139、storage 69、desktop 30、knowledge core 146、MCP server 19、AI service 15、AI provider 54；schema 无测试文件并 passWithNoTests）；cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml 为 12/12，cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check 通过；pnpm build 为 2/2 tasks、desktop Vite 148 modules；extension package 与 macOS release:mac 签名完整性、DMG CRC、Node/SQLite/JIT 检查通过。版本资源、资产清单和 SHA-256 见 [发布准备记录](graph-v3.1/release-preparation.md)。
+
+正文持久化采用 schema v7 新增的 knowledge_notes 表和索引；v6→v7 fixture 验证旧来源、nodes、edges、knowledge items 和 links 保留。正文上限 40,000 JavaScript 字符。Graph 最多绘制 260 个节点，但全范围仍参与搜索；极长 selected label 在画布边缘会裁切。A15/A16 的原阶段缺项、F05/F06 桌面未实现部分和修改历史读取限制详见 [发布说明](../releases/0.1.3.md)。最终构建采用 ad-hoc 签名，未做 Apple Developer ID 签名或公证。
+
 # 0.1.2 模型服务验收
 
 状态：自动化检查、隔离 managed-runtime 协议/重启验证、built-UI headless 流程和 CSS 修正后的最终 macOS bundle/DMG 复核通过。原生 GUI 自动化未执行：System Events 对候选进程返回 macOS 错误 `-10827`，CUA 通道此前超时；没有操作已安装应用或其配置。

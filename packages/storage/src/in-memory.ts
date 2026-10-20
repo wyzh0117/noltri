@@ -2,11 +2,13 @@ import type {
   Conversation,
   ConversationMessage,
   CreateRawSourceInput,
+  EdgeRelation,
   ItemNodeLink,
   ItemRelation,
   JsonValue,
   KnowledgeEdge,
   KnowledgeItem,
+  KnowledgeNote,
   KnowledgeNode,
   ProcessingStatus,
   RawSource,
@@ -35,6 +37,8 @@ import type {
   PathSegment,
   StorageDriverName,
   StorageHealth,
+  SaveKnowledgeNoteInput,
+  KnowledgeNoteIndexEntry,
   VectorSearchOptions,
 } from './types';
 
@@ -59,6 +63,7 @@ export class InMemoryRepository implements KnowledgeRepository {
   private readonly links = new Map<string, ItemNodeLink>();
   private readonly itemRelations = new Map<string, { userId: string; relation: ItemRelation }>();
   private readonly edges = new Map<string, KnowledgeEdge>();
+  private readonly notes = new Map<string, KnowledgeNote>();
   private readonly versions = new Map<string, VersionRecord>();
   private readonly conversations = new Map<string, Conversation>();
   private readonly messages = new Map<string, ConversationMessage>();
@@ -344,6 +349,14 @@ export class InMemoryRepository implements KnowledgeRepository {
       }
     }
 
+    if (node.parentId !== null && node.parentId !== input.targetParentId) {
+      for (const [edgeId, edge] of this.edges) {
+        if (edge.userId === input.userId && edge.fromNodeId === node.id && edge.toNodeId === node.parentId && edge.relationType === 'part_of' && edge.source === 'tree_structure') {
+          this.edges.delete(edgeId);
+        }
+      }
+    }
+
     const before: JsonValue = { parentId: node.parentId };
     const updated: KnowledgeNode = { ...node, parentId: input.targetParentId, updatedAt: nowIso() };
     this.nodes.set(node.id, updated);
@@ -523,6 +536,59 @@ export class InMemoryRepository implements KnowledgeRepository {
     return [...this.edges.values()]
       .filter((edge) => edge.userId === userId && (edge.fromNodeId === nodeId || edge.toNodeId === nodeId))
       .map(clone);
+  }
+
+  async listEdges(userId: string): Promise<KnowledgeEdge[]> {
+    return [...this.edges.values()]
+      .filter((edge) => edge.userId === userId)
+      .sort((first, second) => first.createdAt.localeCompare(second.createdAt) || first.id.localeCompare(second.id))
+      .map(clone);
+  }
+
+  async deleteEdge(userId: string, fromNodeId: string, toNodeId: string, relationType: EdgeRelation): Promise<void> {
+    for (const [id, edge] of this.edges) {
+      if (edge.userId === userId && edge.fromNodeId === fromNodeId && edge.toNodeId === toNodeId && edge.relationType === relationType) {
+        this.edges.delete(id);
+      }
+    }
+  }
+
+  async getKnowledgeNote(userId: string, topicId: string, chapterId: string | null): Promise<KnowledgeNote | null> {
+    const found = this.notes.get(`${userId}\u0000${topicId}\u0000${chapterId ?? ''}`);
+    return found ? clone(found) : null;
+  }
+
+  async listKnowledgeNotes(userId: string, topicId: string): Promise<KnowledgeNoteIndexEntry[]> {
+    return [...this.notes.values()]
+      .filter((note) => note.userId === userId && note.topicId === topicId)
+      .sort((first, second) => {
+        if (first.chapterId === null) return second.chapterId === null ? 0 : -1;
+        if (second.chapterId === null) return 1;
+        return first.chapterId.localeCompare(second.chapterId);
+      })
+      .map(({ topicId: noteTopicId, chapterId, updatedAt }) => ({ topicId: noteTopicId, chapterId, updatedAt }));
+  }
+
+  async saveKnowledgeNote(input: SaveKnowledgeNoteInput): Promise<KnowledgeNote> {
+    const topic = this.nodes.get(input.topicId);
+    if (!topic || topic.userId !== input.userId) throw knowledgeError('not_found', `KnowledgeNode ${input.topicId} not found`);
+    if (input.chapterId !== null) {
+      const chapter = this.nodes.get(input.chapterId);
+      if (!chapter || chapter.userId !== input.userId) throw knowledgeError('not_found', `KnowledgeNode ${input.chapterId} not found`);
+    }
+    const key = `${input.userId}\u0000${input.topicId}\u0000${input.chapterId ?? ''}`;
+    const current = this.notes.get(key);
+    const timestamp = nowIso();
+    const saved: KnowledgeNote = {
+      userId: input.userId,
+      topicId: input.topicId,
+      chapterId: input.chapterId,
+      content: input.content,
+      createdAt: current?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+    this.notes.set(key, saved);
+    return clone(saved);
   }
 
   async searchSimilarItems(

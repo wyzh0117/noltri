@@ -1,0 +1,80 @@
+{
+  "browser": "Chrome/155.0.8059.85",
+  "url": "http://127.0.0.1:1433/main.html",
+  "viewport": {
+    "width": 1360,
+    "height": 900,
+    "deviceScaleFactor": 1
+  },
+  "isolatedContext": {
+    "browserContextId": "1D59C43C8A9DBF868FAAB6A54AE7A134",
+    "targetId": "922182C0D22684091FB8B3F1C0D4DA5C",
+    "apiBaseUrl": "http://127.0.0.1:1431"
+  },
+  "graphSelection": {
+    "status": 200,
+    "scope": {
+      "kind": "discipline",
+      "disciplineId": "a12v31-20261020-discipline"
+    },
+    "nodeCount": 1200,
+    "topicCount": 400,
+    "chapterCount": 800,
+    "edgeCount": 800
+  },
+  "graphWindowBounds": {
+    "viewport": {
+      "width": 1360,
+      "height": 900,
+      "dpr": 1
+    },
+    "svgRect": {
+      "x": 941,
+      "y": 0,
+      "width": 419,
+      "height": 900
+    },
+    "renderedNodes": 260,
+    "renderedEdges": 173,
+    "autoLabels": 23,
+    "positions": {
+      "minX": 142.42002485158196,
+      "maxX": 857.579975148418,
+      "minY": 40,
+      "maxY": 660,
+      "spanX": 715.1599502968361,
+      "spanY": 620,
+      "withinPriorClampBand": 0
+    },
+    "firstNode": {
+      "label": "A12 性能主题 0000，主题，2 个关系",
+      "dotRect": {
+        "width": 8.3919677734375,
+        "height": 8.3919677734375
+      },
+      "hitRect": {
+        "width": 24,
+        "height": 24
+      },
+      "labelRect": {
+        "width": 114.625,
+        "height": 16.000030517578125
+      }
+    },
+    "elapsedToCaptureMs": 841.0999999046326,
+    "postRenderSettleDelayMs": 500,
+    "cleanScopeBeforeExpand": [],
+    "scopeViewKeysAfterRender": [
+      "noltri:graph-v3-view:discipline%3Aa12v31-20261020-discipline"
+    ]
+  },
+  "screenshot": "/Users/youngi/Documents/MiniWork/知序-Noltri/docs/testing/graph-v3.1/a11-large-graph-layout-post-fix-1360x900.png",
+  "layoutPerformance": {
+    "input": "A12 GraphSelection: 1,200 nodes / 800 edges; selectGraphWindow output: 260 nodes / 173 edges / 940 folded",
+    "runs": 10,
+    "runtime": "Node v22.23.2",
+    "medianMs": 10.11925,
+    "maxMs": 47.559708
+  },
+  "status": "captured with clean browser storage; no API mutation"
+}

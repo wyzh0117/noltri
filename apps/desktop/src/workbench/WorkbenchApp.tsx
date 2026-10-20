@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, FormEvent, ReactElement, ReactNode, SyntheticEvent } from 'react';
-import type { CreateLibraryItemInput, HealthResponse, ItemRelation, LibraryItem, TreeNode } from '@noltri/schema';
+import type { CSSProperties, FormEvent, PointerEvent as ReactPointerEvent, ReactElement, ReactNode, SyntheticEvent } from 'react';
+import { MAX_GRAPH_NOTE_CHARS } from '@noltri/schema';
+import type { CreateLibraryItemInput, GraphEdge, GraphNode, GraphNoteIndexEntry, GraphScope, HealthResponse, ItemRelation, LibraryItem, NodeDetail, SearchHit, TreeNode } from '@noltri/schema';
 import { describeError } from './api';
 import type { WorkbenchApi } from './api';
+import { clearNoteDraft, listNoteDrafts, readNoteDraft, writeNoteDraft } from './note-drafts';
+import type { NoteDraft, NoteIdentity } from './note-drafts';
+import { scheduleLibraryItemsLoad } from './library-items-query';
+import { commitLatestNavigation, contentIdentity, disciplineScopesForTopics, findTreePath, graphChapterAttachment, graphChapterTitle, graphScopeIdentity, NavigationIntentClock, searchGraphNodes, selectionForTreeNode, shouldReuseActiveNote } from './graph-navigation';
+import type { WorkbenchContent } from './graph-navigation';
+import { ChapterChoicePanel, GraphNotebook } from './GraphNotebook';
+import { WorkbenchGraph } from './WorkbenchGraph';
 
 const PAGE_SIZE = 200;
 const KIND_LABELS: Record<LibraryItem['kind'], string> = {
@@ -29,6 +37,43 @@ interface CategoryPath {
   id: string;
   labels: string[];
   title: string;
+}
+
+type GraphPanelMode = 'entry' | 'mini' | 'expanded';
+type NoteSaveStatus = 'loading' | 'saved' | 'saving' | 'error';
+type ColorTheme = 'dark' | 'light';
+
+interface ActiveGraphNote {
+  identity: NoteIdentity;
+  title: string;
+  content: string;
+  status: NoteSaveStatus;
+  error?: string;
+  loadFailed?: boolean;
+  draftRecoverable?: boolean;
+}
+
+interface ChapterChoice {
+  chapterId: string;
+  topicIds: string[];
+  scope: GraphScope;
+  activateScope: boolean;
+  action: 'open' | 'more';
+}
+
+interface LoadNoteOptions {
+  intent: number;
+  addHistory?: boolean;
+  transitionPrepared?: boolean;
+  collapseNavigation?: boolean;
+  forceReload?: boolean;
+}
+
+interface ReadingHistoryEntry {
+  content: WorkbenchContent;
+  scope: GraphScope | null;
+  mode: GraphPanelMode;
+  navCollapsed: boolean;
 }
 
 export interface WorkbenchAppProps {
@@ -62,6 +107,29 @@ export default function WorkbenchApp({
   const [view, setView] = useState<LibraryView>('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [openNodes, setOpenNodes] = useState<Set<string>>(() => new Set());
+  const [contentSelection, setContentSelection] = useState<WorkbenchContent>({ kind: 'library' });
+  const [graphScope, setGraphScope] = useState<GraphScope | null>(null);
+  const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
+  const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const [graphNotes, setGraphNotes] = useState<GraphNoteIndexEntry[]>([]);
+  const [graphQuery, setGraphQuery] = useState('');
+  const [graphSearchHits, setGraphSearchHits] = useState<SearchHit[]>([]);
+  const [graphSearchError, setGraphSearchError] = useState<string | null>(null);
+  const [graphSearchLoading, setGraphSearchLoading] = useState(false);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  const [graphMode, setGraphMode] = useState<GraphPanelMode>('entry');
+  const [graphPanelWidth, setGraphPanelWidth] = useState(420);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [activeNote, setActiveNote] = useState<ActiveGraphNote | null>(null);
+  const [pendingDrafts, setPendingDrafts] = useState<NoteDraft[]>([]);
+  const [chapterChoice, setChapterChoice] = useState<ChapterChoice | null>(null);
+  const [moreDetail, setMoreDetail] = useState<NodeDetail | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [newChapterOpen, setNewChapterOpen] = useState(false);
+  const [newChapterTitle, setNewChapterTitle] = useState('');
+  const [chapterActionBusy, setChapterActionBusy] = useState(false);
+  const [theme, setTheme] = useState<ColorTheme>(() => readColorTheme());
   const [query, setQuery] = useState('');
   const [kindFilter, setKindFilter] = useState<LibraryItem['kind'] | 'all'>('all');
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -72,6 +140,30 @@ export default function WorkbenchApp({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemsRequestId = useRef(0);
+  const graphRequestId = useRef(0);
+  const graphSearchRequestId = useRef(0);
+  const noteLoadRequestId = useRef(0);
+  const navigationIntent = useRef(new NavigationIntentClock());
+  const noteSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noteSaveChain = useRef<Promise<void>>(Promise.resolve());
+  const activeNoteRef = useRef<ActiveGraphNote | null>(null);
+  const contentRef = useRef<WorkbenchContent>({ kind: 'library' });
+  const graphScopeRef = useRef<GraphScope | null>(null);
+  const contentHistory = useRef<ReadingHistoryEntry[]>([]);
+  const noteScrollPositions = useRef(new Map<string, number>());
+  const centerRef = useRef<HTMLElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const graphPanelRef = useRef<HTMLElement | null>(null);
+  const noteScrollRef = useRef<HTMLDivElement | null>(null);
+  const graphResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+
+  function beginNavigationIntent(): number {
+    return navigationIntent.current.begin();
+  }
+
+  function isCurrentNavigationIntent(intent: number): boolean {
+    return navigationIntent.current.isCurrent(intent);
+  }
 
   const refresh = useCallback(async (): Promise<void> => {
     const [treeResult, healthResult] = await Promise.allSettled([
@@ -97,16 +189,759 @@ export default function WorkbenchApp({
     }
   }, [api]);
 
+  function replaceActiveNote(next: ActiveGraphNote | null): void {
+    activeNoteRef.current = next;
+    setActiveNote(next);
+  }
+
+  function replaceContent(next: WorkbenchContent): void {
+    contentRef.current = next;
+    setContentSelection(next);
+  }
+
+  function replaceGraphScope(next: GraphScope | null): void {
+    graphScopeRef.current = next;
+    setGraphScope(next);
+  }
+
+  function pushCurrentHistory(): void {
+    contentHistory.current.push({ content: contentRef.current, scope: graphScopeRef.current, mode: graphMode, navCollapsed });
+  }
+
+  function refreshPendingDrafts(): void {
+    setPendingDrafts(listNoteDrafts());
+  }
+
+  async function loadGraph(scope: GraphScope): Promise<void> {
+    const requestId = ++graphRequestId.current;
+    setGraphLoading(true);
+    setGraphError(null);
+    setGraphNodes([]);
+    setGraphEdges([]);
+    try {
+      const result = await api.selectGraph(scope);
+      if (requestId !== graphRequestId.current) return;
+      setGraphNodes(result.nodes);
+      setGraphEdges(result.edges);
+      setGraphError(null);
+    } catch (error) {
+      if (requestId === graphRequestId.current) setGraphError(describeError(error));
+    } finally {
+      if (requestId === graphRequestId.current) setGraphLoading(false);
+    }
+  }
+
+  function rememberReadingPosition(): void {
+    if (activeNoteRef.current !== null && noteScrollRef.current !== null) {
+      noteScrollPositions.current.set(contentIdentity(contentRef.current), noteScrollRef.current.scrollTop);
+    }
+  }
+
+  async function prepareContentTransition(next: WorkbenchContent, addHistory: boolean, intent: number): Promise<boolean> {
+    if (!isCurrentNavigationIntent(intent)) return false;
+    if (contentIdentity(contentRef.current) === contentIdentity(next)) return true;
+    const canLeave = await flushActiveNote();
+    if (!isCurrentNavigationIntent(intent)) return false;
+    if (!canLeave) {
+      const active = activeNoteRef.current;
+      setNotice(active?.loadFailed
+        ? '正文尚未载入。为避免覆盖已有内容，请重新载入后再切换。'
+        : '正文尚未保存，且本地恢复草稿不可用；请重试保存后再切换。');
+      return false;
+    }
+    rememberReadingPosition();
+    if (addHistory) pushCurrentHistory();
+    return true;
+  }
+
+  async function persistNoteSnapshot(note: ActiveGraphNote): Promise<{ serverSaved: boolean; localSaved: boolean }> {
+    const draft: NoteDraft = { ...note.identity, content: note.content, updatedAt: new Date().toISOString() };
+    const localSaved = writeNoteDraft(draft);
+    refreshPendingDrafts();
+    if (sameNoteIdentity(activeNoteRef.current?.identity, note.identity) && activeNoteRef.current?.content === note.content
+      && activeNoteRef.current.status !== 'saving') {
+      replaceActiveNote({ ...activeNoteRef.current, status: 'saving', error: undefined });
+    }
+
+    if (note.content.length > MAX_GRAPH_NOTE_CHARS) {
+      const error = `正文为 ${note.content.length.toLocaleString()} 个字符，超过服务器上限 ${MAX_GRAPH_NOTE_CHARS.toLocaleString()} 个字符。${localSaved ? '草稿已保存在本机；请缩短正文后重试。' : '本机草稿也无法保存；请缩短正文后重试。'}`;
+      const current = activeNoteRef.current;
+      if (sameNoteIdentity(current?.identity, note.identity) && current?.content === note.content) {
+        replaceActiveNote({ ...current, status: 'error', error, draftRecoverable: localSaved });
+      }
+      return { serverSaved: false, localSaved };
+    }
+
+    let serverSaved = false;
+    let saveError: string | undefined;
+    const operation = noteSaveChain.current.catch(() => undefined).then(async () => {
+      try {
+        await api.saveGraphNote(note.identity.topicId, {
+          chapterId: note.identity.chapterId,
+          content: note.content,
+        });
+        serverSaved = true;
+        clearNoteDraft(note.identity, note.content);
+      } catch (error) {
+        saveError = describeError(error);
+      }
+    });
+    noteSaveChain.current = operation.then(() => undefined);
+    await operation;
+    refreshPendingDrafts();
+
+    const current = activeNoteRef.current;
+    if (sameNoteIdentity(current?.identity, note.identity) && current?.content === note.content) {
+      replaceActiveNote(serverSaved
+        ? { ...current, status: 'saved', error: undefined, draftRecoverable: false }
+        : { ...current, status: 'error', error: saveError ?? '保存失败。', draftRecoverable: localSaved });
+    }
+    return { serverSaved, localSaved };
+  }
+
+  async function flushActiveNote(): Promise<boolean> {
+    while (true) {
+      const active = activeNoteRef.current;
+      if (active === null) return true;
+      if (active.status === 'loading') return true;
+      if (active.loadFailed) return false;
+      if (active.status === 'saved' && readNoteDraft(active.identity) === null) return true;
+      if (noteSaveTimer.current !== null) {
+        clearTimeout(noteSaveTimer.current);
+        noteSaveTimer.current = null;
+      }
+      const result = await persistNoteSnapshot(active);
+      const latest = activeNoteRef.current;
+      if (sameNoteIdentity(latest?.identity, active.identity) && latest?.content !== active.content) continue;
+      return result.serverSaved || result.localSaved;
+    }
+  }
+
+  async function loadNote(identity: NoteIdentity, title: string, selection: WorkbenchContent, options: LoadNoteOptions): Promise<void> {
+    const { intent, addHistory = true, transitionPrepared = false, collapseNavigation = true, forceReload = false } = options;
+    if (!isCurrentNavigationIntent(intent)) return;
+    const current = contentRef.current;
+    if (contentIdentity(current) !== contentIdentity(selection)) {
+      if (!transitionPrepared && !(await prepareContentTransition(selection, addHistory, intent))) return;
+      if (!isCurrentNavigationIntent(intent)) return;
+    }
+
+    const active = activeNoteRef.current;
+    if (shouldReuseActiveNote(active?.identity ?? null, identity, forceReload)) {
+      if (active === null) return;
+      replaceContent(selection);
+      setChapterChoice(null);
+      setMoreOpen(false);
+      setMoreDetail(null);
+      if (collapseNavigation) setNavCollapsed(true);
+      if (active.title !== title) replaceActiveNote({ ...active, title });
+      return;
+    }
+
+    replaceContent(selection);
+    setChapterChoice(null);
+    setMoreOpen(false);
+    setMoreDetail(null);
+    if (collapseNavigation) setNavCollapsed(true);
+
+    const requestId = ++noteLoadRequestId.current;
+    replaceActiveNote({ identity, title, content: '', status: 'loading' });
+    try {
+      const [serverResult, indexResult] = await Promise.allSettled([
+        api.graphNote(identity.topicId, identity.chapterId),
+        api.listGraphNotes(identity.topicId),
+      ]);
+      if (requestId !== noteLoadRequestId.current) return;
+      if (indexResult.status === 'fulfilled') setGraphNotes(indexResult.value.notes);
+      else setGraphNotes([]);
+      if (serverResult.status === 'rejected') throw serverResult.reason;
+
+      const serverNote = serverResult.value;
+      const draft = readNoteDraft(identity);
+      const draftWins = draft !== null && (serverNote.updatedAt === null
+        || (Number.isFinite(Date.parse(draft.updatedAt)) && Number.isFinite(Date.parse(serverNote.updatedAt))
+          ? Date.parse(draft.updatedAt) >= Date.parse(serverNote.updatedAt)
+          : true));
+      if (draft !== null && !draftWins) clearNoteDraft(identity, draft.content);
+      const content = draftWins ? draft!.content : serverNote.content;
+      replaceActiveNote({ identity, title, content, status: draftWins ? 'saving' : 'saved', draftRecoverable: draftWins });
+    } catch (error) {
+      if (requestId !== noteLoadRequestId.current) return;
+      const draft = readNoteDraft(identity);
+      if (draft !== null) {
+        replaceActiveNote({ identity, title, content: draft.content, status: 'error', error: `服务器暂不可用：${describeError(error)}`, draftRecoverable: true });
+      } else {
+        replaceActiveNote({ identity, title, content: '', status: 'error', error: describeError(error), loadFailed: true });
+      }
+    }
+    refreshPendingDrafts();
+    const position = noteScrollPositions.current.get(contentIdentity(selection)) ?? 0;
+    requestAnimationFrame(() => {
+      if (contentIdentity(contentRef.current) === contentIdentity(selection) && noteScrollRef.current !== null) {
+        noteScrollRef.current.scrollTop = position;
+      }
+    });
+  }
+
+  async function navigateToCards(scope: GraphScope, selectedId: string, intent = beginNavigationIntent(), addHistory = true): Promise<void> {
+    const next: WorkbenchContent = { kind: 'cards', scope, selectedNodeId: selectedId };
+    if (!(await prepareContentTransition(next, addHistory, intent)) || !isCurrentNavigationIntent(intent)) return;
+    updateContent(next);
+    setNavCollapsed(false);
+    setChapterChoice(null);
+    setMoreOpen(false);
+    setMoreDetail(null);
+    setQuery('');
+    setKindFilter('all');
+    setView('all');
+    setSelectedNodeId(selectedId);
+    replaceGraphScope(scope);
+    setGraphMode('entry');
+    setGraphQuery('');
+    void loadGraph(scope);
+  }
+
+  async function navigateToTopic(topic: GraphNode, fromGraph = false, intent = beginNavigationIntent(), addHistory = true): Promise<void> {
+    if (!isCurrentNavigationIntent(intent)) return;
+    let scope = graphScopeRef.current;
+    if (!fromGraph && (graphMode !== 'expanded' || !graphNodes.some((node) => node.id === topic.id))) {
+      const topicRoute = selectionForTreeNode(tree, topic.id);
+      if (topicRoute !== null) scope = topicRoute.scope;
+      if (scope?.kind !== 'topic' || scope.anchorTopicId !== topic.id) {
+        const disciplineId = scope?.disciplineId ?? findTreeDisciplineId(tree, topic.id);
+        if (disciplineId !== null && disciplineId !== undefined) scope = { kind: 'topic', disciplineId, anchorTopicId: topic.id };
+      }
+    }
+    if (scope === null) {
+      setNotice('无法确定该主题所属学科范围。');
+      return;
+    }
+    const selection: WorkbenchContent = { kind: 'topic', topicId: topic.id };
+    const transitionPrepared = await prepareContentTransition(selection, addHistory, intent);
+    if (!transitionPrepared || !isCurrentNavigationIntent(intent)) return;
+    if (!sameGraphScope(graphScopeRef.current, scope)) {
+      replaceGraphScope(scope);
+      void loadGraph(scope);
+    }
+    setGraphQuery('');
+    if (!(graphMode === 'expanded' && graphNodes.some((node) => node.id === topic.id))) setGraphMode('mini');
+    await loadNote({ topicId: topic.id, chapterId: null }, topic.title, selection, { intent, addHistory: false, transitionPrepared: true });
+  }
+
+  async function navigateToChapter(topicId: string, chapterId: string, title: string, options: { intent?: number; addHistory?: boolean; activateScope?: GraphScope } = {}): Promise<void> {
+    const intent = options.intent ?? beginNavigationIntent();
+    if (!isCurrentNavigationIntent(intent)) return;
+    const selection: WorkbenchContent = { kind: 'chapter', topicId, chapterId };
+    if (!(await prepareContentTransition(selection, options.addHistory ?? true, intent)) || !isCurrentNavigationIntent(intent)) return;
+    if (options.activateScope !== undefined && !sameGraphScope(graphScopeRef.current, options.activateScope)) {
+      replaceGraphScope(options.activateScope);
+      setGraphMode('mini');
+      void loadGraph(options.activateScope);
+    }
+    setGraphQuery('');
+    await loadNote({ topicId, chapterId }, title, selection, { intent, addHistory: false, transitionPrepared: true });
+  }
+
+  async function navigateToLibrary(nextView: LibraryView, intent = beginNavigationIntent()): Promise<void> {
+    if (!(await prepareContentTransition({ kind: 'library' }, true, intent)) || !isCurrentNavigationIntent(intent)) return;
+    updateContent({ kind: 'library' });
+    setChapterChoice(null);
+    replaceGraphScope(null);
+    setGraphMode('entry');
+    setNavCollapsed(false);
+    setGraphQuery('');
+    setView(nextView);
+    setSelectedNodeId(null);
+    setQuery('');
+    setKindFilter('all');
+    invalidateItems();
+  }
+
+  async function selectTreeNode(id: string): Promise<void> {
+    const intent = beginNavigationIntent();
+    const route = selectionForTreeNode(tree, id);
+    if (route === null) {
+      const node = findTreePath(tree, id)?.at(-1);
+      if (node?.nodeType === 'chapter') {
+        await resolveParentlessChapter(node, intent);
+        return;
+      }
+    }
+    setSelectedNodeId(id);
+    setView('all');
+    setQuery('');
+    setKindFilter('all');
+    if (route === null) {
+      if (!(await prepareContentTransition({ kind: 'library' }, true, intent)) || !isCurrentNavigationIntent(intent)) return;
+      updateContent({ kind: 'library' });
+      setChapterChoice(null);
+      replaceGraphScope(null);
+      setGraphMode('entry');
+      setNavCollapsed(false);
+      invalidateItems();
+      return;
+    }
+    if (route.content.kind === 'cards') {
+      await navigateToCards(route.scope, id, intent);
+      return;
+    }
+    if (route.content.kind === 'topic') {
+      const node = route.path.at(-1)!;
+      await navigateToTopic({ id: node.id, title: node.title, nodeType: 'topic', parentId: route.path.at(-2)?.id ?? null, summary: node.summary }, false, intent);
+    } else {
+      const chapter = route.path.at(-1)!;
+      const inCurrentGraph = graphMode === 'expanded' && graphNodes.some((node) => node.id === chapter.id);
+      const targetScope = inCurrentGraph ? graphScopeRef.current : route.scope;
+      const parentTopic = [...route.path].reverse().find((node) => node.nodeType === 'topic');
+      await resolveAndOpenChapter(chapter.id, {
+        intent,
+        ...(targetScope === null ? {} : { scope: targetScope }),
+        ...(parentTopic === undefined ? {} : { activeTopicId: parentTopic.id }),
+        ...(targetScope !== null && !sameGraphScope(graphScopeRef.current, targetScope) ? { activateScope: true } : {}),
+      });
+    }
+  }
+
+  function updateContent(next: WorkbenchContent): void {
+    if (contentIdentity(next) !== contentIdentity(contentRef.current)) noteLoadRequestId.current += 1;
+    contentRef.current = next;
+    setContentSelection(next);
+    if (next.kind === 'library' || next.kind === 'cards') replaceActiveNote(null);
+  }
+
+  async function resolveAndOpenChapter(chapterId: string, options: { intent?: number; scope?: GraphScope; activeTopicId?: string; activateScope?: boolean; action?: 'open' | 'more' } = {}): Promise<void> {
+    const intent = options.intent ?? beginNavigationIntent();
+    if (!isCurrentNavigationIntent(intent)) return;
+    const scope = options.scope ?? graphScopeRef.current;
+    if (scope === null) return;
+    setChapterChoice(null);
+    const current = contentRef.current;
+    const activeTopicId = options.activeTopicId ?? (current.kind === 'topic' || current.kind === 'chapter' ? current.topicId : undefined);
+    try {
+      await commitLatestNavigation(
+        navigationIntent.current,
+        intent,
+        api.resolveChapter({ chapterId, ...(activeTopicId ? { activeTopicId } : {}), scope }),
+        (target) => applyChapterTarget(target, chapterId, scope, intent, options.activateScope ?? false, options.action ?? 'open'),
+      );
+    } catch (error) {
+      if (isCurrentNavigationIntent(intent)) setNotice(`无法定位章节：${describeError(error)}`);
+    }
+  }
+
+  async function applyChapterTarget(target: Awaited<ReturnType<WorkbenchApi['resolveChapter']>>, chapterId: string, scope: GraphScope, intent: number, activateScope: boolean, action: 'open' | 'more' = 'open'): Promise<void> {
+    if (!isCurrentNavigationIntent(intent)) return;
+    if (target.kind === 'resolved') {
+      setChapterChoice(null);
+      if (action === 'more') {
+        await openTopicMore(target.topicId, intent);
+        return;
+      }
+      const chapter = graphNodes.find((node) => node.id === target.chapterId);
+      const pathChapter = findTreePath(tree, target.chapterId)?.at(-1);
+      await navigateToChapter(target.topicId, target.chapterId, chapter?.title ?? pathChapter?.title ?? '章节正文', {
+        intent,
+        activateScope: activateScope ? scope : undefined,
+      });
+    } else if (target.kind === 'choose-topic') {
+      setChapterChoice({ chapterId: target.chapterId, topicIds: target.topicIds, scope, activateScope, action });
+      setGraphQuery('');
+    } else {
+      setChapterChoice(null);
+      setNotice('这个章节已不可用；当前正文保持不变。');
+      if (sameGraphScope(graphScopeRef.current, scope)) void loadGraph(scope);
+    }
+  }
+
+  async function resolveParentlessChapter(chapter: TreeNode, intent: number): Promise<void> {
+    if (!isCurrentNavigationIntent(intent)) return;
+    setChapterChoice(null);
+    try {
+      const detail = await api.nodeDetail(chapter.id);
+      if (!isCurrentNavigationIntent(intent)) return;
+      const topicIds = detail.relatedNodes
+        .filter((entry) => entry.relationType === 'part_of' && entry.node.nodeType === 'topic')
+        .map((entry) => entry.node.id);
+      let scopes = disciplineScopesForTopics(tree, topicIds);
+      if (scopes.length === 0) {
+        const disciplineScopes = tree
+          .filter((node) => node.nodeType === 'discipline')
+          .map((node): GraphScope => ({ kind: 'discipline', disciplineId: node.id }));
+        const graphResults = await Promise.allSettled(disciplineScopes.map((scope) => api.selectGraph(scope)));
+        if (!isCurrentNavigationIntent(intent)) return;
+        scopes = graphResults.flatMap((result, index) => {
+          if (result.status !== 'fulfilled') return [];
+          const selection = result.value;
+          const hasValidMembership = selection.nodes.some((node) => node.id === chapter.id && node.nodeType === 'chapter')
+            && selection.edges.some((edge) => edge.fromNodeId === chapter.id && selection.nodes.some((node) => node.id === edge.toNodeId && node.nodeType === 'topic'));
+          return hasValidMembership ? [disciplineScopes[index]!] : [];
+        });
+      }
+      if (scopes.length === 0) {
+        setNotice('这个章节没有可用的主题归属；当前内容和草稿保持不变。');
+        return;
+      }
+
+      const current = contentRef.current;
+      const activeTopicId = current.kind === 'topic' || current.kind === 'chapter' ? current.topicId : undefined;
+      const targets = await Promise.allSettled(scopes.map((scope) => api.resolveChapter({ chapterId: chapter.id, ...(activeTopicId === undefined ? {} : { activeTopicId }), scope })));
+      if (!isCurrentNavigationIntent(intent)) return;
+      const resolved = targets.find((result) => result.status === 'fulfilled' && result.value.kind !== 'unavailable');
+      if (resolved?.status === 'fulfilled') {
+        const scopeIndex = targets.indexOf(resolved);
+        const scope = scopes[scopeIndex]!;
+        await applyChapterTarget(resolved.value, chapter.id, scope, intent, !sameGraphScope(graphScopeRef.current, scope));
+      } else if (targets.some((result) => result.status === 'rejected')) {
+        const failed = targets.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        setNotice(`无法定位章节：${describeError(failed?.reason)}`);
+      } else {
+        setNotice('这个章节没有可用的主题归属；当前内容和草稿保持不变。');
+      }
+    } catch (error) {
+      if (isCurrentNavigationIntent(intent)) setNotice(`无法定位章节：${describeError(error)}`);
+    }
+  }
+
+  async function chooseChapterTopic(topicId: string): Promise<void> {
+    const choice = chapterChoice;
+    if (choice === null || !choice.topicIds.includes(topicId)) return;
+    const intent = beginNavigationIntent();
+    if (choice.action === 'more') {
+      setChapterChoice(null);
+      await openTopicMore(topicId, intent);
+      return;
+    }
+    const chapter = graphNodes.find((node) => node.id === choice.chapterId) ?? graphNodeFromTree(tree, choice.chapterId);
+    await navigateToChapter(topicId, choice.chapterId, chapter?.title ?? '章节正文', {
+      intent,
+      activateScope: choice.activateScope ? choice.scope : undefined,
+    });
+  }
+
+  async function handleGraphNodeOpen(node: GraphNode, intent = beginNavigationIntent()): Promise<void> {
+    if (!isCurrentNavigationIntent(intent)) return;
+    if (node.nodeType === 'topic') {
+      await navigateToTopic(node, true, intent);
+      return;
+    }
+    await resolveAndOpenChapter(node.id, { intent });
+  }
+
+  async function openGraphSearchHit(nodeId: string): Promise<void> {
+    const intent = beginNavigationIntent();
+    setGraphQuery('');
+    setChapterChoice(null);
+    const known = graphNodes.find((node) => node.id === nodeId);
+    if (known !== undefined) {
+      await handleGraphNodeOpen(known, intent);
+      return;
+    }
+    try {
+      await commitLatestNavigation(navigationIntent.current, intent, api.nodeDetail(nodeId), async (detail) => {
+        if (!isCurrentNavigationIntent(intent)) return;
+        if (detail.node.nodeType === 'chapter') {
+          await resolveAndOpenChapter(detail.node.id, { intent });
+        } else if (detail.node.nodeType === 'topic') {
+          await navigateToTopic({
+            id: detail.node.id,
+            title: detail.node.title,
+            nodeType: 'topic',
+            parentId: detail.node.parentId,
+            summary: detail.node.summary,
+          }, true, intent);
+        } else {
+          setNotice('搜索结果不是可打开的主题或章节。');
+        }
+      });
+    } catch (error) {
+      if (isCurrentNavigationIntent(intent)) setNotice(`无法载入搜索结果：${describeError(error)}`);
+    }
+  }
+
+  async function returnToPreviousContent(intent = beginNavigationIntent()): Promise<void> {
+    const previous = contentHistory.current.at(-1);
+    if (previous === undefined) return;
+    const canLeave = await flushActiveNote();
+    if (!isCurrentNavigationIntent(intent)) return;
+    if (!canLeave) {
+      const active = activeNoteRef.current;
+      setNotice(active?.loadFailed
+        ? '正文尚未载入。为避免覆盖已有内容，请重新载入后再返回。'
+        : '正文尚未保存，且本地恢复草稿不可用；请重试保存后再返回。');
+      return;
+    }
+    contentHistory.current.pop();
+    rememberReadingPosition();
+    const previousContent = previous.content;
+    const reloadGraph = previous.scope !== null && !sameGraphScope(graphScopeRef.current, previous.scope);
+    setChapterChoice(null);
+    replaceGraphScope(previous.scope);
+    setGraphMode(previous.mode);
+    setNavCollapsed(previous.navCollapsed);
+    if (reloadGraph && previous.scope !== null) void loadGraph(previous.scope);
+    if (previousContent.kind === 'topic') {
+      const topic = graphNodes.find((node) => node.id === previousContent.topicId)
+        ?? graphNodeFromTree(tree, previousContent.topicId);
+      if (topic !== null) await loadNote({ topicId: topic.id, chapterId: null }, topic.title, previousContent, { intent, addHistory: false, transitionPrepared: true, collapseNavigation: previous.navCollapsed });
+    } else if (previousContent.kind === 'chapter') {
+      const chapter = graphNodes.find((node) => node.id === previousContent.chapterId);
+      const indexed = graphNotes.find((entry) => entry.chapterId === previousContent.chapterId);
+      await loadNote({ topicId: previousContent.topicId, chapterId: previousContent.chapterId }, chapter?.title ?? indexed?.chapterTitle ?? '章节正文', previousContent, { intent, addHistory: false, transitionPrepared: true, collapseNavigation: previous.navCollapsed });
+    } else if (previousContent.kind === 'cards') {
+      updateContent(previousContent);
+      setSelectedNodeId(previousContent.selectedNodeId);
+      setView('all');
+      setQuery('');
+      setKindFilter('all');
+      setNavCollapsed(false);
+    } else {
+      updateContent(previousContent);
+      replaceGraphScope(null);
+      replaceActiveNote(null);
+      setNavCollapsed(false);
+    }
+  }
+
+  function changeNoteContent(content: string): void {
+    const active = activeNoteRef.current;
+    if (active === null || active.status === 'loading') return;
+    const next: ActiveGraphNote = { ...active, content, status: 'saving', error: undefined };
+    replaceActiveNote(next);
+    const cached = writeNoteDraft({ ...next.identity, content, updatedAt: new Date().toISOString() });
+    refreshPendingDrafts();
+    replaceActiveNote({ ...next, draftRecoverable: cached, ...(cached ? {} : { error: '本地恢复草稿不可用；自动保存仍会重试服务器。' }) });
+  }
+
+  async function retryActiveNote(): Promise<void> {
+    const active = activeNoteRef.current;
+    if (active === null) return;
+    if (active.loadFailed) {
+      await loadNote(active.identity, active.title, contentRef.current, { intent: beginNavigationIntent(), addHistory: false, forceReload: true });
+      return;
+    }
+    const result = await persistNoteSnapshot(active);
+    if (!result.serverSaved && !result.localSaved) setNotice('保存失败，浏览器无法创建本地恢复草稿。请保持此页并重试。');
+  }
+
+  async function openDraft(draft: NoteDraft): Promise<void> {
+    const intent = beginNavigationIntent();
+    let title = draft.chapterId === null
+      ? graphNodes.find((node) => node.id === draft.topicId)?.title ?? graphNodeFromTree(tree, draft.topicId)?.title ?? '主题概览'
+      : graphChapterTitle(draft.topicId, draft.chapterId, graphNodes, tree, graphNotes);
+    const topic = graphNodes.find((node) => node.id === draft.topicId) ?? graphNodeFromTree(tree, draft.topicId);
+    const selection: WorkbenchContent = draft.chapterId === null
+      ? { kind: 'topic', topicId: draft.topicId }
+      : { kind: 'chapter', topicId: draft.topicId, chapterId: draft.chapterId };
+    if (!(await prepareContentTransition(selection, true, intent)) || !isCurrentNavigationIntent(intent)) return;
+    if (draft.chapterId !== null && title === '章节正文') {
+      try {
+        const detail = await api.nodeDetail(draft.chapterId);
+        if (!isCurrentNavigationIntent(intent)) return;
+        if (detail.node.nodeType === 'chapter') title = detail.node.title;
+      } catch {
+        // Keep the neutral title when optional detail lookup cannot resolve a stale draft.
+      }
+    }
+    setGraphQuery('');
+    if (topic !== null) {
+      const route = selectionForTreeNode(tree, topic.id);
+      const topicIsInExpandedGraph = graphMode === 'expanded' && graphNodes.some((node) => node.id === topic.id);
+      if (route !== null && !topicIsInExpandedGraph && !sameGraphScope(graphScopeRef.current, route.scope)) {
+        replaceGraphScope(route.scope);
+        setGraphMode('mini');
+        void loadGraph(route.scope);
+      }
+    } else {
+      replaceGraphScope(null);
+      setGraphMode('entry');
+    }
+    await loadNote(draft, title, selection, { intent, addHistory: false, transitionPrepared: true });
+  }
+
+  async function openTopicMore(topicId: string, intent = beginNavigationIntent()): Promise<void> {
+    if (!isCurrentNavigationIntent(intent)) return;
+    setMoreOpen(true);
+    setMoreDetail(null);
+    try {
+      const detail = await api.nodeDetail(topicId);
+      if (!isCurrentNavigationIntent(intent)) return;
+      setMoreDetail(detail);
+    } catch (error) {
+      if (isCurrentNavigationIntent(intent)) setNotice(`无法读取主题资料：${describeError(error)}`);
+    }
+  }
+
+  async function createChapterForTopic(): Promise<void> {
+    if (contentSelection.kind !== 'topic' || newChapterTitle.trim() === '') return;
+    const intent = beginNavigationIntent();
+    if (!(await flushActiveNote())) {
+      setNotice('正文尚未保存，且本地恢复草稿不可用；请重试保存后再新建章节。');
+      return;
+    }
+    if (!isCurrentNavigationIntent(intent)) return;
+    setChapterActionBusy(true);
+    try {
+      const created = await api.createChapter(contentSelection.topicId, { title: newChapterTitle.trim() });
+      if (!isCurrentNavigationIntent(intent)) return;
+      setNewChapterTitle('');
+      setNewChapterOpen(false);
+      const scope = graphScopeRef.current;
+      if (scope !== null) void loadGraph(scope);
+      await navigateToChapter(contentSelection.topicId, created.chapter.id, created.chapter.title, { intent });
+    } catch (error) {
+      setNotice(`新建章节失败：${describeError(error)}`);
+    } finally {
+      setChapterActionBusy(false);
+    }
+  }
+
+  async function detachCurrentChapter(): Promise<void> {
+    if (contentSelection.kind !== 'chapter') return;
+    setChapterActionBusy(true);
+    try {
+      await api.disconnectChapter(contentSelection.chapterId, contentSelection.topicId);
+      const scope = graphScopeRef.current;
+      if (scope !== null) void loadGraph(scope);
+      const index = await api.listGraphNotes(contentSelection.topicId);
+      setGraphNotes(index.notes);
+      setNotice('已解除章节关联，正文仍保留在未归属列表中。');
+    } catch (error) {
+      setNotice(`解除关联失败：${describeError(error)}`);
+    } finally {
+      setChapterActionBusy(false);
+    }
+  }
+
+  async function connectChapterToTopic(targetTopicId: string): Promise<void> {
+    if (contentSelection.kind !== 'chapter') return;
+    setChapterActionBusy(true);
+    try {
+      await api.connectChapter(contentSelection.chapterId, targetTopicId);
+      const scope = graphScopeRef.current;
+      if (scope !== null) void loadGraph(scope);
+      setGraphNotes((await api.listGraphNotes(contentSelection.topicId)).notes);
+      setNotice('章节已关联；正文仍按主题与章节 ID 保存。');
+    } catch (error) {
+      setNotice(`关联章节失败：${describeError(error)}`);
+    } finally {
+      setChapterActionBusy(false);
+    }
+  }
+
+  async function moveTopic(topicId: string, targetParentId: string): Promise<void> {
+    try {
+      await api.moveNode(topicId, { targetParentId: targetParentId || null });
+      const result = await api.tree();
+      setTree(result.nodes);
+      const route = selectionForTreeNode(result.nodes, topicId);
+      if (route !== null) {
+        replaceGraphScope(route.scope);
+        void loadGraph(route.scope);
+      }
+      setMoreDetail(await api.nodeDetail(topicId));
+      setNotice('主题分类已更新。');
+    } catch (error) {
+      setNotice(`更新主题分类失败：${describeError(error)}`);
+    }
+  }
+
+  useEffect(() => {
+    refreshPendingDrafts();
+  }, []);
+
+  useEffect(() => {
+    try { window.localStorage.setItem('noltri:color-theme:v1', theme); } catch { /* preference is optional */ }
+  }, [theme]);
+
+  useEffect(() => {
+    if (activeNote === null || activeNote.status !== 'saving') return;
+    if (noteSaveTimer.current !== null) clearTimeout(noteSaveTimer.current);
+    noteSaveTimer.current = setTimeout(() => {
+      noteSaveTimer.current = null;
+      const latest = activeNoteRef.current;
+      if (latest !== null && sameNoteIdentity(latest.identity, activeNote.identity) && latest.content === activeNote.content) {
+        void persistNoteSnapshot(latest);
+      }
+    }, 650);
+    return () => {
+      if (noteSaveTimer.current !== null) {
+        clearTimeout(noteSaveTimer.current);
+        noteSaveTimer.current = null;
+      }
+    };
+  }, [activeNote?.identity.topicId, activeNote?.identity.chapterId, activeNote?.content, activeNote?.status]);
+
+  useEffect(() => {
+    const requestId = ++graphSearchRequestId.current;
+    const requestQuery = graphQuery.trim();
+    if (requestQuery === '' || graphScope === null || contentSelection.kind === 'library') {
+      setGraphSearchHits([]);
+      setGraphSearchError(null);
+      setGraphSearchLoading(false);
+      return;
+    }
+    const graphNodeHits = searchGraphNodes(graphNodes, requestQuery);
+    setGraphSearchHits(graphNodeHits);
+    const scopeNodeId = graphScope.kind === 'discipline'
+      ? graphScope.disciplineId
+      : graphScope.kind === 'subdiscipline' ? graphScope.subdisciplineId : graphScope.anchorTopicId;
+    setGraphSearchLoading(true);
+    setGraphSearchError(null);
+    const timer = window.setTimeout(() => {
+      void api.search({ query: requestQuery, scopeNodeId, limit: 50 }).then((result) => {
+        if (requestId === graphSearchRequestId.current) {
+          // Graph nodes are filtered by the complete server-selected GraphScope; parentId subtrees
+          // miss chapters shared through valid part_of edges. Keep the old API for material hits.
+          const materialHits = result.hits.filter((hit) => hit.itemId !== null);
+          setGraphSearchHits([...graphNodeHits, ...materialHits]);
+        }
+      }).catch((error: unknown) => {
+        if (requestId === graphSearchRequestId.current) setGraphSearchError(describeError(error));
+      }).finally(() => {
+        if (requestId === graphSearchRequestId.current) setGraphSearchLoading(false);
+      });
+    }, 180);
+    return () => {
+      clearTimeout(timer);
+      if (requestId === graphSearchRequestId.current) graphSearchRequestId.current += 1;
+    };
+  }, [api, contentSelection.kind, graphNodes, graphQuery, graphScope]);
+
+  useEffect(() => {
+    if (graphScope === null || graphMode === 'entry' || typeof ResizeObserver === 'undefined') return;
+    const shell = shellRef.current;
+    const center = centerRef.current;
+    const sidebar = shell?.querySelector<HTMLElement>('.library-sidebar');
+    const graphPanel = graphPanelRef.current;
+    if (shell === null || shell === undefined || center === null || sidebar === null || sidebar === undefined || graphPanel === null) return;
+
+    const ensureReadableCenter = (): void => {
+      const probe = center.querySelector<HTMLElement>('.editor-width-probe');
+      const notebook = center.querySelector<HTMLElement>('.notebook-center');
+      if (probe === null || notebook === null) return;
+      const readableWidth = probe.getBoundingClientRect().width;
+      const oneRowWidth = sidebar.getBoundingClientRect().width + readableWidth + graphPanel.getBoundingClientRect().width;
+      if (notebook.clientWidth < readableWidth || shell.clientWidth < oneRowWidth) setGraphMode('entry');
+    };
+    const observer = new ResizeObserver(ensureReadableCenter);
+    observer.observe(shell);
+    observer.observe(center);
+    observer.observe(graphPanel);
+    ensureReadableCenter();
+    return () => observer.disconnect();
+  }, [graphScope, graphMode, graphPanelWidth, contentSelection.kind]);
+
   useEffect(() => {
     const requestId = ++itemsRequestId.current;
     const requestQuery = query.trim();
-    setLoading(true);
-    setLoadingMore(false);
-    setItemsError(null);
-    setItems([]);
-    setOffset(0);
-    setHasMore(false);
-    const timer = window.setTimeout(() => {
+    const cancelItemsTimer = scheduleLibraryItemsLoad(() => {
+      if (requestId !== itemsRequestId.current) return;
+      setLoading(true);
+      setLoadingMore(false);
+      setItemsError(null);
+      setItems([]);
+      setOffset(0);
+      setHasMore(false);
       void Promise.resolve().then(() => api.listItems({
         query: requestQuery,
         nodeId: selectedNodeId ?? undefined,
@@ -127,8 +962,11 @@ export default function WorkbenchApp({
       });
     }, requestQuery === '' ? 0 : 200);
     return () => {
-      window.clearTimeout(timer);
-      if (requestId === itemsRequestId.current) itemsRequestId.current += 1;
+      const requestStarted = cancelItemsTimer();
+      if (requestId === itemsRequestId.current) {
+        itemsRequestId.current += 1;
+        if (requestStarted) setLoading(false);
+      }
     };
   }, [api, itemsReloadVersion, kindFilter, query, selectedNodeId, view]);
 
@@ -149,11 +987,8 @@ export default function WorkbenchApp({
 
   function invalidateItems(): void {
     itemsRequestId.current += 1;
-    setItems([]);
-    setOffset(0);
-    setHasMore(false);
     setItemsError(null);
-    setLoading(true);
+    setLoading(false);
     setLoadingMore(false);
   }
 
@@ -202,16 +1037,88 @@ export default function WorkbenchApp({
   }, [overlay]);
 
   const paths = useMemo(() => collectPaths(tree), [tree]);
+  const sidebarSelectedNodeId = chapterChoice?.chapterId ?? (contentSelection.kind === 'chapter' ? contentSelection.chapterId : selectedNodeId);
   const selectedPath = useMemo(
     () => paths.find((path) => path.id === selectedNodeId)?.labels ?? [],
     [paths, selectedNodeId],
   );
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? null;
   const compareIds = compareItems.map((item) => item.id);
+  const notebookPath = contentSelection.kind === 'cards'
+    ? paths.find((path) => path.id === contentSelection.selectedNodeId)?.labels.join(' / ') ?? ''
+    : contentSelection.kind === 'topic' || contentSelection.kind === 'chapter'
+      ? paths.find((path) => path.id === contentSelection.topicId)?.labels.join(' / ') ?? ''
+      : '';
+  const classificationOptions = useMemo(() => collectClassificationOptions(tree), [tree]);
+  const connectableTopics = useMemo(
+    () => graphScope === null ? [] : collectTopicNodes(tree, graphScope.disciplineId),
+    [graphScope, tree],
+  );
+  const chapterChoiceView = chapterChoice === null ? null : {
+    chapterTitle: graphNodes.find((node) => node.id === chapterChoice.chapterId)?.title
+      ?? graphNodeFromTree(tree, chapterChoice.chapterId)?.title
+      ?? graphNotes.find((entry) => entry.chapterId === chapterChoice.chapterId)?.chapterTitle
+      ?? '章节正文',
+    candidates: chapterChoice.topicIds.map((id) => ({
+      id,
+      title: graphNodes.find((node) => node.id === id)?.title ?? graphNodeFromTree(tree, id)?.title ?? '主题',
+    })),
+    action: chapterChoice.action,
+  };
 
   const visibleItems = items;
 
   const notify = useCallback((message: string): void => setNotice(message), []);
+
+  function changeGraphMode(next: 'mini' | 'expanded'): void {
+    if (next === 'expanded') {
+      if (graphError !== null && graphScope !== null) void loadGraph(graphScope);
+      setGraphMode('expanded');
+      return;
+    }
+    setGraphMode(graphScope?.kind === 'topic' ? 'mini' : 'entry');
+  }
+
+  function openMoreForGraphNode(node: GraphNode): void {
+    const intent = beginNavigationIntent();
+    setMoreOpen(false);
+    setMoreDetail(null);
+    if (node.nodeType === 'topic') {
+      void openTopicMore(node.id, intent);
+      return;
+    }
+    const current = contentRef.current;
+    const scope = current.kind === 'cards' ? current.scope : graphScopeRef.current;
+    if (scope === null) {
+      setNotice('当前知识范围无法定位这个章节。');
+      return;
+    }
+    const activeTopicId = current.kind === 'topic' || current.kind === 'chapter' ? current.topicId : undefined;
+    void resolveAndOpenChapter(node.id, { intent, scope, ...(activeTopicId === undefined ? {} : { activeTopicId }), action: 'more' });
+  }
+
+  function beginGraphResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    graphResizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: graphPanelWidth };
+  }
+
+  function moveGraphResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const start = graphResizeRef.current;
+    if (start === null || start.pointerId !== event.pointerId) return;
+    const shell = shellRef.current;
+    const side = shell?.querySelector<HTMLElement>('.library-sidebar');
+    const available = (shell?.clientWidth ?? window.innerWidth) - (side?.getBoundingClientRect().width ?? 0);
+    const max = Math.max(300, available - 320);
+    setGraphPanelWidth(Math.max(300, Math.min(max, start.startWidth + start.startX - event.clientX)));
+  }
+
+  function endGraphResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    if (graphResizeRef.current?.pointerId === event.pointerId) graphResizeRef.current = null;
+  }
+
+  function adjustGraphResize(direction: -1 | 1): void {
+    setGraphPanelWidth((width) => Math.max(300, Math.min(window.innerWidth * 0.62, width + direction * 24)));
+  }
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !hasMore) return;
@@ -315,8 +1222,8 @@ export default function WorkbenchApp({
   }
 
   return (
-    <div className="library-shell">
-      <aside className="library-sidebar" aria-label="知识库侧栏">
+    <div ref={shellRef} className={`library-shell${contentSelection.kind !== 'library' ? graphScope !== null ? ` library-shell-notebook library-shell-graph-${graphMode}` : ' library-shell-notebook library-shell-notebook-no-graph' : ''}${pendingDrafts.length > 0 ? ' has-pending-drafts' : ''}`} data-theme={theme} style={{ '--graph-panel-width': `${graphPanelWidth}px` } as CSSProperties}>
+      <aside className={`library-sidebar${navCollapsed ? ' library-sidebar-tree-collapsed' : ''}`} aria-label="知识库侧栏">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">知</div>
           <div>
@@ -327,14 +1234,14 @@ export default function WorkbenchApp({
 
         <div className="sidebar-label">资料库</div>
         <nav className="library-nav" aria-label="资料筛选">
-          <button className={view === 'all' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => updateView('all')} type="button">
+          <button className={view === 'all' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('all'); }} type="button">
             <span className="nav-glyph" aria-hidden="true">▦</span><span>全部资料</span>
           </button>
-          <button className={view === 'organize' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => updateView('organize')} type="button">
+          <button className={view === 'organize' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('organize'); }} type="button">
             <span className="nav-glyph nav-glyph-warm" aria-hidden="true">✳</span><span>待整理</span>
             {items.some((item) => !item.archived && item.aiStatus !== 'ready') ? <span className="nav-dot" aria-label="有待整理内容" /> : null}
           </button>
-          <button className={view === 'archive' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => updateView('archive')} type="button">
+          <button className={view === 'archive' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('archive'); }} type="button">
             <span className="nav-glyph" aria-hidden="true">⌑</span><span>已归档</span>
           </button>
         </nav>
@@ -343,35 +1250,96 @@ export default function WorkbenchApp({
           <span className="sidebar-label">学科与方向</span>
           {tree.length > 0 ? <span className="tree-count">{paths.length}</span> : null}
         </div>
+        {navCollapsed ? <button type="button" className="nav-restore" onClick={() => setNavCollapsed(false)}>展开学科导航</button> : null}
         {treeError !== null ? <p className="sidebar-error">知识树暂不可用</p> : null}
-        {tree.length === 0 && !loading ? (
+        {!navCollapsed && tree.length === 0 && !loading ? (
           <p className="tree-hint">收集资料后，学科与研究方向会出现在这里。</p>
-        ) : (
+        ) : !navCollapsed ? (
           <nav className="subject-tree" aria-label="学科知识树">
             {tree.map((node) => (
-        <TreeBranch
+              <TreeBranch
                 key={node.id}
                 node={node}
                 depth={0}
-                selectedNodeId={selectedNodeId}
+                selectedNodeId={sidebarSelectedNodeId}
                 openNodes={openNodes}
-                onSelect={(id) => { invalidateItems(); setSelectedNodeId(id); setView('all'); }}
+                onSelect={(id) => { void selectTreeNode(id); }}
                 onToggle={(id) => setOpenNodes((current) => toggleSet(current, id))}
               />
             ))}
           </nav>
-        )}
+        ) : null}
 
         <div className="sidebar-bottom">
+          {pendingDrafts.length > 0 ? <details className="sidebar-draft-recovery">
+            <summary>待同步草稿（{pendingDrafts.length}）</summary>
+            {pendingDrafts.map((draft) => <button className="draft-recovery-row" type="button" key={`${draft.topicId}:${draft.chapterId ?? ''}`} onClick={() => { void openDraft(draft); }}>
+              <span>{draft.chapterId === null
+                ? `主题概览 · ${graphNodes.find((node) => node.id === draft.topicId)?.title ?? graphNodeFromTree(tree, draft.topicId)?.title ?? '主题概览'}`
+                : `章节 · ${graphChapterTitle(draft.topicId, draft.chapterId, graphNodes, tree, graphNotes)}${graphChapterAttachment(graphNotes, draft.topicId, draft.chapterId) === 'detached' ? ' · 未归属' : ''}`}</span>
+              <small>{new Date(draft.updatedAt).toLocaleString()}</small>
+            </button>)}
+          </details> : null}
           <button type="button" className="settings-link" onClick={() => setOverlay('settings')}>
             <span className="nav-glyph" aria-hidden="true">⚙</span>Provider 管理
+          </button>
+          <button type="button" className="settings-link theme-toggle" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label={`切换到${theme === 'dark' ? '浅色' : '深色'}模式`}>
+            <span className="nav-glyph" aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span>{theme === 'dark' ? '浅色模式' : '深色模式'}
           </button>
           <div className="privacy-line"><span className={health === null ? 'connection-dot connection-dot-off' : 'connection-dot'} />
             {health === null ? '本机服务未连接' : '仅此设备保存'}</div>
         </div>
       </aside>
 
-      <main className="library-main">
+      <main ref={centerRef} className={`library-main${contentSelection.kind === 'library' ? '' : ' notebook-main'}`}>
+        {contentSelection.kind === 'library' && chapterChoiceView !== null ? <ChapterChoicePanel chapterTitle={chapterChoiceView.chapterTitle} candidates={chapterChoiceView.candidates} action={chapterChoiceView.action} onChoose={(topicId) => { void chooseChapterTopic(topicId); }} /> : null}
+        {contentSelection.kind !== 'library' ? <GraphNotebook
+          content={contentSelection}
+          scope={graphScope}
+          nodes={graphNodes}
+          edges={graphEdges}
+          pathLabel={notebookPath}
+          loading={graphLoading}
+          error={graphError}
+          note={activeNote}
+          notes={graphNotes}
+          connectableTopics={connectableTopics}
+          historyAvailable={contentHistory.current.length > 0}
+          moreOpen={moreOpen}
+          moreDetail={moreDetail}
+          scrollRef={noteScrollRef}
+          search={graphQuery}
+          searchError={graphSearchError}
+          searchLoading={graphSearchLoading}
+          searchHits={graphSearchHits}
+          classificationOptions={classificationOptions}
+          onSearch={setGraphQuery}
+          renderTopicCard={(node, onOpen, onMore) => <MemoryCard key={node.id} kind="topic" topic={node} onOpen={onOpen} onMore={onMore} />}
+          onOpenTopic={(node) => { void navigateToTopic(node); }}
+          onOpenChapter={(chapterId) => { void resolveAndOpenChapter(chapterId); }}
+          onOpenOrphan={(topicId, chapterId, title) => { void navigateToChapter(topicId, chapterId, title); }}
+          onChooseTopic={(topicId) => { void chooseChapterTopic(topicId); }}
+          onBack={() => { void returnToPreviousContent(); }}
+          onChangeNote={changeNoteContent}
+          onRetrySave={() => { void retryActiveNote(); }}
+          onMore={(topicId) => { void openTopicMore(topicId); }}
+          onCloseMore={() => setMoreOpen(false)}
+          onMoveTopic={(topicId, targetParentId) => { void moveTopic(topicId, targetParentId); }}
+          onCreateChapter={() => { void createChapterForTopic(); }}
+          onChapterTitleChange={setNewChapterTitle}
+          newChapterOpen={newChapterOpen}
+          newChapterTitle={newChapterTitle}
+          actionBusy={chapterActionBusy}
+          onToggleNewChapter={() => { setNewChapterOpen((current) => !current); setNewChapterTitle(''); }}
+          onDetachChapter={() => { void detachCurrentChapter(); }}
+          onConnectChapter={(topicId) => { void connectChapterToTopic(topicId); }}
+          onOpenSearchHit={(nodeId) => { void openGraphSearchHit(nodeId); }}
+          onOpenSearchItem={openDetail}
+          choice={chapterChoiceView}
+          onCollect={() => setOverlay('collect')}
+          onToggleTheme={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+          theme={theme}
+        /> : <>
         <header className="library-header">
           <div className="header-copy">
             <div className="eyebrow">{selectedPath.length > 0 ? selectedPath.join(' / ') : '我的知识空间'}</div>
@@ -379,6 +1347,9 @@ export default function WorkbenchApp({
             <p>{view === 'organize' ? '归纳失败或仍在整理的内容会留在这里。' : '网页、Agent 对话和论文摘录，都能在这里找到。'}</p>
           </div>
           <div className="header-actions">
+            <button type="button" className="button-quiet theme-header-toggle" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label={`切换到${theme === 'dark' ? '浅色' : '深色'}模式`}>
+              <span aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span>
+            </button>
             <button type="button" className="button-quiet" onClick={() => setOverlay('settings')} aria-label="打开 Provider 管理">
               <span aria-hidden="true">⚙</span>
             </button>
@@ -438,6 +1409,7 @@ export default function WorkbenchApp({
           <section className="card-grid" aria-label="资料卡片">
             {visibleItems.map((item) => (
               <MemoryCard
+                kind="library"
                 key={item.id}
                 item={item}
                 compareSelected={compareIds.includes(item.id)}
@@ -452,7 +1424,41 @@ export default function WorkbenchApp({
             {loadingMore ? '正在载入…' : '再看一些'}
           </button></div>
         ) : null}
+        </>}
       </main>
+
+      {contentSelection.kind !== 'library' && graphScope !== null ? <aside ref={graphPanelRef} className={`graph-panel graph-panel-${graphMode}`} aria-label="Graph 面板">
+        <button
+          type="button"
+          className="graph-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整 Graph 面板宽度"
+          aria-valuenow={graphPanelWidth}
+          aria-valuemin={300}
+          aria-valuemax={Math.max(300, shellRef.current?.clientWidth ?? 300)}
+          onPointerDown={beginGraphResize}
+          onPointerMove={moveGraphResize}
+          onPointerUp={endGraphResize}
+          onPointerCancel={endGraphResize}
+          onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); adjustGraphResize(1); } else if (event.key === 'ArrowRight') { event.preventDefault(); adjustGraphResize(-1); } }}
+        />
+        {graphMode === 'entry' ? <div className="graph-entry">
+          {graphError !== null ? <p className="graph-entry-error" role="alert">Graph 暂不可用：{graphError}</p> : null}
+          {graphLoading ? <span className="graph-entry-loading" role="status">正在读取 Graph…</span> : null}
+          <button type="button" className="button-soft graph-entry-button" onClick={() => changeGraphMode('expanded')}>展开graph view</button>
+          {graphError !== null ? <button type="button" className="text-action" onClick={() => graphScope !== null && void loadGraph(graphScope)}>重新载入</button> : null}
+        </div> : graphError !== null ? <div className="graph-panel-status" role="alert"><span>Graph 暂不可用：{graphError}</span><button type="button" className="text-action" onClick={() => graphScope !== null && void loadGraph(graphScope)}>重新载入</button></div> : graphLoading && graphNodes.length === 0 ? <div className="graph-panel-status" role="status"><span className="loader" />正在读取 Graph…</div> : <WorkbenchGraph
+          nodes={graphNodes}
+          edges={graphEdges}
+          scopeIdentity={graphScopeIdentity(graphScope)}
+          selectedNodeId={contentSelection.kind === 'topic' ? contentSelection.topicId : contentSelection.kind === 'chapter' ? contentSelection.chapterId : null}
+          mode={graphMode}
+          onNodeOpen={(node) => { void handleGraphNodeOpen(node); }}
+          onModeChange={changeGraphMode}
+          onNodeMore={openMoreForGraphNode}
+        />}
+      </aside> : null}
 
       {compareIds.length > 0 ? (
         <div className="compare-dock" role="region" aria-label="并排比较">
@@ -565,39 +1571,51 @@ function FilterButton({ active, onClick, children }: { active: boolean; onClick:
   return <button className={active ? 'filter-chip filter-chip-active' : 'filter-chip'} type="button" aria-pressed={active} onClick={onClick}>{children}</button>;
 }
 
-function MemoryCard({ item, compareSelected, onOpen, onCompare }: {
-  item: LibraryItem;
-  compareSelected: boolean;
-  onOpen: () => void;
-  onCompare: () => void;
-}): ReactElement {
+type MemoryCardProps =
+  | { kind: 'library'; item: LibraryItem; compareSelected: boolean; onOpen: () => void; onCompare: () => void }
+  | { kind: 'topic'; topic: GraphNode; onOpen: () => void; onMore: () => void };
+
+function MemoryCard(props: MemoryCardProps): ReactElement {
+  const isTopic = props.kind === 'topic';
+  const item = isTopic ? null : props.item;
+  const topic = isTopic ? props.topic : null;
+  const title = topic?.title ?? titleForItem(item!);
+  const summary = topic === null ? item!.summary?.trim() || excerpt(item!.content, 160) : topic.summary ?? '';
   return (
-    <article className="memory-card">
-      <button className="memory-card-open" type="button" onClick={onOpen} aria-label={`查看：${titleForItem(item)}`}>
-        <MemoryCover item={item} />
+    <article className={isTopic ? 'memory-card topic-memory-card' : 'memory-card'} onContextMenu={props.kind === 'topic' ? (event) => { event.preventDefault(); props.onMore(); } : undefined}>
+      <button className="memory-card-open" type="button" onClick={props.onOpen} aria-label={isTopic ? `打开主题笔记：${title}` : `查看：${title}`}>
+        {topic === null ? <MemoryCover kind="library" item={item!} /> : <MemoryCover kind="topic" topic={topic} />}
         <div className="memory-card-copy">
-          <div className="memory-card-kicker"><span>{KIND_LABELS[item.kind]}</span>{item.aiStatus !== 'ready' ? <span className={`ai-state ai-state-${item.aiStatus}`}>{AI_LABELS[item.aiStatus]}</span> : null}</div>
-          <h2>{titleForItem(item)}</h2>
-          <p>{item.summary?.trim() || excerpt(item.content, 160)}</p>
+          <div className="memory-card-kicker"><span>{isTopic ? '主题' : KIND_LABELS[item!.kind]}</span>{!isTopic && item!.aiStatus !== 'ready' ? <span className={`ai-state ai-state-${item!.aiStatus}`}>{AI_LABELS[item!.aiStatus]}</span> : null}</div>
+          <h2>{title}</h2>
+          <p>{summary}</p>
         </div>
       </button>
-      <div className="memory-card-meta">
-        <span className="card-source">{sourceLabel(item)}</span>
-        <span>{formatDate(item.createdAt || item.source.capturedAt)}</span>
-      </div>
-      {item.subjectPath.length > 0 ? <div className="memory-card-path" title={item.subjectPath.join(' / ')}>{item.subjectPath.join(' · ')}</div> : null}
-      <button className={compareSelected ? 'card-compare card-compare-active' : 'card-compare'} type="button" aria-pressed={compareSelected} onClick={onCompare}>
-        <span aria-hidden="true">{compareSelected ? '✓' : '⇄'}</span>{compareSelected ? '已加入对读' : '加入对读'}
-      </button>
+      {props.kind === 'library' ? <>
+        <div className="memory-card-meta">
+          <span className="card-source">{sourceLabel(props.item)}</span>
+          <span>{formatDate(props.item.createdAt || props.item.source.capturedAt)}</span>
+        </div>
+        {props.item.subjectPath.length > 0 ? <div className="memory-card-path" title={props.item.subjectPath.join(' / ')}>{props.item.subjectPath.join(' · ')}</div> : null}
+        <button className={props.compareSelected ? 'card-compare card-compare-active' : 'card-compare'} type="button" aria-pressed={props.compareSelected} onClick={props.onCompare}>
+          <span aria-hidden="true">{props.compareSelected ? '✓' : '⇄'}</span>{props.compareSelected ? '已加入对读' : '加入对读'}
+        </button>
+      </> : <button className="card-compare topic-card-more" type="button" onClick={props.onMore} aria-label={`更多主题操作：${title}`}>⋯ 更多</button>}
     </article>
   );
 }
 
-function MemoryCover({ item }: { item: LibraryItem }): ReactElement {
-  const imageUrl = safeHttpUrl(item.previewImageUrl);
+function MemoryCover(props: { kind: 'library'; item: LibraryItem } | { kind: 'topic'; topic: GraphNode }): ReactElement {
+  const item = props.kind === 'library' ? props.item : null;
+  const topic = props.kind === 'topic' ? props.topic : null;
+  const imageUrl = item === null ? null : safeHttpUrl(item.previewImageUrl);
   const [imageFailed, setImageFailed] = useState(false);
-  const tone = `cover-tone-${hashString(item.id) % 5}`;
+  const tone = `cover-tone-${hashString(topic?.id ?? item!.id) % 5}`;
   useEffect(() => setImageFailed(false), [imageUrl]);
+  if (topic !== null) {
+    return <div className={`memory-cover note-cover ${tone}`}><span className="cover-label">主题笔记</span><span className="note-cover-mark" aria-hidden="true">知</span><span className="note-cover-summary">{topic.summary ?? ''}</span></div>;
+  }
+  if (item === null) return <></>;
   if (imageUrl !== null && !imageFailed) {
     return <div className="memory-cover memory-cover-image"><img src={imageUrl} alt="" loading="lazy" onError={() => setImageFailed(true)} /><span className="image-kind-label">{KIND_LABELS[item.kind]}</span></div>;
   }
@@ -1006,6 +2024,58 @@ function collectPaths(nodes: readonly TreeNode[], prefix: string[] = []): Catego
     const labels = [...prefix, node.title];
     return [{ id: node.id, labels, title: labels.join(' / ') }, ...collectPaths(node.children ?? [], labels)];
   });
+}
+
+function collectClassificationOptions(nodes: readonly TreeNode[], prefix: string[] = []): { id: string; title: string }[] {
+  return nodes.flatMap((node) => {
+    const labels = [...prefix, node.title];
+    const current = node.nodeType === 'topic' || node.nodeType === 'chapter' ? [] : [{ id: node.id, title: labels.join(' / ') }];
+    return [...current, ...collectClassificationOptions(node.children ?? [], labels)];
+  });
+}
+
+function collectTopicNodes(nodes: readonly TreeNode[], disciplineId: string, parents: readonly TreeNode[] = []): GraphNode[] {
+  return nodes.flatMap((node) => {
+    const path = [...parents, node];
+    const current = node.nodeType === 'topic' && path[0]?.id === disciplineId
+      ? [{ id: node.id, title: node.title, nodeType: 'topic' as const, parentId: parents.at(-1)?.id ?? null, summary: node.summary }]
+      : [];
+    return [...current, ...collectTopicNodes(node.children ?? [], disciplineId, path)];
+  });
+}
+
+function graphNodeFromTree(nodes: readonly TreeNode[], id: string): GraphNode | null {
+  const path = findTreePath(nodes, id);
+  const node = path?.at(-1);
+  if (node === undefined || (node.nodeType !== 'topic' && node.nodeType !== 'chapter')) return null;
+  return {
+    id: node.id,
+    title: node.title,
+    nodeType: node.nodeType,
+    parentId: path!.at(-2)?.id ?? null,
+    summary: node.summary,
+  };
+}
+
+function findTreeDisciplineId(nodes: readonly TreeNode[], id: string): string | null {
+  return findTreePath(nodes, id)?.[0]?.id ?? null;
+}
+
+function sameNoteIdentity(left: NoteIdentity | null | undefined, right: NoteIdentity): boolean {
+  return left !== null && left !== undefined && left.topicId === right.topicId && left.chapterId === right.chapterId;
+}
+
+function sameGraphScope(left: GraphScope | null, right: GraphScope): boolean {
+  return left !== null && graphScopeIdentity(left) === graphScopeIdentity(right);
+}
+
+function readColorTheme(): ColorTheme {
+  try {
+    const stored = window.localStorage.getItem('noltri:color-theme:v1');
+    return stored === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
 }
 
 function toggleSet(current: Set<string>, id: string): Set<string> {

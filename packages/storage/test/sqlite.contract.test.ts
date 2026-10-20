@@ -42,4 +42,24 @@ describe('sqlite driver opens the file it was given', () => {
     expect(status.vectorInventory).toEqual([]);
     await repository.close();
   });
+
+  it('reopens persisted overview and chapter notes from the same profile', async () => {
+    const file = nextFile();
+    const first = new SqliteRepository({ file });
+    const userId = 'note-persistence-user';
+    const topic = await first.createNode({ userId, title: '主题', nodeType: 'topic' });
+    const chapter = await first.createNode({ userId, title: '章节', parentId: topic.id, nodeType: 'chapter' });
+    await first.saveKnowledgeNote({ userId, topicId: topic.id, chapterId: null, content: '持久概览' });
+    await first.saveKnowledgeNote({ userId, topicId: topic.id, chapterId: chapter.id, content: '持久章节正文' });
+    await first.close();
+
+    const reopened = new SqliteRepository({ file });
+    try {
+      expect((await reopened.getKnowledgeNote(userId, topic.id, null))?.content).toBe('持久概览');
+      expect((await reopened.getKnowledgeNote(userId, topic.id, chapter.id))?.content).toBe('持久章节正文');
+      expect(await reopened.listKnowledgeNotes(userId, topic.id)).toHaveLength(2);
+    } finally {
+      await reopened.close();
+    }
+  });
 });

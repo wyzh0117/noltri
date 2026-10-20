@@ -21,6 +21,7 @@ import {
   type JsonValue,
   type KnowledgeEdge,
   type KnowledgeItem,
+  type KnowledgeNote,
   type KnowledgeNode,
   type ProcessingStatus,
   type RawSource,
@@ -58,6 +59,8 @@ import type {
   PathSegment,
   StorageDriverName,
   StorageHealth,
+  SaveKnowledgeNoteInput,
+  KnowledgeNoteIndexEntry,
   VectorSearchOptions,
 } from './types';
 
@@ -177,6 +180,17 @@ function toEdge(row: DbRow): KnowledgeEdge {
     confidence: optNum(row.confidence),
     source: text(row.source),
     createdAt: text(row.created_at),
+  };
+}
+
+function toKnowledgeNote(row: DbRow): KnowledgeNote {
+  return {
+    userId: text(row.user_id),
+    topicId: text(row.topic_id),
+    chapterId: optText(row.chapter_id),
+    content: text(row.content),
+    createdAt: text(row.created_at),
+    updatedAt: text(row.updated_at),
   };
 }
 
@@ -842,6 +856,14 @@ export class SqliteRepository implements KnowledgeRepository {
       }
 
       const timestamp = nowIso();
+      if (node.parentId !== null && node.parentId !== input.targetParentId) {
+        this.run(
+          `delete from knowledge_edges
+            where user_id = ? and from_node_id = ? and to_node_id = ?
+              and relation_type = 'part_of' and source = 'tree_structure'`,
+          [input.userId, node.id, node.parentId],
+        );
+      }
       this.run('update knowledge_nodes set parent_id = ?, updated_at = ? where id = ? and user_id = ?', [
         input.targetParentId,
         timestamp,
@@ -1065,6 +1087,65 @@ export class SqliteRepository implements KnowledgeRepository {
       [userId, nodeId, nodeId],
     );
     return rows.map(toEdge);
+  }
+
+  async listEdges(userId: string): Promise<KnowledgeEdge[]> {
+    return this.many(`select ${EDGE_FIELDS} from knowledge_edges where user_id = ? order by created_at, id`, [userId]).map(toEdge);
+  }
+
+  async deleteEdge(userId: string, fromNodeId: string, toNodeId: string, relationType: EdgeRelation): Promise<void> {
+    this.run(
+      'delete from knowledge_edges where user_id = ? and from_node_id = ? and to_node_id = ? and relation_type = ?',
+      [userId, fromNodeId, toNodeId, relationType],
+    );
+  }
+
+  async getKnowledgeNote(userId: string, topicId: string, chapterId: string | null): Promise<KnowledgeNote | null> {
+    const row = this.one(
+      `select user_id, topic_id, chapter_id, content, created_at, updated_at
+         from knowledge_notes
+        where user_id = ? and topic_id = ? and ${chapterId === null ? 'chapter_id is null' : 'chapter_id = ?'}`,
+      chapterId === null ? [userId, topicId] : [userId, topicId, chapterId],
+    );
+    return row === null ? null : toKnowledgeNote(row);
+  }
+
+  async listKnowledgeNotes(userId: string, topicId: string): Promise<KnowledgeNoteIndexEntry[]> {
+    return this.many(
+      `select topic_id, chapter_id, updated_at from knowledge_notes
+        where user_id = ? and topic_id = ? order by chapter_id is not null, chapter_id`,
+      [userId, topicId],
+    ).map((row) => ({
+      topicId: row.topic_id as string,
+      chapterId: row.chapter_id as string | null,
+      updatedAt: row.updated_at as string,
+    }));
+  }
+
+  async saveKnowledgeNote(input: SaveKnowledgeNoteInput): Promise<KnowledgeNote> {
+    this.mustNode(input.topicId, input.userId);
+    if (input.chapterId !== null) this.mustNode(input.chapterId, input.userId);
+    const timestamp = nowIso();
+    if (input.chapterId === null) {
+      this.run(
+        `insert into knowledge_notes (user_id, topic_id, chapter_id, content, created_at, updated_at)
+         values (?, ?, null, ?, ?, ?)
+         on conflict (user_id, topic_id) where chapter_id is null
+         do update set content = excluded.content, updated_at = excluded.updated_at`,
+        [input.userId, input.topicId, input.content, timestamp, timestamp],
+      );
+    } else {
+      this.run(
+        `insert into knowledge_notes (user_id, topic_id, chapter_id, content, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?)
+         on conflict (user_id, topic_id, chapter_id) where chapter_id is not null
+         do update set content = excluded.content, updated_at = excluded.updated_at`,
+        [input.userId, input.topicId, input.chapterId, input.content, timestamp, timestamp],
+      );
+    }
+    const saved = await this.getKnowledgeNote(input.userId, input.topicId, input.chapterId);
+    if (saved === null) throw knowledgeError('storage_error', 'Knowledge note vanished after write');
+    return saved;
   }
 
   // --- search --------------------------------------------------------------------------
