@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "release": "0.1.4",
+  "generatedAt": "2026-10-21T18:30:23.747293+00:00",
+  "method": "Read-only SQLite audit cross-checked against the 49-row browser-source candidate manifest.",
+  "manifest": {
+    "candidateRows": 49,
+    "indexRange": [
+      2,
+      50
+    ],
+    "indicesContinuous": true,
+    "candidateKindCounts": {
+      "knowledge": 34,
+      "paperExcerpt": 15
+    },
+    "topicCount": 15,
+    "duplicates": {
+      "indices": 0,
+      "sourceUrls": 0,
+      "normalizedTitles": 0,
+      "excerpts": 0
+    }
+  },
+  "collection": {
+    "candidateRawSources": 49,
+    "candidateRawStatuses": {
+      "done": 49,
+      "failed": 0,
+      "processing": 0
+    },
+    "candidateActiveItems": 49,
+    "oneActiveItemPerCandidateSource": true,
+    "currentDatabase": {
+      "rawSources": 50,
+      "rawStatuses": {
+        "done": 50,
+        "failed": 0,
+        "processing": 0
+      },
+      "activeItems": 50,
+      "activeItemsByKind": {
+        "knowledge": 35,
+        "paper_excerpt": 15
+      },
+      "activeTopics": 15
+    }
+  },
+  "excerptFidelity": {
+    "byteExactMatches": 48,
+    "typographicEquivalentMatches": 1,
+    "contentVerifiedMatches": 49,
+    "approvedException": {
+      "manifestIndex": 27,
+      "location": "quotation mark near the end of the excerpt",
+      "conversion": "U+0022 to U+201D",
+      "allOtherCharactersIdentical": true,
+      "rawTextWasNotModified": true,
+      "zeroBasedCharacterOffset": 446
+    }
+  },
+  "metadata": {
+    "sourceTitleMatches": 49,
+    "sourceUrlMatches": 49,
+    "licenseAttributionPresent": 49,
+    "paperAuthorAndDoiChecksPassed": 15,
+    "correctionRecordsExpected": 1,
+    "correctionRecordsVerified": 1
+  },
+  "classification": {
+    "threeLevelClassificationsVerified": 49,
+    "activeTopicCount": 15,
+    "finalItemQuota": {
+      "firstFiveTopicsEach": 4,
+      "remainingTenTopicsEach": 3,
+      "includesExistingBaselineItem": true
+    },
+    "activeNodeCountsByType": {
+      "discipline": 14,
+      "domain": 2,
+      "subdiscipline": 14,
+      "topic": 15
+    },
+    "preexistingLegacyClassificationPreserved": true
+  },
+  "integrity": {
+    "preexistingBaselinePreserved": true,
+    "rawToItemMappingsOneToOne": true,
+    "allCandidateRowsVerified": true,
+    "duplicatesFound": false,
+    "failedChecks": 0
+  },
+  "completeFinalAcceptance": true
+}
