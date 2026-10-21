@@ -16,6 +16,7 @@ import type {
 } from '@noltri/schema';
 import { isKnowledgeError, knowledgeError } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
+import { taxonomyNodeType } from '../node-taxonomy';
 
 function graphNode(node: KnowledgeNode): GraphNode {
   if (node.nodeType !== 'topic' && node.nodeType !== 'chapter') {
@@ -43,7 +44,7 @@ function disciplineFor(nodeId: string, nodesById: Map<string, KnowledgeNode>): s
   const seen = new Set<string>();
   let current: KnowledgeNode | undefined = nodesById.get(nodeId);
   while (current !== undefined && !seen.has(current.id)) {
-    if (current.nodeType === 'discipline') return current.id;
+    if (taxonomyNodeType(current, nodesById) === 'discipline') return current.id;
     seen.add(current.id);
     current = current.parentId === null ? undefined : nodesById.get(current.parentId);
   }
@@ -184,7 +185,7 @@ export async function selectGraph(
   const parents = parentMap(nodes, taxonomyEdges);
 
   const discipline = byId.get(scope.disciplineId);
-  if (discipline === undefined || discipline.nodeType !== 'discipline') {
+  if (discipline === undefined || taxonomyNodeType(discipline, byId) !== 'discipline') {
     throw knowledgeError('not_found', `学科 ${scope.disciplineId} 不存在`);
   }
 
@@ -193,7 +194,7 @@ export async function selectGraph(
     const subdiscipline = byId.get(scope.subdisciplineId);
     if (
       subdiscipline === undefined ||
-      subdiscipline.nodeType !== 'subdiscipline' ||
+      taxonomyNodeType(subdiscipline, byId) !== 'subdiscipline' ||
       !belongsTo(subdiscipline.id, discipline.id, parents) ||
       subdiscipline.id === discipline.id
     ) {

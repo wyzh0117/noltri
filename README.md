@@ -11,9 +11,9 @@
 
 ## 快速开始
 
-知序 0.1.3 面向 Apple Silicon（arm64），要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
+知序 0.1.4 面向 Apple Silicon（arm64），要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
 
-0.1.3 增加知识主题与章节的直接阅读编辑、按学科范围浏览关系图，并保留正文自动保存与本机草稿恢复。0.1.2 的 Provider 管理继续支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages，可拉取或手动添加模型；Apply 保存配置，“使用此模型”选择自动处理内容时使用的模型。当前发布采用 ad-hoc 签名，**尚未通过 Apple Developer ID 签名和公证**，macOS 仍可能拦截首次打开。请先对照 Releases 中的 `SHA256SUMS.txt` 校验下载文件，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)进入“系统设置”→“隐私与安全性”→“仍要打开”。
+0.1.4 发布说明与验收结果待本轮修复和验证完成后补齐，见[发布说明](docs/releases/0.1.4.md)。0.1.3 增加知识主题与章节的直接阅读编辑、按学科范围浏览关系图，并保留正文自动保存与本机草稿恢复。0.1.2 的 Provider 管理继续支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages，可拉取或手动添加模型；Apply 保存配置，“使用此模型”选择自动处理内容时使用的模型。0.1.3 发布采用 ad-hoc 签名，**尚未通过 Apple Developer ID 签名和公证**，macOS 仍可能拦截首次打开。请先对照 Releases 中的 `SHA256SUMS.txt` 校验下载文件，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)进入“系统设置”→“隐私与安全性”→“仍要打开”。
 
 若系统仍显示“已损坏”，确认下载来源和校验值后，可仅为此应用解除下载隔离：
 

@@ -1,0 +1,58 @@
+{
+  "dateLocal": "2026-10-22 Asia/Shanghai",
+  "gate": "pass",
+  "upgrade": {
+    "version": "0.1.4",
+    "candidateZipSha256": "00542a9a1370dfd2fb3f8527e5b2b82d5ce38ecf4f5a873cb0b9ee7e2f79bc60",
+    "candidateExecutableSha256": "79407c1eff313ab244deccd19853011b0fe80ca662d3752ec0c5ce457f0394ae",
+    "installedExecutableSha256": "79407c1eff313ab244deccd19853011b0fe80ca662d3752ec0c5ce457f0394ae",
+    "executableMatchesCandidate": true,
+    "codeSignatureIntegrityVerified": true,
+    "macOSSecurityWarningShown": false,
+    "openedInstalledBuild": true
+  },
+  "dataIntegrity": {
+    "verificationMethod": "Before/after SQLite record and content-fingerprint comparison; individual identifiers, paths, titles, and fingerprints are omitted from this public summary.",
+    "countsBefore": {
+      "rawSources": 1,
+      "rawDone": 1,
+      "activeItems": 1,
+      "activeTopics": 1
+    },
+    "countsAfter": {
+      "rawSources": 1,
+      "rawDone": 1,
+      "activeItems": 1,
+      "activeTopics": 1
+    },
+    "unchanged": true,
+    "legacyNodeStorageTypesPreserved": true,
+    "earlier14ItemBackupPreserved": true,
+    "settingsAndGrantsModified": false
+  },
+  "uiGate": {
+    "actions": [
+      "Opened the installed 0.1.4 app and confirmed the About page reports version 0.1.4.",
+      "Selected Mathematics > Probability in Library and opened Graph; the existing leaf node rendered.",
+      "Left the app open in Graph view."
+    ],
+    "visibleGraphNodeCount": 1,
+    "errorShown": false,
+    "appLeftOpenWithGraphView": true,
+    "screenshots": [
+      {
+        "path": "upgrade-graph-20261022.png",
+        "sha256": "efa46d4e59c9fcf7f8ef3cdfb51e294eee97cf0c63e8b636b7151cc6b79d2f8e"
+      },
+      {
+        "path": "upgrade-about-20261022.png",
+        "sha256": "26eeedbfc63d2e98afc7b7578f450d9e5dc16c128f69c7bd1038a7ca8ceda501"
+      }
+    ]
+  },
+  "collection": {
+    "started": false,
+    "currentItems": 1,
+    "currentTopics": 1
+  }
+}

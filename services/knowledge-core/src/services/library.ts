@@ -13,6 +13,7 @@ import type { CreateNodeRecordInput, KnowledgeRepository, ListInboxInput } from 
 import { knowledgeError, nowIso } from '@noltri/shared';
 import type { KnowledgeCore } from '../core';
 import type { ActorContext } from '../types';
+import { nodeTypeForPath } from '../node-taxonomy';
 
 const PAGE_SCAN_SIZE = 200;
 
@@ -302,7 +303,7 @@ async function setSubjectPath(
       const input: CreateNodeRecordInput = {
         userId: actor.userId,
         title,
-        nodeType: index === titles.length - 1 ? 'topic' : 'domain',
+        nodeType: nodeTypeForPath(index, titles.length),
         parentId,
         confidence: null,
         embeddingModel: null,

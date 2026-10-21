@@ -7,6 +7,7 @@
 import type { KnowledgeNode, TreeQuery, TreeResponse, TreeNode } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
+import { taxonomyNodeType } from '../node-taxonomy';
 
 /** Structural limit, not a knowledge threshold: V1 never renders more than six levels. */
 export const MAX_TREE_DEPTH = 6;
@@ -49,7 +50,7 @@ export async function getTree(deps: CoreDeps, actor: ActorContext, query: TreeQu
     const treeNode: TreeNode = {
       id: node.id,
       title: node.title,
-      nodeType: node.nodeType,
+      nodeType: taxonomyNodeType(node, byId),
       status: node.status,
       confidence: node.confidence,
       summary: node.summary,

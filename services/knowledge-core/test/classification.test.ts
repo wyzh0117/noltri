@@ -149,14 +149,25 @@ describe('classification', () => {
     const python = await harness.repository.findNodeByTitle(harness.actor.userId, 'Python', String(root?.id));
     const leaf = await harness.repository.findNode(leafId, harness.actor.userId);
     expect(root?.parentId).toBeNull();
+    expect(root?.nodeType).toBe('discipline');
     expect(python?.parentId).toBe(root?.id);
+    expect(python?.nodeType).toBe('subdiscipline');
     expect(leaf?.parentId).toBe(python?.id);
+    expect(leaf?.nodeType).toBe('topic');
 
     const versions = await harness.repository.listVersionRecords(harness.actor.userId);
     expect(versions.filter((record) => record.operation === 'create')).toHaveLength(3);
 
     const edges = await harness.repository.listEdgesForNode(harness.actor.userId, leafId);
     expect(edges.map((edge) => edge.relationType)).toContain('part_of');
+  });
+
+  it('keeps a one-title classification as a root topic', async () => {
+    const harness = makeHarness({ script: createScript(['单段主题']) });
+    await harness.core.capture(captureOf(PYTHON_TEXT), harness.actor);
+
+    const topic = await harness.repository.findNodeByTitle(harness.actor.userId, '单段主题', null);
+    expect(topic).toMatchObject({ nodeType: 'topic', parentId: null });
   });
 
   it('merges a near duplicate without ever rewriting the original knowledge', async () => {
@@ -219,6 +230,10 @@ describe('classification', () => {
 
     const manualPath = ['个人知识', '待研究的容器'];
     await patchLibraryItem(harness.core, harness.actor, item.id, { subjectPath: manualPath });
+    const manualRoot = await harness.repository.findNodeByTitle(harness.actor.userId, manualPath[0]!, null);
+    const manualLeaf = await harness.repository.findNodeByTitle(harness.actor.userId, manualPath[1]!, manualRoot?.id);
+    expect(manualRoot?.nodeType).toBe('discipline');
+    expect(manualLeaf?.nodeType).toBe('topic');
     const retried = await harness.core.retryCapture(item.id, harness.actor);
     expect(retried.items.every((entry) => entry.nodePath.join('/') === manualPath.join('/'))).toBe(true);
     expect(harness.provider.classifyInputs).toHaveLength(1);

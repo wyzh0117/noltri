@@ -21,6 +21,7 @@ import type {
 import { tierForConfidence } from '@noltri/schema';
 import { knowledgeError, truncate } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
+import { nodeTypeForPath } from '../node-taxonomy';
 import { MAX_NODE_PATH_DEPTH, roundConfidence } from '../types';
 import type { NormalizedPoint } from './normalize';
 
@@ -90,9 +91,8 @@ export async function resolveNodeChain(
     const created = await deps.repository.createNode({
       userId: actor.userId,
       title,
-      // Ancestors are the domains the model named; the leaf is the new topic.
       summary: null,
-      nodeType: isLeaf ? 'topic' : 'domain',
+      nodeType: nodeTypeForPath(index, titles.length),
       parentId,
       confidence: roundConfidence(confidence),
       ...(seed.embedding === undefined ? {} : { embedding: seed.embedding }),
