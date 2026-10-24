@@ -59,9 +59,11 @@ export const graphNoteSchema = z.object({
   chapterId: z.string().nullable(),
   content: z.string(),
   updatedAt: z.string().nullable(),
+  path: z.string().optional(),
+  etag: z.string().nullable(),
 });
 export type GraphNote = z.infer<typeof graphNoteSchema>;
-/** Keeps worst-case JSON escaping below Knowledge Core's 256 KB HTTP request ceiling. */
+/** Bounds the legacy GraphNote API; Vault file writes use the larger file-oriented request contract. */
 export const MAX_GRAPH_NOTE_CHARS = 40_000;
 
 export const graphNoteIndexEntrySchema = z.object({
@@ -70,6 +72,7 @@ export const graphNoteIndexEntrySchema = z.object({
   chapterTitle: z.string().nullable(),
   updatedAt: z.string(),
   attached: z.boolean(),
+  path: z.string().optional(),
 });
 export type GraphNoteIndexEntry = z.infer<typeof graphNoteIndexEntrySchema>;
 
@@ -79,6 +82,7 @@ export type GraphNoteIndex = z.infer<typeof graphNoteIndexSchema>;
 export const saveGraphNoteRequestSchema = z.object({
   chapterId: z.string().min(1).max(128).nullable(),
   content: z.string().max(MAX_GRAPH_NOTE_CHARS, `正文不能超过 ${String(MAX_GRAPH_NOTE_CHARS)} 个字符`),
+  expectedEtag: z.string().optional(),
 });
 export type SaveGraphNoteRequest = z.infer<typeof saveGraphNoteRequestSchema>;
 

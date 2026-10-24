@@ -6,3 +6,4 @@ export * from './api';
 export * from './grants';
 export * from './config';
 export * from './library';
+export * from './notes';

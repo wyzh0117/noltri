@@ -1,471 +1,870 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactElement, WheelEvent as ReactWheelEvent } from 'react';
-import type { GraphEdge, GraphNode } from '@noltri/schema';
-import { layoutGraph, selectGraphWindow } from './workbench-graph-layout';
-import type { GraphPoint, GraphPositions } from './workbench-graph-layout';
-import { scheduleGraphStateWrite } from './workbench-graph-state';
-import { GRAPH_VIEW_HEIGHT, GRAPH_VIEW_WIDTH, graphNodeRadius, graphScreenSizeScale, resolveGraphLabelIds } from './workbench-graph-view';
-import type { GraphCamera as Camera, GraphLabelMode as LabelMode, GraphViewport } from './workbench-graph-view';
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, ReactElement, WheelEvent } from 'react';
+import type { NoteMatchesResponse, VaultGraph } from '@noltri/schema';
+import { buildGraphModel, graphQueryMatchFromResponse } from './workbench-graph-model';
+import type { GraphModel, GraphQueryMatch, GraphViewNode } from './workbench-graph-model';
+import { DEFAULT_GRAPH_SETTINGS, createGraphGroup, graphColorInputValue } from './workbench-graph-settings';
+import type { GraphColorGroup, GraphSettings } from './workbench-graph-settings';
+import { graphStateScopeIdentity, readGraphState, writeGraphState } from './workbench-graph-state';
+import { cameraForFit, graphNodeAtPoint, graphNodeScreenRadius, graphPointFromScreen, graphPointToScreen, zoomCameraAt } from './workbench-graph-view-model';
+import type { GraphCamera, GraphViewport } from './workbench-graph-view-model';
+import type { GraphForces, GraphPoint } from './workbench-graph-simulation';
+import { compositeGraphSnapshot, graphPaletteFromElement, WorkbenchGraphRenderer } from './workbench-graph-renderer';
 import './workbench-graph.css';
 
-const WIDTH = GRAPH_VIEW_WIDTH;
-const HEIGHT = GRAPH_VIEW_HEIGHT;
-const STORAGE_PREFIX = 'noltri:graph-v3-view:';
-const SCALE_MIN = 0.22;
-const SCALE_MAX = 4;
-
-interface SavedScopeState {
-  camera: Camera;
-  positions: GraphPositions | null;
+export interface WorkbenchGraphProps {
+  readonly data: VaultGraph;
+  readonly vaultRoot: string;
+  readonly mode: 'global' | 'local';
+  readonly focusedPath: string | null;
+  readonly selectedPath: string | null;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onRefresh?: () => void;
+  readonly evaluateQuery: (query: string) => Promise<NoteMatchesResponse>;
+  readonly onModeChange?: (mode: 'global' | 'local') => void;
+  readonly onNodeOpen: (path: string, intent: GraphOpenIntent) => void;
+  readonly onTagOpen?: (tag: string, intent: GraphOpenIntent) => void;
+  readonly onNodeHover?: (path: string, anchor: DOMRect | null) => void;
 }
 
-interface DragState {
+export interface GraphOpenIntent {
+  newTab: boolean;
+  split: boolean;
+}
+
+interface QueryResult {
+  revision: number;
+  match: GraphQueryMatch;
+}
+
+interface WorkerTick {
+  type: 'tick';
+  epoch: number;
+  coordinates: Float32Array;
+  alpha: number;
+}
+
+interface GraphDrag {
   pointerId: number;
-  kind: 'node' | 'pan';
-  nodeId?: string;
+  nodeId: string | null;
   startClientX: number;
   startClientY: number;
-  startPoint: GraphPoint;
-  startCamera?: Camera;
-  startPosition?: GraphPoint;
+  lastClientX: number;
+  lastClientY: number;
+  lastMoveTime: number;
+  panVelocityX: number;
+  panVelocityY: number;
+  startScreen: GraphPoint;
+  startCamera: GraphCamera;
   moved: boolean;
 }
 
-export interface WorkbenchGraphProps {
-  readonly nodes: readonly GraphNode[];
-  readonly edges: readonly GraphEdge[];
-  readonly scopeIdentity: string;
-  readonly selectedNodeId: string | null;
-  readonly mode: 'mini' | 'expanded';
-  readonly onNodeOpen: (node: GraphNode) => void;
-  readonly onModeChange: (mode: 'mini' | 'expanded') => void;
-  readonly onNodeMore?: (node: GraphNode) => void;
+interface ContextMenu {
+  nodeId: string;
+  x: number;
+  y: number;
 }
 
-function readScopeState(scopeIdentity: string): SavedScopeState {
-  const fallback: SavedScopeState = { camera: { x: 0, y: 0, scale: 1 }, positions: null };
-  try {
-    const raw = window.localStorage.getItem(`${STORAGE_PREFIX}${encodeURIComponent(scopeIdentity)}`);
-    if (raw === null) return fallback;
-    const value: unknown = JSON.parse(raw);
-    if (value === null || typeof value !== 'object') return fallback;
-    const record = value as { camera?: Partial<Camera>; positions?: GraphPositions | null };
-    const camera = record.camera;
-    if (camera === undefined || !Number.isFinite(camera.x) || !Number.isFinite(camera.y) || !Number.isFinite(camera.scale)) return fallback;
-    const positions: GraphPositions = {};
-    if (record.positions !== null && typeof record.positions === 'object') {
-      for (const [id, point] of Object.entries(record.positions)) {
-        if (point !== null && typeof point === 'object' && Number.isFinite(point.x) && Number.isFinite(point.y)) positions[id] = { x: point.x, y: point.y };
-      }
+const INITIAL_CAMERA: GraphCamera = { x: 0, y: 0, scale: 0.5 };
+const MATCH_DEBOUNCE_MS = 100;
+const SAVE_DEBOUNCE_MS = 700;
+
+function graphStructureKey(model: GraphModel): string {
+  let hash = 2166136261;
+  const feed = (value: string): void => {
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
     }
-    return {
-      camera: { x: camera.x!, y: camera.y!, scale: Math.min(SCALE_MAX, Math.max(SCALE_MIN, camera.scale!)) },
-      positions: record.positions === null ? null : positions,
-    };
-  } catch {
-    return fallback;
-  }
-}
-
-function writeScopeState(scopeIdentity: string, state: SavedScopeState): void {
-  try {
-    window.localStorage.setItem(`${STORAGE_PREFIX}${encodeURIComponent(scopeIdentity)}`, JSON.stringify(state));
-  } catch {
-    // Browser storage can be disabled or full; the in-memory view remains usable.
-  }
-}
-
-function clampScale(scale: number): number {
-  return Math.min(SCALE_MAX, Math.max(SCALE_MIN, scale));
-}
-
-function graphPoint(svg: SVGSVGElement, clientX: number, clientY: number): GraphPoint {
-  const point = svg.createSVGPoint();
-  point.x = clientX;
-  point.y = clientY;
-  const matrix = svg.getScreenCTM();
-  if (matrix === null) return { x: clientX, y: clientY };
-  const local = point.matrixTransform(matrix.inverse());
-  return { x: local.x, y: local.y };
-}
-
-function boundsFor(nodes: readonly GraphNode[], positions: GraphPositions): { left: number; right: number; top: number; bottom: number } {
-  if (nodes.length === 0) return { left: 0, right: WIDTH, top: 0, bottom: HEIGHT };
-  const points = nodes.map((node) => positions[node.id]).filter((point): point is GraphPoint => point !== undefined);
-  if (points.length === 0) return { left: 0, right: WIDTH, top: 0, bottom: HEIGHT };
-  return {
-    left: Math.min(...points.map((point) => point.x)),
-    right: Math.max(...points.map((point) => point.x)),
-    top: Math.min(...points.map((point) => point.y)),
-    bottom: Math.max(...points.map((point) => point.y)),
+    hash ^= 0;
+    hash = Math.imul(hash, 16777619);
   };
+  for (const node of model.nodes) feed(node.id);
+  for (const edge of model.edges) {
+    feed(edge.source);
+    feed(edge.target);
+  }
+  return `${model.nodes.length}:${model.edges.length}:${hash >>> 0}`;
 }
 
-function cameraForFit(nodes: readonly GraphNode[], positions: GraphPositions): Camera {
-  const bounds = boundsFor(nodes, positions);
-  const width = Math.max(120, bounds.right - bounds.left);
-  const height = Math.max(100, bounds.bottom - bounds.top);
-  const scale = clampScale(Math.min(880 / width, 580 / height, 1.65));
-  return {
-    scale,
-    x: WIDTH / 2 - ((bounds.left + bounds.right) / 2) * scale,
-    y: HEIGHT / 2 - ((bounds.top + bounds.bottom) / 2) * scale,
-  };
+function localPoint(event: { clientX: number; clientY: number }, element: HTMLElement): GraphPoint {
+  const rect = element.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function uniqueSimulationLinks(model: GraphModel): Array<{ source: string; target: string }> {
+  const links = new Map<string, { source: string; target: string }>();
+  for (const edge of model.edges) {
+    const [source, target] = edge.source < edge.target ? [edge.source, edge.target] : [edge.target, edge.source];
+    links.set(`${source}\0${target}`, { source, target });
+  }
+  return [...links.values()];
+}
+
+function forceKey(forces: GraphForces): string {
+  return `${forces.centerStrength}/${forces.repelStrength}/${forces.linkStrength}/${forces.linkDistance}`;
+}
+
+function setGroup(groups: GraphColorGroup[], id: string, patch: Partial<GraphColorGroup>): GraphColorGroup[] {
+  return groups.map((group) => group.id === id ? { ...group, ...patch } : group);
+}
+
+function ControlToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }): ReactElement {
+  return <label className="workbench-graph-toggle"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} /><span>{label}</span></label>;
+}
+
+function RangeControl({ label, value, min, max, step, onChange, valueText }: {
+  label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void; valueText?: string;
+}): ReactElement {
+  return <label className="workbench-graph-range"><span>{label}<output>{valueText ?? value}</output></span><input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.currentTarget.value))} /></label>;
 }
 
 export function WorkbenchGraph({
-  nodes,
-  edges,
-  scopeIdentity,
-  selectedNodeId,
+  data,
+  vaultRoot,
   mode,
-  onNodeOpen,
+  focusedPath,
+  selectedPath,
+  loading,
+  error,
+  onRefresh,
+  evaluateQuery,
   onModeChange,
-  onNodeMore,
+  onNodeOpen,
+  onTagOpen,
+  onNodeHover,
 }: WorkbenchGraphProps): ReactElement {
-  const graphWindow = useMemo(() => selectGraphWindow(nodes, edges, selectedNodeId), [nodes, edges, selectedNodeId]);
-  const [stored, setStored] = useState<{ scopeIdentity: string; value: SavedScopeState }>(() => ({ scopeIdentity, value: readScopeState(scopeIdentity) }));
-  const activeState = stored.scopeIdentity === scopeIdentity ? stored.value : readScopeState(scopeIdentity);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const nodeRefs = useRef(new Map<string, SVGGElement>());
-  const dragRef = useRef<DragState | null>(null);
-  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(selectedNodeId);
-  const [labelMode, setLabelMode] = useState<LabelMode>('auto');
-  const [canvasSize, setCanvasSize] = useState<GraphViewport>({ width: 0, height: 0 });
-  const [measureGraphLabel] = useState(() => {
-    const context = document.createElement('canvas').getContext('2d');
-    const fontFamily = getComputedStyle(document.body).fontFamily;
-    if (context !== null) context.font = `13px ${fontFamily}`;
-    return (text: string): number => context?.measureText(text).width ?? text.length * 7;
-  });
-  const suppressNodeClickRef = useRef<string | null>(null);
-  const stateSnapshotRef = useRef({ scopeIdentity, state: activeState });
-  stateSnapshotRef.current = { scopeIdentity, state: activeState };
+  const scope = useMemo(() => graphStateScopeIdentity(vaultRoot, mode, focusedPath), [vaultRoot, mode, focusedPath]);
+  const initialState = useMemo(() => readGraphState(scope), [scope]);
+  const [settings, setSettingsState] = useState<GraphSettings>(initialState.settings);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const [queryResults, setQueryResults] = useState<Map<string, QueryResult>>(() => new Map());
+  const [queryPending, setQueryPending] = useState(false);
+  const [queryError, setQueryError] = useState<string | null>(null);
+  const queryCacheRef = useRef(new Map<string, GraphQueryMatch>());
+  const queryEpochRef = useRef(0);
+  const evaluateQueryRef = useRef(evaluateQuery);
+  evaluateQueryRef.current = evaluateQuery;
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [keyboardFocusId, setKeyboardFocusId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [rendererState, setRendererState] = useState<{ mode: 'webgl' | 'canvas' | 'error'; message: string | null }>({ mode: 'error', message: null });
+  const [layoutError, setLayoutError] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<GraphViewport>({ width: 0, height: 0 });
+  const [playing, setPlaying] = useState(false);
+  const [copiedPath, setCopiedPath] = useState(false);
 
-  const visibleEdges = useMemo(() => graphWindow.edges, [graphWindow.edges]);
-  const layoutPositions = useMemo(
-    () => layoutGraph(graphWindow.nodes, visibleEdges, activeState.positions ?? undefined),
-    // A camera change doesn't affect layout; graph changes reuse the last persisted node positions.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [graphWindow.nodes, visibleEdges, scopeIdentity],
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const labelCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rendererRef = useRef<WorkbenchGraphRenderer | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const workerEpochRef = useRef(0);
+  const workerNodeIdsRef = useRef<string[]>([]);
+  const positionsRef = useRef<Record<string, GraphPoint>>({ ...initialState.positions });
+  const cameraRef = useRef<GraphCamera>(initialState.camera ?? INITIAL_CAMERA);
+  const viewportRef = useRef(viewport);
+  const modelRef = useRef<GraphModel>({ nodes: [], edges: [] });
+  const settingsScopeRef = useRef(scope);
+  const drawFrameRef = useRef<number | null>(null);
+  const panFrameRef = useRef<number | null>(null);
+  const drawRef = useRef<() => void>(() => undefined);
+  const saveTimerRef = useRef<number | null>(null);
+  const dragRef = useRef<GraphDrag | null>(null);
+  const hoveredNotePathRef = useRef<string | null>(null);
+  const onNodeHoverRef = useRef(onNodeHover);
+  onNodeHoverRef.current = onNodeHover;
+  const timelineEdgesRef = useRef<GraphModel['edges']>([]);
+  const timelineProgressRef = useRef(settings.timelineProgress);
+  const animationFrameRef = useRef<number | null>(null);
+  const animationLastTimeRef = useRef(0);
+  const animationUiTimeRef = useRef(0);
+  const autoFitPendingRef = useRef(false);
+  const forceSettingsKey = forceKey(settings.forces);
+
+  const currentQueries = useMemo(
+    () => [...new Set([settings.filterQuery.trim(), ...settings.groups.map((group) => group.query.trim())].filter(Boolean))],
+    [settings.filterQuery, settings.groups],
   );
-  const positions = useMemo(() => ({ ...layoutPositions, ...(activeState.positions ?? {}) }), [layoutPositions, activeState.positions]);
-  const camera = activeState.camera;
-  const activeNodeId = hoveredNodeId ?? selectedNodeId;
-  const pinnedNodeIds = useMemo(() => new Set([selectedNodeId, hoveredNodeId, focusedNodeId].filter((id): id is string => id !== null)), [selectedNodeId, hoveredNodeId, focusedNodeId]);
-  const nodeScreenScale = graphScreenSizeScale(camera, canvasSize);
-  const labelIds = useMemo(
-    () => resolveGraphLabelIds(graphWindow.nodes, visibleEdges, positions, camera, labelMode, pinnedNodeIds, canvasSize, measureGraphLabel),
-    [graphWindow.nodes, visibleEdges, positions, camera, labelMode, pinnedNodeIds, canvasSize, measureGraphLabel],
-  );
-  const connectedIds = useMemo(() => {
-    const result = new Set<string>();
-    if (activeNodeId === null) return result;
-    result.add(activeNodeId);
-    for (const edge of visibleEdges) {
-      if (edge.fromNodeId === activeNodeId) result.add(edge.toNodeId);
-      if (edge.toNodeId === activeNodeId) result.add(edge.fromNodeId);
+
+  useEffect(() => {
+    const epoch = ++queryEpochRef.current;
+    let active = true;
+    const cached = new Map<string, QueryResult>();
+    const pendingQueries: string[] = [];
+    for (const query of currentQueries) {
+      const cacheKey = `${data.revision}\0${query}`;
+      const match = queryCacheRef.current.get(cacheKey);
+      if (match === undefined) pendingQueries.push(query);
+      else cached.set(query, { revision: match.revision, match });
     }
-    return result;
-  }, [visibleEdges, activeNodeId]);
+    setQueryResults(cached);
+    setQueryError(null);
+    setQueryPending(pendingQueries.length > 0);
+    if (pendingQueries.length === 0) return () => { active = false; };
 
-  const updateScopeState = useCallback((update: (current: SavedScopeState) => SavedScopeState): void => {
-    setStored((previous) => {
-      const current = previous.scopeIdentity === scopeIdentity ? previous.value : readScopeState(scopeIdentity);
-      return { scopeIdentity, value: update(current) };
-    });
-  }, [scopeIdentity]);
+    const timer = window.setTimeout(() => {
+      void Promise.all(pendingQueries.map(async (query) => {
+        const response = await evaluateQueryRef.current(query);
+        const match = graphQueryMatchFromResponse(response);
+        if (match.revision !== data.revision) throw new Error('图谱数据已更新，请刷新后重新匹配');
+        return [query, match] as const;
+      })).then((results) => {
+        if (!active || queryEpochRef.current !== epoch) return;
+        const next = new Map(cached);
+        for (const [query, match] of results) {
+          const cacheKey = `${data.revision}\0${query}`;
+          queryCacheRef.current.set(cacheKey, match);
+          if (queryCacheRef.current.size > 128) queryCacheRef.current.delete(queryCacheRef.current.keys().next().value as string);
+          next.set(query, { revision: match.revision, match });
+        }
+        setQueryResults(next);
+        setQueryPending(false);
+      }).catch((cause: unknown) => {
+        if (!active || queryEpochRef.current !== epoch) return;
+        setQueryError(cause instanceof Error ? cause.message : '查询匹配失败');
+        setQueryPending(false);
+      });
+    }, MATCH_DEBOUNCE_MS);
 
-  useEffect(() => {
-    if (stored.scopeIdentity !== scopeIdentity) setStored({ scopeIdentity, value: readScopeState(scopeIdentity) });
-    dragRef.current = null;
-    setHoveredNodeId(null);
-    setLabelMode('auto');
-  }, [scopeIdentity, stored.scopeIdentity]);
-
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (svg === null) return undefined;
-    const measure = (): void => {
-      const { width, height } = svg.getBoundingClientRect();
-      setCanvasSize({ width, height });
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
     };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(svg);
+  }, [currentQueries, data.revision]);
+
+  const filterResult = queryResults.get(settings.filterQuery.trim());
+  const filterMatch = settings.filterQuery.trim() === '' || filterResult?.revision !== data.revision ? null : filterResult.match;
+  const groupMatches = useMemo(() => settings.groups.flatMap((group) => {
+    const query = group.query.trim();
+    const result = queryResults.get(query);
+    return query !== '' && result?.revision === data.revision ? [{ query, color: group.color, match: result.match }] : [];
+  }), [data.revision, queryResults, settings.groups]);
+
+  const modelOptions = useMemo(() => ({
+    mode,
+    focusPath: focusedPath,
+    depth: settings.depth,
+    showOutgoing: settings.showOutgoing,
+    showIncoming: settings.showIncoming,
+    neighborLinks: settings.neighborLinks,
+    showTags: settings.showTags,
+    showAttachments: settings.showAttachments,
+    existingFilesOnly: settings.existingFilesOnly,
+    showOrphans: settings.showOrphans,
+    nodeSizeMultiplier: settings.nodeSizeMultiplier,
+    lineSizeMultiplier: settings.lineSizeMultiplier,
+  }), [mode, focusedPath, settings.depth, settings.showOutgoing, settings.showIncoming, settings.neighborLinks,
+    settings.showTags, settings.showAttachments, settings.existingFilesOnly, settings.showOrphans,
+    settings.nodeSizeMultiplier, settings.lineSizeMultiplier]);
+  const model = useMemo(() => buildGraphModel(data, modelOptions, { filter: filterMatch, groups: groupMatches }), [data, modelOptions, filterMatch, groupMatches]);
+  const structureKey = useMemo(() => graphStructureKey(model), [model]);
+
+  settingsRef.current = settings;
+  modelRef.current = model;
+  viewportRef.current = viewport;
+  timelineProgressRef.current = settings.timelineProgress;
+  timelineEdgesRef.current = [...model.edges].sort((left, right) => (left.mtime ?? 0) - (right.mtime ?? 0) || left.id.localeCompare(right.id));
+
+  const persistNow = useCallback((targetScope = settingsScopeRef.current): void => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    writeGraphState(targetScope, {
+      camera: cameraRef.current,
+      positions: positionsRef.current,
+      settings: settingsRef.current,
+    });
+  }, []);
+
+  const schedulePersist = useCallback((): void => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    const capturedScope = settingsScopeRef.current;
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      writeGraphState(capturedScope, {
+        camera: cameraRef.current,
+        positions: positionsRef.current,
+        settings: settingsRef.current,
+      });
+    }, SAVE_DEBOUNCE_MS);
+  }, []);
+
+  const scheduleDraw = useCallback((): void => {
+    if (drawFrameRef.current !== null) return;
+    drawFrameRef.current = window.requestAnimationFrame(() => {
+      drawFrameRef.current = null;
+      drawRef.current();
+    });
+  }, []);
+
+  const drawGraph = useCallback((): void => {
+    const renderer = rendererRef.current;
+    const surface = surfaceRef.current;
+    const currentModel = modelRef.current;
+    const currentViewport = viewportRef.current;
+    if (renderer === null || surface === null || currentViewport.width <= 0 || currentViewport.height <= 0) return;
+    const allTimelineEdges = timelineEdgesRef.current;
+    const progress = timelineProgressRef.current;
+    const visibleCount = progress >= 1 ? allTimelineEdges.length : Math.ceil(progress * allTimelineEdges.length);
+    const visibleEdges = progress >= 1 ? currentModel.edges : allTimelineEdges.slice(0, visibleCount);
+    renderer.draw({
+      model: progress >= 1 ? currentModel : { nodes: currentModel.nodes, edges: visibleEdges },
+      positions: positionsRef.current,
+      camera: cameraRef.current,
+      viewport: currentViewport,
+      palette: graphPaletteFromElement(surface),
+      selectedId: selectedPath,
+      focusedId: focusedPath,
+      hoveredId,
+      labelMode: settingsRef.current.labelMode,
+      showArrows: settingsRef.current.showArrows,
+    });
+  }, [focusedPath, hoveredId, selectedPath]);
+
+  drawRef.current = drawGraph;
+
+  const updateSettings = useCallback((change: Partial<GraphSettings> | ((current: GraphSettings) => GraphSettings)): void => {
+    setSettingsState((current) => {
+      const next = typeof change === 'function' ? change(current) : { ...current, ...change };
+      settingsRef.current = next;
+      timelineProgressRef.current = next.timelineProgress;
+      return next;
+    });
+    schedulePersist();
+    scheduleDraw();
+  }, [scheduleDraw, schedulePersist]);
+
+  const updateCamera = useCallback((camera: GraphCamera, persist = true): void => {
+    if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
+    panFrameRef.current = null;
+    autoFitPendingRef.current = false;
+    cameraRef.current = camera;
+    scheduleDraw();
+    if (persist) schedulePersist();
+  }, [scheduleDraw, schedulePersist]);
+
+  const startPanInertia = useCallback((velocityX: number, velocityY: number): void => {
+    if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
+    let lastTime = 0;
+    let elapsedTotal = 0;
+    let xVelocity = velocityX;
+    let yVelocity = velocityY;
+    const tick = (time: number): void => {
+      if (lastTime === 0) lastTime = time;
+      const elapsed = Math.min(50, time - lastTime);
+      lastTime = time;
+      elapsedTotal += elapsed;
+      cameraRef.current = {
+        ...cameraRef.current,
+        x: cameraRef.current.x + xVelocity * elapsed,
+        y: cameraRef.current.y + yVelocity * elapsed,
+      };
+      scheduleDraw();
+      const decay = Math.exp(-elapsed / 180);
+      xVelocity *= decay;
+      yVelocity *= decay;
+      if (elapsedTotal < 900 && Math.hypot(xVelocity, yVelocity) >= 0.025) panFrameRef.current = window.requestAnimationFrame(tick);
+      else {
+        panFrameRef.current = null;
+        schedulePersist();
+      }
+    };
+    panFrameRef.current = window.requestAnimationFrame(tick);
+  }, [scheduleDraw, schedulePersist]);
+
+  useEffect(() => {
+    const state = readGraphState(scope);
+    settingsScopeRef.current = scope;
+    positionsRef.current = state.positions;
+    cameraRef.current = state.camera ?? INITIAL_CAMERA;
+    autoFitPendingRef.current = state.camera === null;
+    settingsRef.current = state.settings;
+    timelineProgressRef.current = state.settings.timelineProgress;
+    setSettingsState(state.settings);
+    setHoveredId(null);
+    setKeyboardFocusId(null);
+    setContextMenu(null);
+    scheduleDraw();
+    return () => persistNow(scope);
+  }, [scope, persistNow, scheduleDraw]);
+
+  useEffect(() => {
+    if (surfaceRef.current === null || webglCanvasRef.current === null || fallbackCanvasRef.current === null || labelCanvasRef.current === null) return;
+    try {
+      const renderer = new WorkbenchGraphRenderer(webglCanvasRef.current, fallbackCanvasRef.current, labelCanvasRef.current);
+      rendererRef.current = renderer;
+      setRendererState({ mode: renderer.mode, message: renderer.fallbackReason });
+      renderer.resize(viewportRef.current);
+      scheduleDraw();
+      return () => {
+        renderer.dispose();
+        rendererRef.current = null;
+      };
+    } catch (cause) {
+      setRendererState({ mode: 'error', message: cause instanceof Error ? cause.message : '无法初始化图谱渲染器' });
+    }
+  }, [scheduleDraw]);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect === undefined) return;
+      const next = { width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+      viewportRef.current = next;
+      setViewport(next);
+      rendererRef.current?.resize(next);
+      scheduleDraw();
+    });
+    observer.observe(surface);
     return () => observer.disconnect();
+  }, [scheduleDraw]);
+
+  useEffect(() => {
+    const themeRoot = surfaceRef.current?.closest('[data-theme]');
+    if (themeRoot === null || themeRoot === undefined) return;
+    const observer = new MutationObserver(() => scheduleDraw());
+    observer.observe(themeRoot, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, [scheduleDraw]);
+
+  useEffect(() => {
+    const workerIds = model.nodes.map((node) => node.id);
+    workerNodeIdsRef.current = workerIds;
+    if (typeof Worker === 'undefined') {
+      setLayoutError('此环境无法创建图谱布局 Worker。');
+      return;
+    }
+    const epoch = ++workerEpochRef.current;
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./workbench-graph.worker.ts', import.meta.url), { type: 'module', name: 'Vault Graph Worker' });
+    } catch (cause) {
+      setLayoutError(cause instanceof Error ? cause.message : '图谱布局 Worker 启动失败');
+      return;
+    }
+    workerRef.current = worker;
+    setLayoutError(null);
+    worker.onmessage = (event: MessageEvent<WorkerTick>) => {
+      const message = event.data;
+      if (message.type !== 'tick' || message.epoch !== epoch || message.coordinates.length !== workerIds.length * 2) return;
+      for (let index = 0; index < workerIds.length; index += 1) {
+        const x = message.coordinates[index * 2]!;
+        const y = message.coordinates[index * 2 + 1]!;
+        if (Number.isFinite(x) && Number.isFinite(y)) positionsRef.current[workerIds[index]!] = { x, y };
+      }
+      if (autoFitPendingRef.current && viewportRef.current.width > 0 && viewportRef.current.height > 0) {
+        cameraRef.current = cameraForFit(modelRef.current.nodes, positionsRef.current, viewportRef.current);
+        if (message.alpha <= 0.001) {
+          autoFitPendingRef.current = false;
+          schedulePersist();
+        }
+      }
+      scheduleDraw();
+      if (message.alpha <= 0.001) schedulePersist();
+    };
+    worker.onerror = (event) => setLayoutError(event.message || '图谱布局 Worker 出错');
+    const nodes = model.nodes.map((node) => ({ id: node.id, ...positionsRef.current[node.id] }));
+    worker.postMessage({ type: 'init', epoch, nodes, links: uniqueSimulationLinks(model), forces: settingsRef.current.forces });
+    scheduleDraw();
+    return () => {
+      worker.postMessage({ type: 'stop', epoch });
+      worker.terminate();
+      if (workerRef.current === worker) workerRef.current = null;
+    };
+  }, [structureKey, scheduleDraw, schedulePersist]);
+
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (worker === null) return;
+    worker.postMessage({ type: 'forces', epoch: workerEpochRef.current, forces: settings.forces });
+    schedulePersist();
+  }, [forceSettingsKey, structureKey, settings.forces, schedulePersist]);
+
+  useEffect(() => {
+    scheduleDraw();
+  }, [model, scheduleDraw, selectedPath, focusedPath, hoveredId, settings.labelMode, settings.showArrows]);
+
+  useEffect(() => {
+    if (!playing) return;
+    const tick = (time: number): void => {
+      if (animationLastTimeRef.current === 0) animationLastTimeRef.current = time;
+      const elapsed = Math.min(100, Math.max(0, time - animationLastTimeRef.current));
+      animationLastTimeRef.current = time;
+      const count = timelineEdgesRef.current.length;
+      if (count === 0) {
+        setPlaying(false);
+        return;
+      }
+      const linksPerSecond = Math.min(100, Math.max(5, 0.5 * Math.sqrt(count)));
+      const next = Math.min(1, timelineProgressRef.current + elapsed * linksPerSecond / (count * 1000));
+      timelineProgressRef.current = next;
+      scheduleDraw();
+      if (time - animationUiTimeRef.current > 160 || next === 1) {
+        animationUiTimeRef.current = time;
+        updateSettings({ timelineProgress: next });
+      }
+      if (next >= 1) {
+        setPlaying(false);
+        schedulePersist();
+        return;
+      }
+      animationFrameRef.current = window.requestAnimationFrame(tick);
+    };
+    animationLastTimeRef.current = 0;
+    animationUiTimeRef.current = 0;
+    animationFrameRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    };
+  }, [playing, scheduleDraw, schedulePersist, updateSettings]);
+
+  useEffect(() => {
+    if (!playing) scheduleDraw();
+  }, [settings.timelineProgress, playing, scheduleDraw]);
+
+  useEffect(() => () => {
+    persistNow();
+    if (drawFrameRef.current !== null) window.cancelAnimationFrame(drawFrameRef.current);
+    if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
+    if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
+  }, [persistNow]);
+
+  const openNode = useCallback((node: GraphViewNode, intent: GraphOpenIntent = { newTab: false, split: false }): void => {
+    if (node.type === 'tag') {
+      onTagOpen?.(node.basename, intent);
+      return;
+    }
+    if (node.path !== null) onNodeOpen(node.path, intent);
+  }, [onNodeOpen, onTagOpen]);
+
+  const nodeById = useMemo(() => new Map(model.nodes.map((node) => [node.id, node])), [model.nodes]);
+
+  const notifyNodeHover = useCallback((node: GraphViewNode | null): void => {
+    const nextPath = node?.type === 'note' ? node.path : null;
+    const previousPath = hoveredNotePathRef.current;
+    if (previousPath !== nextPath) {
+      if (previousPath !== null) onNodeHover?.(previousPath, null);
+      hoveredNotePathRef.current = nextPath;
+    }
+    if (nextPath === null || node === null) return;
+    const surface = surfaceRef.current;
+    const position = positionsRef.current[node.id];
+    if (surface === null || position === undefined) return;
+    const center = graphPointToScreen(position, cameraRef.current, viewportRef.current);
+    const radius = graphNodeScreenRadius(node, cameraRef.current.scale);
+    const bounds = surface.getBoundingClientRect();
+    onNodeHover?.(nextPath, new DOMRect(bounds.left + center.x - radius, bounds.top + center.y - radius, radius * 2, radius * 2));
+  }, [onNodeHover]);
+
+  useEffect(() => () => {
+    const path = hoveredNotePathRef.current;
+    if (path !== null) onNodeHoverRef.current?.(path, null);
   }, []);
 
   useEffect(() => {
-    return scheduleGraphStateWrite(
-      scopeIdentity,
-      activeState,
-      () => stateSnapshotRef.current.scopeIdentity,
-      writeScopeState,
-      (callback, delay) => window.setTimeout(callback, delay),
-      (timer) => window.clearTimeout(timer),
-    );
-  }, [scopeIdentity, activeState]);
-
-  useEffect(() => () => writeScopeState(stateSnapshotRef.current.scopeIdentity, stateSnapshotRef.current.state), []);
-
-  useEffect(() => {
-    const missingPosition = graphWindow.nodes.some((node) => activeState.positions?.[node.id] === undefined);
-    if (activeState.positions === null || missingPosition) {
-      updateScopeState((current) => ({ ...current, positions }));
+    const path = hoveredNotePathRef.current;
+    if (path !== null && !model.nodes.some((node) => node.path === path && node.type === 'note')) {
+      onNodeHover?.(path, null);
+      hoveredNotePathRef.current = null;
     }
-  }, [graphWindow.nodes, positions, activeState.positions, updateScopeState]);
+  }, [model.nodes, onNodeHover]);
 
-  useEffect(() => {
-    setFocusedNodeId((current) => current !== null && graphWindow.nodes.some((node) => node.id === current)
-      ? current
-      : selectedNodeId ?? graphWindow.nodes[0]?.id ?? null);
-  }, [graphWindow.nodes, selectedNodeId]);
+  const fitGraph = useCallback((): void => {
+    updateCamera(cameraForFit(modelRef.current.nodes, positionsRef.current, viewportRef.current));
+  }, [updateCamera]);
 
-  const setCamera = useCallback((nextCamera: Camera): void => {
-    updateScopeState((current) => ({ ...current, camera: { ...nextCamera, scale: clampScale(nextCamera.scale) } }));
-  }, [updateScopeState]);
+  const takeScreenshot = useCallback(async (): Promise<void> => {
+    const canvases = [webglCanvasRef.current, fallbackCanvasRef.current, labelCanvasRef.current].filter((canvas): canvas is HTMLCanvasElement => canvas !== null);
+    try {
+      const url = compositeGraphSnapshot(canvases);
+      if (typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard?.write === 'function') {
+        try {
+          const png = fetch(url).then((response) => response.blob());
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+          return;
+        } catch {
+          // Clipboard permissions and image support vary by host; keep screenshot export available.
+        }
+      }
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'noltri-graph.png';
+      link.click();
+    } catch (cause) {
+      setLayoutError(cause instanceof Error ? cause.message : '截图失败');
+    }
+  }, []);
 
-  const fitView = useCallback((): void => setCamera(cameraForFit(graphWindow.nodes, positions)), [setCamera, graphWindow.nodes, positions]);
-
-  const updatePositions = useCallback((nextPositions: GraphPositions): void => {
-    updateScopeState((current) => ({ ...current, positions: nextPositions }));
-  }, [updateScopeState]);
-
-  function moveFocus(currentId: string, key: string): void {
-    const point = positions[currentId];
-    if (point === undefined) return;
-    const direction = key === 'ArrowRight' ? { x: 1, y: 0 } : key === 'ArrowLeft' ? { x: -1, y: 0 } : key === 'ArrowDown' ? { x: 0, y: 1 } : { x: 0, y: -1 };
-    const candidates = graphWindow.nodes.filter((node) => node.id !== currentId).map((node) => ({ node, point: positions[node.id] })).filter((candidate): candidate is { node: GraphNode; point: GraphPoint } => candidate.point !== undefined);
-    const target = candidates
-      .map((candidate) => {
-        const dx = candidate.point.x - point.x;
-        const dy = candidate.point.y - point.y;
-        const forward = dx * direction.x + dy * direction.y;
-        const sideways = Math.abs(dx * direction.y - dy * direction.x);
-        return { ...candidate, forward, score: forward > 0 ? sideways * 2 + forward * 0.35 : Number.POSITIVE_INFINITY };
-      })
-      .filter((candidate) => Number.isFinite(candidate.score))
-      .sort((a, b) => a.score - b.score)[0]?.node ?? candidates[0]?.node;
-    if (target === undefined) return;
-    setFocusedNodeId(target.id);
-    nodeRefs.current.get(target.id)?.focus();
-  }
-
-  function openMore(node: GraphNode): void {
-    onNodeMore?.(node);
-  }
-
-  function onNodePointerDown(event: ReactPointerEvent<SVGGElement>, node: GraphNode): void {
-    if (event.button !== 0 || svgRef.current === null) return;
-    suppressNodeClickRef.current = null;
-    event.preventDefault();
-    event.stopPropagation();
-    const point = graphPoint(svgRef.current, event.clientX, event.clientY);
-    const nodePoint = positions[node.id];
-    if (nodePoint === undefined) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = {
-      pointerId: event.pointerId,
-      kind: 'node',
-      nodeId: node.id,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startPoint: point,
-      startPosition: nodePoint,
-      moved: false,
-    };
-  }
-
-  function onCanvasPointerDown(event: ReactPointerEvent<SVGSVGElement>): void {
-    if (event.button !== 0 || (event.target as Element).closest('[data-graph-node]') !== null) return;
-    event.preventDefault();
-    const point = graphPoint(event.currentTarget, event.clientX, event.clientY);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = {
-      pointerId: event.pointerId,
-      kind: 'pan',
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startPoint: point,
-      startCamera: camera,
-      moved: false,
-    };
-  }
-
-  function onPointerMove(event: ReactPointerEvent<SVGSVGElement>): void {
+  const updatePointer = useCallback((event: PointerEvent<HTMLDivElement>): void => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    const point = localPoint(event, surface);
     const drag = dragRef.current;
-    if (drag === null || drag.pointerId !== event.pointerId) return;
-    const point = graphPoint(event.currentTarget, event.clientX, event.clientY);
-    if (Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY) > 4) drag.moved = true;
-    if (drag.kind === 'pan' && drag.startCamera !== undefined) {
-      setCamera({ ...drag.startCamera, x: drag.startCamera.x + point.x - drag.startPoint.x, y: drag.startCamera.y + point.y - drag.startPoint.y });
-    } else if (drag.nodeId !== undefined && drag.startPosition !== undefined) {
-      const nextPoint = {
-        x: drag.startPosition.x + (point.x - drag.startPoint.x) / camera.scale,
-        y: drag.startPosition.y + (point.y - drag.startPoint.y) / camera.scale,
-      };
-      updatePositions({ ...positions, [drag.nodeId]: nextPoint });
+    if (drag !== null && drag.pointerId === event.pointerId) {
+      const movement = Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY);
+      if (drag.nodeId !== null) {
+        if (!drag.moved && movement < 5) return;
+        drag.moved = true;
+        const world = graphPointFromScreen(point, cameraRef.current, viewportRef.current);
+        positionsRef.current[drag.nodeId] = world;
+        workerRef.current?.postMessage({ type: 'pin', epoch: workerEpochRef.current, id: drag.nodeId, point: world });
+      } else {
+        const elapsed = Math.max(8, event.timeStamp - drag.lastMoveTime);
+        const instantX = Math.max(-2, Math.min(2, (event.clientX - drag.lastClientX) / elapsed));
+        const instantY = Math.max(-2, Math.min(2, (event.clientY - drag.lastClientY) / elapsed));
+        drag.panVelocityX = drag.panVelocityX * 0.55 + instantX * 0.45;
+        drag.panVelocityY = drag.panVelocityY * 0.55 + instantY * 0.45;
+        drag.lastClientX = event.clientX;
+        drag.lastClientY = event.clientY;
+        drag.lastMoveTime = event.timeStamp;
+        drag.moved = movement >= 1 || drag.moved;
+        updateCamera({
+          ...drag.startCamera,
+          x: drag.startCamera.x + point.x - drag.startScreen.x,
+          y: drag.startCamera.y + point.y - drag.startScreen.y,
+        }, false);
+      }
+      scheduleDraw();
+      return;
     }
-  }
+    const node = graphNodeAtPoint(modelRef.current.nodes, positionsRef.current, cameraRef.current, viewportRef.current, point);
+    setHoveredId(node?.id ?? null);
+    setKeyboardFocusId(null);
+    notifyNodeHover(node);
+  }, [notifyNodeHover, scheduleDraw, updateCamera]);
 
-  function onPointerUp(event: ReactPointerEvent<SVGSVGElement>): void {
+  const endPointer = useCallback((event: PointerEvent<HTMLDivElement>, canceled = false): void => {
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
     dragRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    const moved = drag.moved || Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY) > 4;
-    if (drag.kind === 'node' && moved && drag.nodeId !== undefined) suppressNodeClickRef.current = drag.nodeId;
-  }
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer may already be released */ }
+    if (drag.nodeId !== null && drag.moved) {
+      workerRef.current?.postMessage({ type: 'pin', epoch: workerEpochRef.current, id: drag.nodeId, point: null });
+      schedulePersist();
+    } else if (drag.nodeId === null && drag.moved) {
+      if (!canceled && Math.hypot(drag.panVelocityX, drag.panVelocityY) >= 0.025) startPanInertia(drag.panVelocityX, drag.panVelocityY);
+      else schedulePersist();
+    } else if (!canceled && !drag.moved && drag.nodeId !== null) {
+      const node = nodeById.get(drag.nodeId);
+      if (node !== undefined) openNode(node, { newTab: event.metaKey || event.ctrlKey, split: (event.metaKey || event.ctrlKey) && event.shiftKey });
+    }
+    scheduleDraw();
+  }, [nodeById, notifyNodeHover, openNode, scheduleDraw, schedulePersist, startPanInertia]);
 
-  function onNodeClick(event: ReactMouseEvent<SVGGElement>, node: GraphNode): void {
-    if (event.detail > 0 && suppressNodeClickRef.current === node.id) {
-      suppressNodeClickRef.current = null;
-      event.preventDefault();
-      event.stopPropagation();
+  const handlePointerDown = useCallback((event: PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    setContextMenu(null);
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
+    panFrameRef.current = null;
+    const point = localPoint(event, surface);
+    const node = graphNodeAtPoint(modelRef.current.nodes, positionsRef.current, cameraRef.current, viewportRef.current, point);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      nodeId: node?.id ?? null,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+      lastMoveTime: event.timeStamp,
+      panVelocityX: 0,
+      panVelocityY: 0,
+      startScreen: point,
+      startCamera: cameraRef.current,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }, []);
+
+  const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewportRef.current.height : 1;
+    const delta = event.deltaY * unit;
+    const anchor = delta > 0 ? { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 } : localPoint(event, event.currentTarget);
+    updateCamera(zoomCameraAt(cameraRef.current, cameraRef.current.scale * 1.5 ** (-delta / 120), anchor, viewportRef.current));
+  }, [updateCamera]);
+
+  const handleContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    const point = localPoint(event, surface);
+    const node = graphNodeAtPoint(modelRef.current.nodes, positionsRef.current, cameraRef.current, viewportRef.current, point);
+    if (node !== null) setContextMenu({ nodeId: node.id, x: point.x, y: point.y });
+    else setContextMenu(null);
+  }, []);
+
+  const handleKeyboard = useCallback((event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape') {
+      setContextMenu(null);
+      setKeyboardFocusId(null);
+      setHoveredId(null);
+      scheduleDraw();
       return;
     }
-    onNodeOpen(node);
-  }
-
-  function onWheel(event: ReactWheelEvent<SVGSVGElement>): void {
-    event.preventDefault();
-    const point = graphPoint(event.currentTarget, event.clientX, event.clientY);
-    const nextScale = clampScale(camera.scale * Math.exp(-event.deltaY * 0.0012));
-    const graphX = (point.x - camera.x) / camera.scale;
-    const graphY = (point.y - camera.y) / camera.scale;
-    setCamera({ scale: nextScale, x: point.x - graphX * nextScale, y: point.y - graphY * nextScale });
-  }
-
-  function onGraphKeyDown(event: ReactKeyboardEvent<SVGSVGElement>): void {
-    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Home') {
+      event.preventDefault();
+      fitGraph();
+      return;
+    }
     if (event.key === '+' || event.key === '=') {
-      event.preventDefault();
-      setCamera({ ...camera, scale: clampScale(camera.scale * 1.18) });
-    } else if (event.key === '-') {
-      event.preventDefault();
-      setCamera({ ...camera, scale: clampScale(camera.scale / 1.18) });
-    } else if (event.key === '0') {
-      event.preventDefault();
-      setCamera({ x: 0, y: 0, scale: 1 });
-    } else if (event.key.toLowerCase() === 'f') {
-      event.preventDefault();
-      fitView();
-    } else if (event.key.startsWith('Arrow')) {
-      event.preventDefault();
-      const shift = event.key === 'ArrowLeft' ? { x: 40, y: 0 } : event.key === 'ArrowRight' ? { x: -40, y: 0 } : event.key === 'ArrowUp' ? { x: 0, y: 40 } : { x: 0, y: -40 };
-      setCamera({ ...camera, x: camera.x + shift.x, y: camera.y + shift.y });
+      updateCamera(zoomCameraAt(cameraRef.current, cameraRef.current.scale * 1.2, { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 }, viewportRef.current));
+      return;
     }
-  }
-
-  const onMoreKeyboard = (event: ReactKeyboardEvent<SVGGElement>, node: GraphNode): void => {
-    if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
-      event.preventDefault();
-      event.stopPropagation();
-      openMore(node);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onNodeOpen(node);
-    } else if (event.key.startsWith('Arrow')) {
-      event.preventDefault();
-      event.stopPropagation();
-      moveFocus(node.id, event.key);
+    if (event.key === '-') {
+      updateCamera(zoomCameraAt(cameraRef.current, cameraRef.current.scale / 1.2, { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 }, viewportRef.current));
+      return;
     }
-  };
+    const nodes = modelRef.current.nodes;
+    if (nodes.length === 0) return;
+    const index = Math.max(0, nodes.findIndex((node) => node.id === (keyboardFocusId ?? hoveredId)));
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const next = nodes[(index + 1) % nodes.length]!;
+      setKeyboardFocusId(next.id);
+      setHoveredId(next.id);
+      scheduleDraw();
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+      event.preventDefault();
+      const next = nodes[(index - 1 + nodes.length) % nodes.length]!;
+      setKeyboardFocusId(next.id);
+      setHoveredId(next.id);
+      scheduleDraw();
+    } else if (event.key === 'Enter') {
+      const node = nodes[index];
+      if (node !== undefined) openNode(node);
+    }
+  }, [fitGraph, hoveredId, keyboardFocusId, openNode, scheduleDraw, updateCamera]);
 
-  return (
-    <section className={`workbench-graph workbench-graph-${mode}`} aria-label="知识关系图">
-      <div className="workbench-graph-toolbar">
-        <button type="button" className="workbench-graph-control" onClick={fitView} aria-label="适配全部节点">适配</button>
-        <details className="workbench-graph-options">
-          <summary aria-label="图显示设置" title="图显示设置">⋯</summary>
-          <div className="workbench-graph-options-menu" role="group" aria-label="标签设置">
-            <span className="workbench-graph-options-label">节点标签</span>
-            <button type="button" aria-pressed={labelMode === 'auto'} onClick={() => setLabelMode('auto')}>自动显示</button>
-            <button type="button" aria-pressed={labelMode === 'show'} onClick={() => setLabelMode('show')}>显示全部文字</button>
-            <button type="button" aria-pressed={labelMode === 'hide'} onClick={() => setLabelMode('hide')}>隐藏文字</button>
-            {graphWindow.hiddenCount > 0 && <span className="workbench-graph-limit-note">为保持流畅暂时折叠 {graphWindow.hiddenCount} 个节点；选中节点及相邻关系会优先保留。</span>}
-          </div>
-        </details>
-        <button
-          type="button"
-          className="workbench-graph-control workbench-graph-mode"
-          aria-label={mode === 'expanded' ? '收起 graph view' : '展开 graph view'}
-          onClick={() => onModeChange(mode === 'expanded' ? 'mini' : 'expanded')}
-        >
-          {mode === 'expanded' ? '收起' : '展开 graph view'}
-        </button>
+  const updateForce = (key: keyof GraphForces, value: number): void => updateSettings((current) => ({
+    ...current,
+    forces: { ...current.forces, [key]: value },
+  }));
+
+  const contextNode = contextMenu === null ? null : nodeById.get(contextMenu.nodeId) ?? null;
+
+  return <section className="workbench-graph" aria-label="笔记关系图谱">
+    <div className="workbench-graph-toolbar">
+      <div className="workbench-graph-mode" role="group" aria-label="图谱范围">
+        <button type="button" aria-pressed={mode === 'global'} onClick={() => onModeChange?.('global')}>全局</button>
+        <button type="button" aria-pressed={mode === 'local'} onClick={() => onModeChange?.('local')}>局部</button>
       </div>
-      <svg
-        ref={svgRef}
-        className="workbench-graph-canvas"
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        role="group"
-        aria-label={`知识关系图，已绘制 ${graphWindow.nodes.length} 个节点`}
-        tabIndex={0}
-        onPointerDown={onCanvasPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onWheel={onWheel}
-        onKeyDown={onGraphKeyDown}
-        onDoubleClick={(event) => { if ((event.target as Element).tagName.toLowerCase() === 'svg') fitView(); }}
-      >
-        <title>知识关系图</title>
-        <g className="workbench-graph-world" transform={`translate(${camera.x} ${camera.y}) scale(${camera.scale})`}>
-          <g className="workbench-graph-edges" aria-hidden="true">
-            {visibleEdges.map((edge: GraphEdge) => {
-              const from = positions[edge.fromNodeId];
-              const to = positions[edge.toNodeId];
-              if (from === undefined || to === undefined) return null;
-              const isActive = activeNodeId !== null && (edge.fromNodeId === activeNodeId || edge.toNodeId === activeNodeId);
-              return <line key={edge.id} className={isActive ? 'workbench-graph-edge workbench-graph-edge-active' : 'workbench-graph-edge'} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />;
-            })}
-          </g>
-          <g className="workbench-graph-nodes">
-            {graphWindow.nodes.map((node) => {
-              const point = positions[node.id];
-              if (point === undefined) return null;
-              const degree = graphWindow.degree.get(node.id) ?? 0;
-              const radius = graphNodeRadius(degree);
-              const isSelected = node.id === selectedNodeId;
-              const isConnected = connectedIds.has(node.id);
-              const isDimmed = activeNodeId !== null && !isConnected;
-              const hasLabel = labelIds.has(node.id);
-              return (
-                <g
-                  key={node.id}
-                  ref={(element) => { if (element === null) nodeRefs.current.delete(node.id); else nodeRefs.current.set(node.id, element); }}
-                  className={`workbench-graph-node${isSelected ? ' is-selected' : ''}${isDimmed ? ' is-dimmed' : ''}${hasLabel ? ' has-label' : ''}`}
-                  data-graph-node
-                  data-node-type={node.nodeType}
-                  data-selected={isSelected || undefined}
-                  role="button"
-                  aria-label={`${node.title}${node.nodeType === 'chapter' ? '，章节' : '，主题'}${degree ? `，${degree} 个关系` : ''}`}
-                  aria-pressed={isSelected}
-                  tabIndex={focusedNodeId === node.id || (focusedNodeId === null && node.id === graphWindow.nodes[0]?.id) ? 0 : -1}
-                  transform={`translate(${point.x} ${point.y}) scale(${nodeScreenScale})`}
-                  onPointerDown={(event) => onNodePointerDown(event, node)}
-                  onClick={(event) => onNodeClick(event, node)}
-                  onPointerEnter={() => setHoveredNodeId(node.id)}
-                  onPointerLeave={() => setHoveredNodeId((current) => current === node.id ? null : current)}
-                  onFocus={() => setFocusedNodeId(node.id)}
-                  onKeyDown={(event) => onMoreKeyboard(event, node)}
-                  onContextMenu={(event) => { event.preventDefault(); openMore(node); }}
-                >
-                  <title>{node.title}</title>
-                  <circle className="workbench-graph-node-hit" r="12" />
-                  <circle className="workbench-graph-node-halo" r={radius + 5} />
-                  <circle className="workbench-graph-node-dot" r={radius} />
-                  <text className="workbench-graph-label" x={radius + 7} y="4">{node.title}</text>
-                </g>
-              );
-            })}
-          </g>
-        </g>
-        {graphWindow.nodes.length === 0 && <text className="workbench-graph-empty" x="500" y="350" textAnchor="middle">当前范围还没有可连接的知识</text>}
-      </svg>
-    </section>
-  );
+      <button type="button" className="workbench-graph-control" aria-label="适配全部节点" title="适配全部节点" onClick={fitGraph}>适配</button>
+          <button type="button" className="workbench-graph-control" aria-label="复制或下载图谱截图" title="复制截图；剪贴板不可用时下载" onClick={takeScreenshot}>截图</button>
+      {onRefresh !== undefined ? <button type="button" className="workbench-graph-control" aria-label="刷新图谱" title="刷新图谱" onClick={onRefresh}>刷新</button> : null}
+      <details className="workbench-graph-options">
+        <summary aria-label="图谱设置">⚙</summary>
+        <div className="workbench-graph-options-menu">
+          <section aria-labelledby="graph-filters-heading">
+            <h3 id="graph-filters-heading">Filters</h3>
+            <label className="workbench-graph-query"><span>查询</span><input value={settings.filterQuery} maxLength={2000} placeholder="path:项目 tag:方法" onChange={(event) => updateSettings({ filterQuery: event.currentTarget.value })} /></label>
+            {queryPending ? <span className="workbench-graph-query-status" role="status">正在匹配…</span> : null}
+            {queryError !== null ? <span className="workbench-graph-query-error" role="status">匹配失败：{queryError}</span> : null}
+            <div className="workbench-graph-toggles">
+              <ControlToggle label="标签节点" checked={settings.showTags} onChange={(showTags) => updateSettings({ showTags })} />
+              <ControlToggle label="附件节点" checked={settings.showAttachments} onChange={(showAttachments) => updateSettings({ showAttachments })} />
+              <ControlToggle label="仅现存文件" checked={settings.existingFilesOnly} onChange={(existingFilesOnly) => updateSettings({ existingFilesOnly })} />
+              <ControlToggle label="孤立节点" checked={settings.showOrphans} onChange={(showOrphans) => updateSettings({ showOrphans })} />
+            </div>
+          </section>
+          <section aria-labelledby="graph-display-heading">
+            <h3 id="graph-display-heading">Display</h3>
+            <div className="workbench-graph-toggles">
+              <ControlToggle label="箭头" checked={settings.showArrows} onChange={(showArrows) => updateSettings({ showArrows })} />
+              <ControlToggle label="出链" checked={settings.showOutgoing} onChange={(showOutgoing) => updateSettings({ showOutgoing })} />
+              <ControlToggle label="入链" checked={settings.showIncoming} onChange={(showIncoming) => updateSettings({ showIncoming })} />
+              {mode === 'local' ? <ControlToggle label="邻居互连" checked={settings.neighborLinks} onChange={(neighborLinks) => updateSettings({ neighborLinks })} /> : null}
+            </div>
+            {mode === 'local' ? <RangeControl label="Depth" value={settings.depth} min={1} max={5} step={1} onChange={(depth) => updateSettings({ depth })} /> : null}
+            <label className="workbench-graph-select"><span>标签密度</span><select value={settings.labelMode} onChange={(event) => updateSettings({ labelMode: event.currentTarget.value as GraphSettings['labelMode'] })}><option value="auto">自动</option><option value="show">全部</option><option value="hide">隐藏</option></select></label>
+            <RangeControl label="节点大小" value={settings.nodeSizeMultiplier} min={0.1} max={5} step={0.1} valueText={settings.nodeSizeMultiplier.toFixed(1)} onChange={(nodeSizeMultiplier) => updateSettings({ nodeSizeMultiplier })} />
+            <RangeControl label="连线粗细" value={settings.lineSizeMultiplier} min={0.1} max={5} step={0.1} valueText={settings.lineSizeMultiplier.toFixed(1)} onChange={(lineSizeMultiplier) => updateSettings({ lineSizeMultiplier })} />
+          </section>
+          <section aria-labelledby="graph-groups-heading">
+            <div className="workbench-graph-section-heading"><h3 id="graph-groups-heading">Groups</h3><button type="button" onClick={() => updateSettings((current) => ({ ...current, groups: [...current.groups, createGraphGroup(current.groups.length)] }))}>添加</button></div>
+            {settings.groups.length === 0 ? <p className="workbench-graph-muted">分组只着色，不会过滤节点。</p> : null}
+            {settings.groups.map((group, index) => <div className="workbench-graph-group" key={group.id}>
+              <input aria-label={`分组 ${index + 1} 查询`} value={group.query} maxLength={2000} placeholder="查询" onChange={(event) => {
+                const query = event.currentTarget.value;
+                updateSettings((current) => ({ ...current, groups: setGroup(current.groups, group.id, { query }) }));
+              }} />
+              <input type="color" aria-label={`分组 ${index + 1} 颜色`} value={graphColorInputValue(group.color)} onChange={(event) => {
+                const color = event.currentTarget.value;
+                updateSettings((current) => ({ ...current, groups: setGroup(current.groups, group.id, { color }) }));
+              }} />
+              <button type="button" aria-label={`删除分组 ${index + 1}`} onClick={() => updateSettings((current) => ({ ...current, groups: current.groups.filter((item) => item.id !== group.id) }))}>×</button>
+            </div>)}
+          </section>
+          <section aria-labelledby="graph-forces-heading">
+            <h3 id="graph-forces-heading">Forces</h3>
+            <RangeControl label="向心力" value={settings.forces.centerStrength} min={0} max={1} step={0.01} valueText={settings.forces.centerStrength.toFixed(2)} onChange={(value) => updateForce('centerStrength', value)} />
+            <RangeControl label="斥力" value={settings.forces.repelStrength} min={0} max={20} step={0.1} valueText={settings.forces.repelStrength.toFixed(1)} onChange={(value) => updateForce('repelStrength', value)} />
+            <RangeControl label="弹簧力" value={settings.forces.linkStrength} min={0} max={1} step={0.01} valueText={settings.forces.linkStrength.toFixed(2)} onChange={(value) => updateForce('linkStrength', value)} />
+            <RangeControl label="连线距离" value={settings.forces.linkDistance} min={30} max={500} step={5} valueText={`${settings.forces.linkDistance}px`} onChange={(value) => updateForce('linkDistance', value)} />
+            <button type="button" className="workbench-graph-reset" onClick={() => updateSettings((current) => ({ ...current, forces: { ...DEFAULT_GRAPH_SETTINGS.forces } }))}>恢复默认力参数</button>
+          </section>
+        </div>
+      </details>
+    </div>
+
+    <div
+      ref={surfaceRef}
+      className="workbench-graph-surface"
+      role="application"
+      aria-label={`${mode === 'global' ? '全局' : '局部'}笔记关系图。方向键选择节点，回车打开，Home 适配画布。`}
+      tabIndex={0}
+      onPointerDown={handlePointerDown}
+      onPointerMove={updatePointer}
+      onPointerUp={(event) => endPointer(event)}
+      onPointerCancel={(event) => endPointer(event, true)}
+      onPointerLeave={() => { if (dragRef.current === null) { setHoveredId(null); notifyNodeHover(null); } }}
+      onWheel={handleWheel}
+      onContextMenu={handleContextMenu}
+      onKeyDown={handleKeyboard}
+    >
+      <canvas ref={webglCanvasRef} className="workbench-graph-layer workbench-graph-webgl" aria-hidden="true" />
+      <canvas ref={fallbackCanvasRef} className="workbench-graph-layer workbench-graph-fallback" aria-hidden="true" />
+      <canvas ref={labelCanvasRef} className="workbench-graph-layer workbench-graph-labels" aria-hidden="true" />
+      {model.nodes.length === 0 && !loading ? <div className="workbench-graph-empty" role="status">{error !== null ? '图谱暂不可用' : mode === 'local' && focusedPath === null ? '打开一篇笔记以查看局部图' : '没有符合条件的节点'}</div> : null}
+      {loading ? <span className="workbench-graph-loading" role="status">正在刷新图谱…</span> : null}
+      {error !== null ? <span className="workbench-graph-error" role="alert">{error}</span> : null}
+      {rendererState.mode === 'canvas' ? <span className="workbench-graph-fallback-note" role="status">WebGL2 不可用，已切换到 Canvas 2D。</span> : null}
+      {rendererState.mode === 'error' ? <span className="workbench-graph-error" role="alert">图谱渲染不可用：{rendererState.message}</span> : null}
+      {layoutError !== null ? <span className="workbench-graph-error" role="alert">{layoutError}</span> : null}
+      {contextMenu !== null && contextNode !== null ? <div className="workbench-graph-context" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <button type="button" role="menuitem" onClick={() => { openNode(contextNode); setContextMenu(null); }}>打开 {contextNode.title}</button>
+        {contextNode.path !== null ? <button type="button" role="menuitem" onClick={() => {
+          void navigator.clipboard?.writeText(contextNode.path!).then(() => setCopiedPath(true)).catch(() => setCopiedPath(false));
+          setContextMenu(null);
+        }}>复制路径</button> : null}
+      </div> : null}
+      {copiedPath ? <span className="workbench-graph-copy-status" role="status" onAnimationEnd={() => setCopiedPath(false)}>路径已复制</span> : null}
+      {layoutError === null && rendererState.mode !== 'error' ? <span className="workbench-graph-count" aria-live="polite">{model.nodes.length} 个节点 · {model.edges.length} 条连接</span> : null}
+    </div>
+
+    <div className="workbench-graph-timeline" aria-label="按文件修改时间回放图谱连接">
+      <button type="button" onClick={() => {
+        if (playing) setPlaying(false);
+        else {
+          if (settings.timelineProgress >= 1) updateSettings({ timelineProgress: 0 });
+          setPlaying(true);
+        }
+      }} disabled={model.edges.length === 0}>{playing ? '停止回放' : '按修改时间回放'}</button>
+      <input aria-label="修改时间回放进度" type="range" min={0} max={1} step={0.01} value={settings.timelineProgress} onChange={(event) => {
+        const value = Number(event.currentTarget.value);
+        setPlaying(false);
+        updateSettings({ timelineProgress: value });
+      }} />
+      <span>{Math.round(settings.timelineProgress * 100)}%</span>
+      <span className="workbench-graph-timeline-note">按文件修改时间排序；不是历史快照</span>
+    </div>
+  </section>;
 }

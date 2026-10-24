@@ -45,7 +45,7 @@ import { CORE_PRODUCT_ID, CORE_PROTOCOL_VERSION } from '@noltri/schema';
 import { createId, silentLogger, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
-import type { ActorContext, CoreDeps } from './types';
+import type { ActorContext, CoreDeps, GraphNoteStore } from './types';
 import { retryCapture, runCapture } from './pipeline/capture';
 import { getTree } from './services/tree';
 import { connectChapter, createChapter, disconnectChapter, getGraphNote, listGraphNotes, resolveChapter, saveGraphNote, selectGraph } from './services/graph';
@@ -61,6 +61,7 @@ export interface KnowledgeCoreOptions {
   provider: AIProvider;
   config: CoreConfig;
   logger?: Logger;
+  graphNoteStore?: GraphNoteStore;
 }
 
 export interface KnowledgeCore {
@@ -101,6 +102,7 @@ export function createKnowledgeCore(options: KnowledgeCoreOptions): KnowledgeCor
     provider: options.provider,
     config: options.config,
     logger: options.logger ?? silentLogger,
+    ...(options.graphNoteStore === undefined ? {} : { graphNoteStore: options.graphNoteStore }),
   };
   // One id per running instance, not per request, so callers can detect a Core restart.
   const instanceId = createId();

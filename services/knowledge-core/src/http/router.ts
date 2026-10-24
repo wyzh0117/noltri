@@ -8,6 +8,8 @@
 import {
   assignSourceRequestSchema,
   captureRequestSchema,
+  createVaultFolderRequestSchema,
+  deleteVaultFileRequestSchema,
   createItemRelationInputSchema,
   createLibraryItemInputSchema,
   createChapterRequestSchema,
@@ -22,6 +24,16 @@ import {
   patchLibraryItemInputSchema,
   resolveChapterRequestSchema,
   saveGraphNoteRequestSchema,
+  noteSearchQuerySchema,
+  writeNoteFileRequestSchema,
+  renameNoteRequestSchema,
+  openVaultRequestSchema,
+  resolveNoteLinkRequestSchema,
+  renameVaultBlockRequestSchema,
+  restoreLegacyNoteRequestSchema,
+  restoreNoteHistoryRequestSchema,
+  updateVaultSettingsRequestSchema,
+  vaultSubpathResponseSchema,
   searchRequestSchema,
   treeQuerySchema,
   type AssignSourceRequest,
@@ -40,6 +52,7 @@ import { resolveIdentity as defaultResolveIdentity, type IdentityResolver } from
 import { requireNodeAccess, requireScope, type GrantStore } from '../authorization';
 import type { KnowledgeCore } from '../core';
 import type { ActorContext } from '../types';
+import type { VaultService } from '../notes/vault';
 import { handleAdminGrants } from './admin';
 import { parseWith, readJsonBody } from './parse';
 import {
@@ -64,6 +77,7 @@ export interface RouterDeps {
   identityResolver?: IdentityResolver;
   /** Presence of a store is what turns 连接中心's own endpoints on. */
   grants?: GrantStore | null;
+  vault?: VaultService;
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
@@ -89,6 +103,35 @@ const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'tree'] },
   { method: 'POST', segments: ['api', 'graph', 'select'] },
   { method: 'POST', segments: ['api', 'graph', 'resolve-chapter'] },
+  { method: 'GET', segments: ['api', 'vault'] },
+  { method: 'GET', segments: ['api', 'vault', 'settings'] },
+  { method: 'PUT', segments: ['api', 'vault', 'settings'] },
+  { method: 'POST', segments: ['api', 'vault', 'open'] },
+  { method: 'POST', segments: ['api', 'vault', 'folder'] },
+  { method: 'GET', segments: ['api', 'vault', 'delete-preview'] },
+  { method: 'GET', segments: ['api', 'vault', 'diagnostics'] },
+  { method: 'GET', segments: ['api', 'vault', 'asset'] },
+  { method: 'GET', segments: ['api', 'vault', 'file'] },
+  { method: 'PUT', segments: ['api', 'vault', 'file'] },
+  { method: 'DELETE', segments: ['api', 'vault', 'file'] },
+  { method: 'POST', segments: ['api', 'vault', 'rename'] },
+  { method: 'POST', segments: ['api', 'vault', 'rename-block'] },
+  { method: 'GET', segments: ['api', 'vault', 'metadata'] },
+  { method: 'GET', segments: ['api', 'vault', 'subpath'] },
+  { method: 'GET', segments: ['api', 'vault', 'links'] },
+  { method: 'GET', segments: ['api', 'vault', 'backlinks'] },
+  { method: 'POST', segments: ['api', 'vault', 'resolve-link'] },
+  { method: 'GET', segments: ['api', 'vault', 'graph'] },
+  { method: 'GET', segments: ['api', 'vault', 'changes'] },
+  { method: 'GET', segments: ['api', 'vault', 'search'] },
+  { method: 'GET', segments: ['api', 'vault', 'match'] },
+  { method: 'GET', segments: ['api', 'vault', 'switcher'] },
+  { method: 'GET', segments: ['api', 'vault', 'mentions'] },
+  { method: 'GET', segments: ['api', 'vault', 'history'] },
+  { method: 'GET', segments: ['api', 'vault', 'history', 'version'] },
+  { method: 'POST', segments: ['api', 'vault', 'history', 'restore'] },
+  { method: 'GET', segments: ['api', 'vault', 'legacy-note'] },
+  { method: 'POST', segments: ['api', 'vault', 'legacy-note', 'restore'] },
   { method: 'GET', segments: ['api', 'notes', ':topicId', 'chapters'] },
   { method: 'GET', segments: ['api', 'notes', ':topicId'] },
   { method: 'PUT', segments: ['api', 'notes', ':topicId'] },
@@ -130,7 +173,7 @@ function corsHeaders(config: CoreConfig, request: Request): Record<string, strin
   const headers: Record<string, string> = {
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'access-control-allow-headers': 'authorization, content-type, x-noltri-client',
+    'access-control-allow-headers': 'authorization, content-type, x-noltri-client, x-noltri-vault-root',
     'access-control-max-age': '600',
   };
   if (!wildcard) headers.vary = 'origin';
@@ -186,6 +229,7 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
         core,
         config,
         grants,
+        vault: deps.vault,
         resolve,
         cors,
       });
@@ -223,13 +267,20 @@ interface DispatchArgs {
   core: KnowledgeCore;
   config: CoreConfig;
   grants: GrantStore | null;
+  vault?: VaultService;
   resolve: IdentityResolver;
   cors: Record<string, string>;
 }
 
 async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
-  const { route, segments, method, url, request, core, config, grants, resolve, cors } = args;
+  const { route, segments, method, url, request, core, config, grants, resolve, cors, vault } = args;
   const path = route.join('/');
+  const encodedVaultRoot = request.headers.get('x-noltri-vault-root');
+  let requestVaultRoot: string | undefined;
+  if (encodedVaultRoot !== null) {
+    try { requestVaultRoot = decodeURIComponent(encodedVaultRoot); }
+    catch { throw knowledgeError('invalid_request', 'Vault root token 编码无效'); }
+  }
 
   // Health is the one public endpoint: platforms probe it before any credential exists.
   if (path === 'api/health') {
@@ -265,6 +316,131 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
   }
 
   switch (path) {
+    case 'api/vault/settings': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      if (method === 'GET') return json(200, await vault.getSettings(), cors);
+      const input = parseWith(updateVaultSettingsRequestSchema, await readJsonBody(request), 'vault settings');
+      return json(200, await vault.updateSettings(input, requestVaultRoot), cors);
+    }
+    case 'api/vault': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.snapshot(), cors);
+    }
+    case 'api/vault/open': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const input = parseWith(openVaultRequestSchema, await readJsonBody(request), 'open vault');
+      return json(200, await vault.openVault(input.rootPath), cors);
+    }
+    case 'api/vault/folder': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const input = parseWith(createVaultFolderRequestSchema, await readJsonBody(request), 'create folder');
+      return json(200, await vault.createFolder(input.path, requestVaultRoot), cors);
+    }
+    case 'api/vault/delete-preview': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.deletePreview(url.searchParams.get('path') ?? ''), cors);
+    }
+    case 'api/vault/diagnostics': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.diagnostics(), cors);
+    }
+    case 'api/vault/file': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      if (method === 'GET') return json(200, await vault.getFile(url.searchParams.get('path') ?? ''), cors);
+      if (method === 'DELETE') {
+        const input = parseWith(deleteVaultFileRequestSchema, Object.fromEntries(url.searchParams), 'delete vault file');
+        return json(200, await vault.deleteFile(input.path, input.expectedEtag, input.orphanPolicy, requestVaultRoot), cors);
+      }
+      const input = parseWith(writeNoteFileRequestSchema, await readJsonBody(request), 'write vault file');
+      return json(200, await vault.writeFile(input.path, input.content, input.expectedEtag, requestVaultRoot), cors);
+    }
+    case 'api/vault/asset': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.getAsset(url.searchParams.get('path') ?? ''), cors);
+    }
+    case 'api/vault/rename': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const input = parseWith(renameNoteRequestSchema, await readJsonBody(request), 'rename vault file');
+      return json(200, await vault.renamePath(input.path, input.newPath, input.expectedEtag, requestVaultRoot), cors);
+    }
+    case 'api/vault/rename-block': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const input = parseWith(renameVaultBlockRequestSchema, await readJsonBody(request), 'rename block id');
+      return json(200, await vault.renameBlock(input.path, input.oldId, input.newId, input.expectedEtag, requestVaultRoot), cors);
+    }
+    case 'api/vault/metadata': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const filePath = url.searchParams.get('path') ?? '';
+      return json(200, { path: filePath, metadata: await vault.getMetadata(filePath) }, cors);
+    }
+    case 'api/vault/subpath': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const position = await vault.resolveSubpath(url.searchParams.get('path') ?? '', url.searchParams.get('subpath') ?? '');
+      return json(200, vaultSubpathResponseSchema.parse({ position }), cors);
+    }
+    case 'api/vault/links': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.getLinks(), cors);
+    }
+    case 'api/vault/backlinks': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.getBacklinks(url.searchParams.get('path') ?? ''), cors);
+    }
+    case 'api/vault/resolve-link': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const input = parseWith(resolveNoteLinkRequestSchema, await readJsonBody(request), 'resolve note link');
+      return json(200, { path: await vault.resolveLink(input.linkpath, input.sourcePath, input.kind) }, cors);
+    }
+    case 'api/vault/graph': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.graph(), cors);
+    }
+    case 'api/vault/changes': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const after = Number(url.searchParams.get('after') ?? '0');
+      if (!Number.isSafeInteger(after) || after < 0) throw knowledgeError('invalid_request', 'after 必须是非负整数');
+      return json(200, await vault.changesAfter(after), cors);
+    }
+    case 'api/vault/search':
+    case 'api/vault/match':
+    case 'api/vault/switcher': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const query = parseWith(noteSearchQuerySchema, Object.fromEntries(url.searchParams), 'vault search');
+      if (path === 'api/vault/match') return json(200, await vault.matchPaths(query.q), cors);
+      const result = path === 'api/vault/switcher'
+        ? await vault.switcher(query.q, query.limit ?? 100)
+        : await vault.search(query.q, query.limit ?? 1000);
+      return json(200, result, cors);
+    }
+    case 'api/vault/mentions': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.mentions(url.searchParams.get('path') ?? ''), cors);
+    }
+    case 'api/vault/history': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.history(url.searchParams.get('path') ?? ''), cors);
+    }
+    case 'api/vault/history/version': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      return json(200, await vault.historyVersion(url.searchParams.get('path') ?? '', url.searchParams.get('versionId') ?? ''), cors);
+    }
+    case 'api/vault/history/restore': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const input = parseWith(restoreNoteHistoryRequestSchema, await readJsonBody(request), 'restore vault history');
+      return json(200, await vault.restoreHistory(input.path, input.versionId, input.expectedEtag, requestVaultRoot), cors);
+    }
+    case 'api/vault/legacy-note': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const topicId = url.searchParams.get('topicId');
+      if (topicId === null || topicId.length === 0) throw knowledgeError('invalid_request', 'topicId 不能为空');
+      const chapterId = url.searchParams.get('chapterId');
+      return json(200, await vault.legacyPath(topicId, chapterId), cors);
+    }
+    case 'api/vault/legacy-note/restore': {
+      if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
+      const input = parseWith(restoreLegacyNoteRequestSchema, await readJsonBody(request), 'restore legacy note');
+      return json(200, await vault.restoreLegacyNote(input.topicId, input.chapterId, requestVaultRoot), cors);
+    }
     case 'api/items': {
       if (method === 'GET') {
         const query = parseWith(libraryItemsQuerySchema, Object.fromEntries(url.searchParams), 'items query');
@@ -352,8 +528,14 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       const topicId = decodeURIComponent(paramAt(route, segments, 'topicId'));
       requireNodeAccess(grant, topicId, '主题正文索引');
       const notes = await core.listGraphNotes(topicId, actor);
-      for (const note of notes.notes) {
+      const indexed = await Promise.all(notes.notes.map(async (note) => {
         if (note.chapterId !== null) requireNodeAccess(grant, note.chapterId, '章节正文索引');
+        if (vault === undefined) return note;
+        const mapped = await vault.legacyPath(note.topicId, note.chapterId);
+        return { ...note, path: mapped.path };
+      }));
+      if (vault !== undefined) {
+        return json(200, { ...notes, notes: indexed }, cors);
       }
       return json(200, notes, cors);
     }
@@ -363,10 +545,19 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       if (method === 'GET') {
         const chapterId = url.searchParams.get('chapterId');
         if (chapterId !== null) requireNodeAccess(grant, chapterId, '章节正文');
-        return json(200, await core.getGraphNote(topicId, chapterId, actor), cors);
+        if (vault !== undefined) {
+          const note = await vault.getLegacyNote(topicId, chapterId);
+          return json(200, { topicId, chapterId, ...note }, cors);
+        }
+        const note = await core.getGraphNote(topicId, chapterId, actor);
+        return json(200, { ...note, etag: null }, cors);
       }
       const input = parseWith(saveGraphNoteRequestSchema, await readJsonBody(request), 'save note');
       if (input.chapterId !== null) requireNodeAccess(grant, input.chapterId, '保存章节正文');
+      if (vault !== undefined) {
+        const saved = await vault.saveLegacyNote(topicId, input.chapterId, input.content, input.expectedEtag, requestVaultRoot);
+        return json(200, { topicId, chapterId: input.chapterId, ...saved }, cors);
+      }
       return json(200, await core.saveGraphNote(topicId, input, actor), cors);
     }
     case 'api/topics/:topicId/chapters': {

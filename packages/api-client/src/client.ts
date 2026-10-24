@@ -5,6 +5,15 @@ import {
   assignSourceResponseSchema,
   captureRequestSchema,
   captureResultSchema,
+  createVaultFolderRequestSchema,
+  deleteVaultFileRequestSchema,
+  deleteVaultFileResponseSchema,
+  cachedNoteMetadataSchema,
+  vaultDeletePreviewSchema,
+  renameVaultBlockRequestSchema,
+  renameVaultBlockResponseSchema,
+  vaultDiagnosticsSchema,
+  vaultAssetSchema,
   chapterResponseSchema,
   chapterTargetSchema,
   createChapterRequestSchema,
@@ -25,6 +34,16 @@ import {
   libraryItemSchema,
   libraryItemsQuerySchema,
   libraryItemsResponseSchema,
+  legacyNotePathResponseSchema,
+  openVaultRequestSchema,
+  noteBacklinksResponseSchema,
+  noteFileSchema,
+  noteHistoryResponseSchema,
+  noteLinksResponseSchema,
+  noteMentionResponseSchema,
+  noteMatchesResponseSchema,
+  noteSearchQuerySchema,
+  noteSearchResponseSchema,
   issueGrantRequestSchema,
   issueGrantResponseSchema,
   knowledgeNodeSchema,
@@ -32,18 +51,37 @@ import {
   nodeChatResponseSchema,
   nodeContextSchema,
   nodeDetailSchema,
+  renameNoteRequestSchema,
   patchLibraryItemInputSchema,
   rawSourceSchema,
   resolveChapterRequestSchema,
+  resolveNoteLinkRequestSchema,
   RETRYABLE_ERROR_CODES,
   revokeGrantResponseSchema,
+  restoreNoteHistoryRequestSchema,
   searchResponseSchema,
   saveGraphNoteRequestSchema,
   treeResponseSchema,
+  vaultChangesResponseSchema,
+  vaultGraphSchema,
+  vaultSnapshotSchema,
+  vaultSettingsSchema,
+  vaultSubpathResponseSchema,
+  updateVaultSettingsRequestSchema,
+  writeNoteFileRequestSchema,
   type AssignSourceRequest,
   type AssignSourceResponse,
   type CaptureRequest,
   type CaptureResult,
+  type CreateVaultFolderRequest,
+  type DeleteVaultFileRequest,
+  type DeleteVaultFileResponse,
+  type CachedNoteMetadata,
+  type VaultAsset,
+  type VaultDeletePreview,
+  type RenameVaultBlockRequest,
+  type RenameVaultBlockResponse,
+  type VaultDiagnostics,
   type ChapterResponse,
   type ChapterTarget,
   type Conversation,
@@ -60,6 +98,17 @@ import {
   type LibraryItem,
   type LibraryItemsQuery,
   type LibraryItemsResponse,
+  type LegacyNotePathResponse,
+  type NoteBacklinksResponse,
+  type NoteFile,
+  type NoteHistoryResponse,
+  type NoteLinksResponse,
+  type NoteMentionResponse,
+  type NoteMatchesResponse,
+  type NoteSearchResponse,
+  type OpenVaultRequest,
+  type RenameNoteRequest,
+  type RestoreNoteHistoryRequest,
   type InboxResponse,
   type IssueGrantRequest,
   type IssueGrantResponse,
@@ -79,6 +128,12 @@ import {
   type SaveGraphNoteRequest,
   type SearchRequest,
   type SearchResponse,
+  type VaultChangesResponse,
+  type VaultGraph,
+  type VaultSnapshot,
+  type VaultSettings,
+  type UpdateVaultSettingsRequest,
+  type WriteNoteFileRequest,
   type TreeQuery,
   type TreeResponse,
 } from '@noltri/schema';
@@ -103,6 +158,30 @@ export const apiRoutes = {
   graphResolveChapter: '/api/graph/resolve-chapter',
   note: (topicId: string) => `/api/notes/${encodeURIComponent(topicId)}`,
   noteChapters: (topicId: string) => `/api/notes/${encodeURIComponent(topicId)}/chapters`,
+  vault: '/api/vault',
+  vaultSettings: '/api/vault/settings',
+  vaultSubpath: '/api/vault/subpath',
+  vaultOpen: '/api/vault/open',
+  vaultFile: '/api/vault/file',
+  vaultAsset: '/api/vault/asset',
+  vaultRename: '/api/vault/rename',
+  vaultDeletePreview: '/api/vault/delete-preview',
+  vaultRenameBlock: '/api/vault/rename-block',
+  vaultDiagnostics: '/api/vault/diagnostics',
+  vaultMetadata: '/api/vault/metadata',
+  vaultLinks: '/api/vault/links',
+  vaultBacklinks: '/api/vault/backlinks',
+  vaultResolveLink: '/api/vault/resolve-link',
+  vaultGraph: '/api/vault/graph',
+  vaultChanges: '/api/vault/changes',
+  vaultSearch: '/api/vault/search',
+  vaultSwitcher: '/api/vault/switcher',
+  vaultMatch: '/api/vault/match',
+  vaultMentions: '/api/vault/mentions',
+  vaultHistory: '/api/vault/history',
+  vaultHistoryVersion: '/api/vault/history/version',
+  vaultRestoreHistory: '/api/vault/history/restore',
+  legacyNotePath: '/api/vault/legacy-note',
   topicChapters: (topicId: string) => `/api/topics/${encodeURIComponent(topicId)}/chapters`,
   chapterTopic: (chapterId: string, topicId: string) =>
     `/api/chapters/${encodeURIComponent(chapterId)}/topics/${encodeURIComponent(topicId)}`,
@@ -338,6 +417,159 @@ export class ApiClient {
     return this.request('GET', `${apiRoutes.tree}${suffix ? `?${suffix}` : ''}`, treeResponseSchema);
   }
 
+  vaultSnapshot(): Promise<VaultSnapshot> {
+    return this.request('GET', apiRoutes.vault, vaultSnapshotSchema);
+  }
+
+  vaultSettings(): Promise<VaultSettings> {
+    return this.request('GET', apiRoutes.vaultSettings, vaultSettingsSchema);
+  }
+
+  updateVaultSettings(input: UpdateVaultSettingsRequest, vaultRootPath: string): Promise<VaultSettings> {
+    return this.request('PUT', apiRoutes.vaultSettings, vaultSettingsSchema, {
+      body: validatedRequest(updateVaultSettingsRequestSchema, input, 'vault settings'),
+      vaultRootPath,
+    });
+  }
+
+  createVaultFolder(input: CreateVaultFolderRequest, vaultRootPath: string): Promise<{ path: string }> {
+    return this.request('POST', '/api/vault/folder', z.object({ path: z.string() }), {
+      body: validatedRequest(createVaultFolderRequestSchema, input, 'vault folder'),
+      vaultRootPath,
+    });
+  }
+
+  openVault(input: OpenVaultRequest): Promise<VaultSnapshot> {
+    return this.request('POST', apiRoutes.vaultOpen, vaultSnapshotSchema, {
+      body: validatedRequest(openVaultRequestSchema, input, 'vault root'),
+    });
+  }
+
+  vaultFile(path: string): Promise<NoteFile> {
+    return this.request('GET', `${apiRoutes.vaultFile}?${new URLSearchParams({ path })}`, noteFileSchema);
+  }
+
+  getVaultAsset(path: string): Promise<VaultAsset> {
+    return this.request('GET', `${apiRoutes.vaultAsset}?${new URLSearchParams({ path })}`, vaultAssetSchema);
+  }
+
+  saveVaultFile(input: WriteNoteFileRequest, vaultRootPath: string): Promise<NoteFile> {
+    return this.request('PUT', apiRoutes.vaultFile, noteFileSchema, {
+      body: validatedRequest(writeNoteFileRequestSchema, input, 'vault note'),
+      vaultRootPath,
+    });
+  }
+
+  renameVaultFile(input: RenameNoteRequest, vaultRootPath: string): Promise<{ path: string }> {
+    return this.request('POST', apiRoutes.vaultRename, z.object({ path: z.string() }), {
+      body: validatedRequest(renameNoteRequestSchema, input, 'vault rename'),
+      vaultRootPath,
+    });
+  }
+
+  deletePreview(path: string): Promise<VaultDeletePreview> {
+    return this.request('GET', `${apiRoutes.vaultDeletePreview}?${new URLSearchParams({ path })}`, vaultDeletePreviewSchema);
+  }
+
+  deleteVaultFile(path: string, expectedEtag: string, orphanPolicy: DeleteVaultFileRequest['orphanPolicy'], vaultRootPath: string): Promise<DeleteVaultFileResponse> {
+    const input: DeleteVaultFileRequest = { path, expectedEtag, orphanPolicy };
+    const validated = validatedRequest(deleteVaultFileRequestSchema, input, 'vault delete');
+    const params = new URLSearchParams({ path: validated.path, orphanPolicy: validated.orphanPolicy });
+    if (validated.expectedEtag !== undefined) params.set('expectedEtag', validated.expectedEtag);
+    return this.request('DELETE', `${apiRoutes.vaultFile}?${params}`, deleteVaultFileResponseSchema, { vaultRootPath });
+  }
+
+  renameVaultBlock(input: RenameVaultBlockRequest, vaultRootPath: string): Promise<RenameVaultBlockResponse> {
+    return this.request('POST', apiRoutes.vaultRenameBlock, renameVaultBlockResponseSchema, {
+      body: validatedRequest(renameVaultBlockRequestSchema, input, 'vault block rename'),
+      vaultRootPath,
+    });
+  }
+
+  vaultDiagnostics(): Promise<VaultDiagnostics> {
+    return this.request('GET', apiRoutes.vaultDiagnostics, vaultDiagnosticsSchema);
+  }
+
+  vaultMetadata(path: string): Promise<{ path: string; metadata: CachedNoteMetadata | null }> {
+    return this.request('GET', `${apiRoutes.vaultMetadata}?${new URLSearchParams({ path })}`, z.object({
+      path: z.string(),
+      metadata: cachedNoteMetadataSchema.nullable(),
+    }));
+  }
+
+  vaultSubpath(path: string, subpath: string): Promise<{ position: import('@noltri/schema').NotePosition | null }> {
+    return this.request('GET', `${apiRoutes.vaultSubpath}?${new URLSearchParams({ path, subpath })}`, vaultSubpathResponseSchema);
+  }
+
+  vaultLinks(): Promise<NoteLinksResponse> {
+    return this.request('GET', apiRoutes.vaultLinks, noteLinksResponseSchema);
+  }
+
+  vaultBacklinks(path: string): Promise<NoteBacklinksResponse> {
+    return this.request('GET', `${apiRoutes.vaultBacklinks}?${new URLSearchParams({ path })}`, noteBacklinksResponseSchema);
+  }
+
+  resolveVaultLink(linkpath: string, sourcePath: string, kind: 'wikilink' | 'markdown' = 'wikilink'): Promise<{ path: string | null }> {
+    return this.request('POST', apiRoutes.vaultResolveLink, z.object({ path: z.string().nullable() }), {
+      body: validatedRequest(resolveNoteLinkRequestSchema, { linkpath, sourcePath, kind }, 'note link'),
+    });
+  }
+
+  vaultGraph(): Promise<VaultGraph> {
+    return this.request('GET', apiRoutes.vaultGraph, vaultGraphSchema);
+  }
+
+  vaultChanges(after: number): Promise<VaultChangesResponse> {
+    return this.request('GET', `${apiRoutes.vaultChanges}?${new URLSearchParams({ after: String(after) })}`, vaultChangesResponseSchema);
+  }
+
+  searchVault(query: string, limit = 50): Promise<NoteSearchResponse> {
+    return this.noteQuery(apiRoutes.vaultSearch, query, limit);
+  }
+
+  switcherVault(query: string, limit = 20): Promise<NoteSearchResponse> {
+    return this.noteQuery(apiRoutes.vaultSwitcher, query, limit);
+  }
+
+  async vaultMatch(query: string): Promise<NoteMatchesResponse> {
+    const params = new URLSearchParams({ q: query });
+    return this.request('GET', `${apiRoutes.vaultMatch}?${params}`, noteMatchesResponseSchema);
+  }
+
+  vaultMentions(path: string): Promise<NoteMentionResponse> {
+    return this.request('GET', `${apiRoutes.vaultMentions}?${new URLSearchParams({ path })}`, noteMentionResponseSchema);
+  }
+
+  vaultHistory(path: string): Promise<NoteHistoryResponse> {
+    return this.request('GET', `${apiRoutes.vaultHistory}?${new URLSearchParams({ path })}`, noteHistoryResponseSchema);
+  }
+
+  vaultHistoryVersion(path: string, versionId: string): Promise<NoteFile> {
+    const params = new URLSearchParams({ path, versionId });
+    return this.request('GET', `${apiRoutes.vaultHistoryVersion}?${params}`, noteFileSchema);
+  }
+
+  restoreVaultHistory(input: RestoreNoteHistoryRequest, vaultRootPath: string): Promise<NoteFile> {
+    return this.request('POST', apiRoutes.vaultRestoreHistory, noteFileSchema, {
+      body: validatedRequest(restoreNoteHistoryRequestSchema, input, 'restore note history'),
+      vaultRootPath,
+    });
+  }
+
+  legacyNotePath(topicId: string, chapterId: string | null): Promise<LegacyNotePathResponse> {
+    const params = new URLSearchParams({ topicId, ...(chapterId === null ? {} : { chapterId }) });
+    return this.request('GET', `${apiRoutes.legacyNotePath}?${params}`, legacyNotePathResponseSchema);
+  }
+
+  private noteQuery(path: string, query: string, limit: number): Promise<NoteSearchResponse> {
+    const validated = noteSearchQuerySchema.safeParse({ q: query, limit });
+    if (!validated.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Vault query is not sendable', validated.error.issues);
+    }
+    const params = new URLSearchParams({ q: validated.data.q, limit: String(validated.data.limit) });
+    return this.request('GET', `${path}?${params}`, noteSearchResponseSchema);
+  }
+
   selectGraph(scope: GraphScope): Promise<GraphSelection> {
     return this.request('POST', apiRoutes.graphSelect, graphSelectionSchema, {
       body: validatedRequest(graphScopeSchema, scope, 'graph scope'),
@@ -359,9 +591,10 @@ export class ApiClient {
     return this.request('GET', apiRoutes.noteChapters(topicId), graphNoteIndexSchema);
   }
 
-  saveGraphNote(topicId: string, input: SaveGraphNoteRequest): Promise<GraphNote> {
+  saveGraphNote(topicId: string, input: SaveGraphNoteRequest, vaultRootPath: string): Promise<GraphNote> {
     return this.request('PUT', apiRoutes.note(topicId), graphNoteSchema, {
       body: validatedRequest(saveGraphNoteRequestSchema, input, 'save note'),
+      vaultRootPath,
     });
   }
 
@@ -484,12 +717,16 @@ export class ApiClient {
     method: string,
     path: string,
     responseSchema: z.ZodType<Output>,
-    init: { body?: unknown; timeoutMs?: number } = {},
+    init: { body?: unknown; timeoutMs?: number; vaultRootPath?: string } = {},
   ): Promise<Output> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (init.body !== undefined) headers['content-type'] = 'application/json';
     if (this.token) headers.authorization = `Bearer ${this.token}`;
     if (this.clientHint) headers['x-noltri-client'] = this.clientHint;
+    if (init.vaultRootPath !== undefined) {
+      if (init.vaultRootPath.length === 0) throw new ApiClientError(400, 'invalid_request', 'Vault root context is required for writes');
+      headers['x-noltri-vault-root'] = encodeURIComponent(init.vaultRootPath);
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? this.timeoutMs);

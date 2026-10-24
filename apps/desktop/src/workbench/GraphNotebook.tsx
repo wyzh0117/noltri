@@ -31,7 +31,7 @@ export interface GraphNotebookProps {
   pathLabel: string;
   loading: boolean;
   error: string | null;
-  note: { identity: NoteIdentity; title: string; content: string; status: 'loading' | 'saved' | 'saving' | 'error'; error?: string; loadFailed?: boolean; draftRecoverable?: boolean } | null;
+  note: { identity: NoteIdentity; vaultRoot: string; title: string; content: string; status: 'loading' | 'saved' | 'saving' | 'error'; error?: string; loadFailed?: boolean; rootMismatch?: boolean; draftRecoverable?: boolean } | null;
   notes: readonly { topicId: string; chapterId: string | null; chapterTitle: string | null; updatedAt: string; attached: boolean }[];
   connectableTopics: readonly GraphNode[];
   historyAvailable: boolean;
@@ -195,12 +195,12 @@ export function GraphNotebook({
           {note === null || note.status === 'loading' ? <div className="loading-state" role="status"><span className="loader" />正在载入正文…</div> : (
             <section className="note-writing-area" aria-label={`${note.title}正文编辑区`}>
               <div className="note-status-row">
-                <span className={`note-save-status note-save-${note.status}`} role="status">{note.status === 'saved' ? '已保存' : note.status === 'saving' ? '自动保存中…' : note.loadFailed ? '正文载入失败；未修改正文' : note.draftRecoverable ? '保存失败；草稿可恢复' : '保存失败；请保持本页并重试'}</span>
-                {note.status === 'error' ? <button type="button" className="text-action" onClick={onRetrySave}>{note.loadFailed ? '重新载入正文' : '重试保存'}</button> : null}
+                <span className={`note-save-status note-save-${note.status}`} role="status">{note.status === 'saved' ? '已保存' : note.status === 'saving' ? '自动保存中…' : note.rootMismatch ? 'Vault 已切换；正文已隔离' : note.loadFailed ? '正文载入失败；未修改正文' : note.draftRecoverable ? '保存失败；草稿可恢复' : '保存失败；请保持本页并重试'}</span>
+                {note.status === 'error' ? <button type="button" className="text-action" onClick={onRetrySave}>{note.rootMismatch ? '在当前 Vault 重新载入' : note.loadFailed ? '重新载入正文' : '重试保存'}</button> : null}
                 {chapterAttachment === 'detached' ? <span className="note-unattached-label">未归属章节</span> : null}
               </div>
               {note.error ? <p className="note-save-error" role="alert">{note.error}</p> : null}
-              <textarea className="note-editor" value={note.content} readOnly={note.loadFailed === true} onChange={(event) => onChangeNote(event.target.value)} placeholder={note.loadFailed ? '正文尚未载入，请重新载入后编辑。' : '从这里开始写下你的理解…'} aria-label={`${note.title}正文`} />
+              <textarea className="note-editor" value={note.content} readOnly={note.loadFailed === true || note.rootMismatch === true} onChange={(event) => onChangeNote(event.target.value)} placeholder={note.rootMismatch ? 'Vault 已切换，请在当前 Vault 重新载入。' : note.loadFailed ? '正文尚未载入，请重新载入后编辑。' : '从这里开始写下你的理解…'} aria-label={`${note.title}正文`} />
               {note.content.length > MAX_GRAPH_NOTE_CHARS ? <p className="note-save-error" role="status">{note.content.length.toLocaleString()} / {MAX_GRAPH_NOTE_CHARS.toLocaleString()} 字符；超出部分保留在当前正文和本机草稿中，缩短后即可保存。</p> : null}
               <div className="note-footer-actions">
                 <button type="button" className="button-quiet" onClick={() => topicId !== null && onMore(topicId)}>更多主题信息</button>

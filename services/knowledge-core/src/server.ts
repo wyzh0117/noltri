@@ -16,7 +16,7 @@ import { loadCoreConfig } from './config';
 import { buildHandler, type CoreBundle } from './http/index';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const MAX_HTTP_BODY_BYTES = 256_000;
+const MAX_HTTP_BODY_BYTES = 16_000_000;
 
 class BodyTooLargeError extends Error {}
 
@@ -77,15 +77,27 @@ function headersOf(request: IncomingMessage): Headers {
 
 const SKIP_RESPONSE_HEADERS = new Set(['content-length', 'transfer-encoding', 'content-encoding']);
 
-export function toWebRequest(request: IncomingMessage, body: Buffer | undefined, port: number): Request {
+export function toWebRequest(request: IncomingMessage, body: Buffer | undefined, port: number, encodedVaultRoot?: string): Request {
   const host = request.headers.host ?? `127.0.0.1:${String(port)}`;
   const url = `http://${host}${request.url ?? '/'}`;
   const method = request.method ?? 'GET';
-  const init: RequestInit = { method, headers: headersOf(request) };
+  const headers = headersOf(request);
+  if (encodedVaultRoot !== undefined) headers.set('x-noltri-vault-root', encodedVaultRoot);
+  const init: RequestInit = { method, headers };
   if (body !== undefined && method !== 'GET' && method !== 'HEAD') {
     init.body = body;
   }
   return new Request(url, init);
+}
+
+function needsVaultMutationRoot(method: string, pathname: string): boolean {
+  const route = pathname.replace(/\/+$/, '') || '/';
+  return method === 'PUT' && (
+    route === '/api/vault/settings' || route === '/api/vault/file' || /^\/api\/notes\/[^/]+$/.test(route)
+  ) || method === 'DELETE' && route === '/api/vault/file' || method === 'POST' && [
+    '/api/vault/folder', '/api/vault/rename', '/api/vault/rename-block',
+    '/api/vault/history/restore', '/api/vault/legacy-note/restore',
+  ].includes(route);
 }
 
 async function writeWebResponse(response: Response, target: ServerResponse): Promise<void> {
@@ -121,8 +133,14 @@ export async function startServer(options: { port?: number } = {}): Promise<Runn
       const method = request.method ?? 'GET';
       const pathname = (request.url ?? '/').split('?')[0];
       try {
+        const incomingVaultRoot = request.headers['x-noltri-vault-root'];
+        const encodedVaultRoot = needsVaultMutationRoot(method, pathname)
+          ? incomingVaultRoot === undefined
+            ? encodeURIComponent(await bundle.vault.captureRootForMutation())
+            : Array.isArray(incomingVaultRoot) ? incomingVaultRoot.join(',') : incomingVaultRoot
+          : undefined;
         const body = await readBody(request);
-        const webRequest = toWebRequest(request, body, port);
+        const webRequest = toWebRequest(request, body, port, encodedVaultRoot);
         const webResponse = await bundle.handle(webRequest);
         await writeWebResponse(webResponse, response);
         logger.info('http', {

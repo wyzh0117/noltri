@@ -45,6 +45,7 @@ if (process.platform === 'darwin') {
 const entries = [
   // The Core server uses the `server.mjs` suffix to recognise direct execution.
   ['services/knowledge-core/src/server.ts', 'core-server.mjs'],
+  ['services/knowledge-core/src/notes/parser-worker.ts', 'parser-worker.mjs'],
   ['services/mcp-server/src/index.ts', 'mcp-server.mjs'],
 ];
 

@@ -163,7 +163,7 @@ function belongsTo(nodeId: string, ancestorId: string, parents: Map<string, stri
 }
 
 function noteView(topicId: string, chapterId: string | null, note: Awaited<ReturnType<CoreDeps['repository']['getKnowledgeNote']>>): GraphNote {
-  return { topicId, chapterId, content: note?.content ?? '', updatedAt: note?.updatedAt ?? null };
+  return { topicId, chapterId, content: note?.content ?? '', updatedAt: note?.updatedAt ?? null, etag: null };
 }
 
 export async function selectGraph(
@@ -281,6 +281,10 @@ export async function getGraphNote(
     const chapter = await deps.repository.findNode(chapterId, actor.userId);
     if (chapter === null || chapter.nodeType !== 'chapter') throw knowledgeError('not_found', `章节 ${chapterId} 不存在`);
   }
+  if (deps.graphNoteStore !== undefined) {
+    const note = await deps.graphNoteStore.getLegacyNote(topicId, chapterId);
+    return { topicId, chapterId, ...note };
+  }
   return noteView(topicId, chapterId, await deps.repository.getKnowledgeNote(actor.userId, topicId, chapterId));
 }
 
@@ -304,14 +308,16 @@ export async function listGraphNotes(
       .map((edge) => edge.fromNodeId),
   );
   return {
-    notes: notes.map((note) => {
+    notes: await Promise.all(notes.map(async (note) => {
       const chapter = note.chapterId === null ? null : byId.get(note.chapterId) ?? null;
+      const markdown = deps.graphNoteStore === undefined ? null : await deps.graphNoteStore.getLegacyNote(note.topicId, note.chapterId);
       return {
         ...note,
+        ...(markdown === null ? {} : { path: markdown.path, updatedAt: markdown.updatedAt ?? note.updatedAt }),
         chapterTitle: chapter?.title ?? null,
         attached: note.chapterId === null || (chapter !== null && chapter.status !== 'archived' && attached.has(chapter.id)),
       };
-    }),
+    })),
   };
 }
 
@@ -330,6 +336,10 @@ export async function saveGraphNote(
     if (chapter === null || chapter.nodeType !== 'chapter' || chapter.status === 'archived') {
       throw knowledgeError('not_found', `章节 ${request.chapterId} 不存在`);
     }
+  }
+  if (deps.graphNoteStore !== undefined) {
+    const saved = await deps.graphNoteStore.saveLegacyNote(topicId, request.chapterId, request.content, request.expectedEtag);
+    return { topicId, chapterId: request.chapterId, ...saved };
   }
   const saved = await deps.repository.saveKnowledgeNote({
     userId: actor.userId,

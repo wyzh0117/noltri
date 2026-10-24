@@ -1,6 +1,6 @@
 [package]
 name = "noltri-companion"
-version = "0.1.4"
+version = "0.2.0"
 description = "知序 Noltri 本地知识库"
 authors = ["知序 Noltri"]
 edition = "2021"

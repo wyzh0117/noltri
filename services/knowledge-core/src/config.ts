@@ -29,7 +29,7 @@ export const CORE_PACKAGE_NAME = '@noltri/knowledge-core';
 
 /** Fallbacks for knobs that belong to Core itself (not to the frozen Thresholds contract). */
 export const CORE_DEFAULTS = {
-  version: '0.1.4',
+  version: '0.2.0',
   port: 8787,
   corsOrigin: '*',
   devUser: 'local-dev-user',
@@ -66,6 +66,21 @@ export function resolveSqliteFile(env: EnvSource = currentEnv()): string {
     'data',
     CORE_DEFAULTS.sqliteFilename,
   );
+}
+
+export function resolveDataDirectory(env: EnvSource = currentEnv()): string {
+  const absolute = (value: string): string => (path.isAbsolute(value) ? value : path.resolve(value));
+  const configured = envString(env, 'NOLTRI_DATA_DIR');
+  if (configured.length > 0) return absolute(configured);
+  const sqlite = envString(env, 'NOLTRI_SQLITE_FILE');
+  if (sqlite.length > 0 && sqlite !== ':memory:') return path.dirname(absolute(sqlite));
+  return path.join(os.homedir(), CORE_DEFAULTS.dataDirname, 'data');
+}
+
+export function resolveVaultDirectory(env: EnvSource = currentEnv()): string {
+  const configured = envString(env, 'NOLTRI_NOTES_DIR');
+  if (configured.length > 0) return path.isAbsolute(configured) ? configured : path.resolve(configured);
+  return path.join(resolveDataDirectory(env), 'vault');
 }
 
 /**
@@ -106,6 +121,9 @@ export interface CoreConfig {
   readonly searchDefaultLimit: number;
   /** Absolute path of the local profile database, whichever driver is configured. */
   readonly sqliteFile: string;
+  /** Default Markdown Vault, stored beside the profile unless explicitly overridden. */
+  readonly dataDir: string;
+  readonly vaultDir: string;
   /**
    * Where 本地客户端授权 grants live (`NOLTRI_GRANT_FILE`). Empty keeps today's single-credential
    * behaviour: grants are opt-in per deployment, so no existing host is locked out by this change.
@@ -157,6 +175,8 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
     treeDefaultDepth: positive(envInt(env, 'TREE_DEFAULT_DEPTH', CORE_DEFAULTS.treeDefaultDepth), 1),
     searchDefaultLimit: positive(envInt(env, 'SEARCH_DEFAULT_LIMIT', CORE_DEFAULTS.searchDefaultLimit), 1),
     sqliteFile: storage.sqliteFile ?? '',
+    dataDir: resolveDataDirectory(env),
+    vaultDir: resolveVaultDirectory(env),
     grantFile: resolveGrantFile(env),
   };
 }

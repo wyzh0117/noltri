@@ -11,9 +11,9 @@
 
 ## 快速开始
 
-知序 0.1.4 面向 Apple Silicon（arm64），要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
+知序 0.2.0 面向 Apple Silicon（arm64），要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
 
-0.1.4 发布说明与验收结果待本轮修复和验证完成后补齐，见[发布说明](docs/releases/0.1.4.md)。0.1.3 增加知识主题与章节的直接阅读编辑、按学科范围浏览关系图，并保留正文自动保存与本机草稿恢复。0.1.2 的 Provider 管理继续支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages，可拉取或手动添加模型；Apply 保存配置，“使用此模型”选择自动处理内容时使用的模型。0.1.3 发布采用 ad-hoc 签名，**尚未通过 Apple Developer ID 签名和公证**，macOS 仍可能拦截首次打开。请先对照 Releases 中的 `SHA256SUMS.txt` 校验下载文件，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)进入“系统设置”→“隐私与安全性”→“仍要打开”。
+0.2.0 新增以本地 Markdown Vault 为正文真相的 Notes 工作台、CodeMirror Live Preview 与阅读视图、搜索/属性/历史和共享 Vault Graph；功能与限制见[发布说明](docs/releases/0.2.0.md)及[验收记录](docs/testing/vault-notes-graph/acceptance.md)。本版本仍采用 ad-hoc 签名，**尚未通过 Apple Developer ID 签名和公证**，macOS 可能拦截首次打开。请先对照 Releases 中的 `SHA256SUMS.txt` 校验下载文件，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)进入“系统设置”→“隐私与安全性”→“仍要打开”。
 
 若系统仍显示“已损坏”，确认下载来源和校验值后，可仅为此应用解除下载隔离：
 
@@ -98,7 +98,7 @@ env = { KNOWLEDGE_API_URL = "http://127.0.0.1:8787" }
 
 ## 验证与构建
 
-0.1.1 的真实 DeepSeek 分类验收覆盖 Python、TypeScript、Rust、Go、SQL 及物理、计量经济学、分子生物学、心理学论文短摘录；片段附原始出处。见[测试说明](docs/testing/README.md)及[结果](docs/testing/0.1.1-deepseek-results.json)。0.1.2 的自动检查、隔离协议与重启测试、构建后 UI mock bridge 流程记录在同一测试说明中。0.1.3 的 Graph v3.1 依据[开发指南](Noltri_大模型开发指南_20261020.md)实现；本轮 563 项自动测试与 Rust 12/12 通过，A01–A14 及 More 入口真实 UI 验收通过，A15/A16 原阶段能力仍未完成。检查及范围见[测试说明](docs/testing/README.md)、[验收记录](docs/testing/graph-v3.1/acceptance.md)和[发布说明](docs/releases/0.1.3.md)。本地测试资料不随安装包分发。
+0.2.0 新增 Markdown Vault 笔记编辑、渐进阅读、查询和 Worker/WebGL 关系图。当前代码检查为 Core 224、Desktop 107、API client 33、MCP 19 项测试通过；Notes 长测的数据完整性检查通过，但 raw runner 收尾状态仍标 invalid，`beforeinput→rAF` p95 与 Graph 5k 布局收敛预算未达。详见[发布说明](docs/releases/0.2.0.md)和[验收矩阵](docs/testing/vault-notes-graph/acceptance.md)。0.1.1–0.1.3 的历史验收见[测试说明](docs/testing/README.md)、[Graph v3.1 验收记录](docs/testing/graph-v3.1/acceptance.md)和对应发布说明。本地测试资料不随安装包分发。
 
 ```bash
 pnpm typecheck

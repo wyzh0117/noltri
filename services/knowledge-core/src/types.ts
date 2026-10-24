@@ -9,6 +9,12 @@ import { truncate, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
 
+export interface GraphNoteStore {
+  legacyPath(topicId: string, chapterId: string | null): Promise<{ path: string; exists: boolean }>;
+  getLegacyNote(topicId: string, chapterId: string | null): Promise<{ content: string; updatedAt: string | null; etag: string | null; path: string }>;
+  saveLegacyNote(topicId: string, chapterId: string | null, content: string, expectedEtag?: string): Promise<{ content: string; updatedAt: string; etag: string; path: string }>;
+}
+
 /**
  * Who is acting. `userId` always comes from the authenticated request (see `src/auth.ts`),
  * never from a body or query field — V1 has no tenant switching in the payload.
@@ -31,6 +37,8 @@ export interface CoreDeps {
   readonly provider: AIProvider;
   readonly config: CoreConfig;
   readonly logger: Logger;
+  /** When configured, graph-note reads and writes use the Markdown Vault as the only truth. */
+  readonly graphNoteStore?: GraphNoteStore;
 }
 
 /** Upper bound of a node chain the pipeline is willing to create from one classification answer. */

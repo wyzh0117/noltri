@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent, PointerEvent as ReactPointerEvent, ReactElement, ReactNode, SyntheticEvent } from 'react';
 import { MAX_GRAPH_NOTE_CHARS } from '@noltri/schema';
 import type { CreateLibraryItemInput, GraphEdge, GraphNode, GraphNoteIndexEntry, GraphScope, HealthResponse, ItemRelation, LibraryItem, NodeDetail, SearchHit, TreeNode } from '@noltri/schema';
+import type { VaultGraph } from '@noltri/schema';
 import { describeError } from './api';
 import type { WorkbenchApi } from './api';
 import { clearNoteDraft, listNoteDrafts, readNoteDraft, writeNoteDraft } from './note-drafts';
@@ -11,8 +12,10 @@ import { commitLatestNavigation, contentIdentity, disciplineScopesForTopics, fin
 import type { WorkbenchContent } from './graph-navigation';
 import { ChapterChoicePanel, GraphNotebook } from './GraphNotebook';
 import { WorkbenchGraph } from './WorkbenchGraph';
+import { WorkbenchNotes } from './WorkbenchNotes';
 
 const PAGE_SIZE = 200;
+const EMPTY_VAULT_GRAPH: VaultGraph = { nodes: [], edges: [], revision: 0 };
 const KIND_LABELS: Record<LibraryItem['kind'], string> = {
   knowledge: '知识卡片',
   paper_excerpt: '论文摘录',
@@ -42,14 +45,20 @@ interface CategoryPath {
 type GraphPanelMode = 'entry' | 'mini' | 'expanded';
 type NoteSaveStatus = 'loading' | 'saved' | 'saving' | 'error';
 type ColorTheme = 'dark' | 'light';
+type WorkspaceMode = 'vault-notes' | 'library';
 
 interface ActiveGraphNote {
   identity: NoteIdentity;
+  /** Vault that supplied this note; mutations must stay bound to this captured root. */
+  vaultRoot: string;
   title: string;
   content: string;
+  etag: string | null;
   status: NoteSaveStatus;
   error?: string;
   loadFailed?: boolean;
+  rootMismatch?: boolean;
+  rootMismatchSaved?: boolean;
   draftRecoverable?: boolean;
 }
 
@@ -93,6 +102,20 @@ export default function WorkbenchApp({
   outsideTauri,
   modelSettings,
 }: WorkbenchAppProps): ReactElement {
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('vault-notes');
+  const [vaultRoot, setVaultRoot] = useState('');
+  const vaultRootRef = useRef(vaultRoot);
+  vaultRootRef.current = vaultRoot;
+  const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(null);
+  const [vaultOpenRequest, setVaultOpenRequest] = useState<{ path: string; intent: { newTab: boolean; split: boolean }; id: number } | null>(null);
+  const [vaultPreviewRequest, setVaultPreviewRequest] = useState<{ path: string; anchor: DOMRect | null; id: number } | null>(null);
+  const [vaultTagQuery, setVaultTagQuery] = useState<string | null>(null);
+  const [vaultRevision, setVaultRevision] = useState(0);
+  const [vaultGraph, setVaultGraph] = useState<VaultGraph>(EMPTY_VAULT_GRAPH);
+  const [vaultGraphRoot, setVaultGraphRoot] = useState('');
+  const [vaultGraphLoading, setVaultGraphLoading] = useState(false);
+  const [vaultGraphError, setVaultGraphError] = useState<string | null>(null);
+  const [vaultGraphMode, setVaultGraphMode] = useState<'global' | 'local'>(() => 'global');
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -156,6 +179,53 @@ export default function WorkbenchApp({
   const graphPanelRef = useRef<HTMLElement | null>(null);
   const noteScrollRef = useRef<HTMLDivElement | null>(null);
   const graphResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+  const vaultOpenRequestId = useRef(0);
+  const vaultPreviewRequestId = useRef(0);
+
+  useEffect(() => {
+    if (vaultRoot === '') return;
+    try {
+      const saved = window.localStorage.getItem(`noltri:vault-graph-mode:${encodeURIComponent(vaultRoot)}`);
+      setVaultGraphMode(saved === 'local' ? 'local' : 'global');
+    } catch { setVaultGraphMode('global'); }
+  }, [vaultRoot]);
+
+  useEffect(() => {
+    if (workspaceMode !== 'vault-notes' || vaultRoot === '') return;
+    let cancelled = false;
+    setVaultGraphLoading(true);
+    setVaultGraphError(null);
+    void api.vaultGraph().then((data) => {
+      if (!cancelled) { setVaultGraph(data); setVaultGraphRoot(vaultRoot); setVaultGraphError(null); }
+    }).catch((error) => {
+      if (!cancelled) setVaultGraphError(describeError(error));
+    }).finally(() => { if (!cancelled) setVaultGraphLoading(false); });
+    return () => { cancelled = true; };
+  }, [api, workspaceMode, vaultRoot, vaultRevision]);
+
+  const graphForCurrentVault = vaultGraphRoot === vaultRoot ? vaultGraph : EMPTY_VAULT_GRAPH;
+
+  const evaluateVaultQuery = useCallback((queryText: string) => api.vaultMatch(queryText), [api]);
+  const vaultTagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const node of graphForCurrentVault.nodes) {
+      if (node.type !== 'note') continue;
+      const ancestors = new Set<string>();
+      for (const rawTag of node.tags) {
+        const parts = rawTag.replace(/^#/, '').split('/').filter(Boolean);
+        for (let index = 0; index < parts.length; index += 1) ancestors.add(parts.slice(0, index + 1).join('/'));
+      }
+      for (const tag of ancestors) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return counts;
+  }, [graphForCurrentVault.nodes]);
+
+  const changeVaultGraphMode = useCallback((mode: 'global' | 'local'): void => {
+    setVaultGraphMode(mode);
+    if (vaultRoot !== '') {
+      try { window.localStorage.setItem(`noltri:vault-graph-mode:${encodeURIComponent(vaultRoot)}`, mode); } catch { /* Graph still works without storage. */ }
+    }
+  }, [vaultRoot]);
 
   function beginNavigationIntent(): number {
     return navigationIntent.current.begin();
@@ -212,6 +282,29 @@ export default function WorkbenchApp({
     setPendingDrafts(listNoteDrafts());
   }
 
+  useEffect(() => {
+    const active = activeNoteRef.current;
+    if (active === null || active.vaultRoot === vaultRoot) return;
+    const existingDraft = readNoteDraft(active.identity, active.vaultRoot);
+    const needsDraft = active.status !== 'loading' && active.status !== 'saved';
+    const draftSaved = existingDraft?.content === active.content || (needsDraft && writeNoteDraft({
+      ...active.identity,
+      vaultRoot: active.vaultRoot,
+      content: active.content,
+      updatedAt: new Date().toISOString(),
+    }));
+    const savedInOldVault = active.status === 'saved';
+    replaceActiveNote({
+      ...active,
+      status: 'error',
+      rootMismatch: true,
+      rootMismatchSaved: savedInOldVault,
+      draftRecoverable: draftSaved,
+      error: `Vault 已切换；这份正文属于「${active.vaultRoot || '尚未确认的 Vault'}」，不会写入当前 Vault。${savedInOldVault ? '正文已保存于原 Vault。' : draftSaved ? '旧正文已按原 Vault 保存在本机。' : '本机草稿保存失败，请先复制正文。'}`,
+    });
+    refreshPendingDrafts();
+  }, [vaultRoot]);
+
   async function loadGraph(scope: GraphScope): Promise<void> {
     const requestId = ++graphRequestId.current;
     setGraphLoading(true);
@@ -246,6 +339,8 @@ export default function WorkbenchApp({
       const active = activeNoteRef.current;
       setNotice(active?.loadFailed
         ? '正文尚未载入。为避免覆盖已有内容，请重新载入后再切换。'
+        : active?.rootMismatch
+          ? 'Vault 已切换且无法保存原 Vault 的本机草稿，请先复制正文后再继续。'
         : '正文尚未保存，且本地恢复草稿不可用；请重试保存后再切换。');
       return false;
     }
@@ -255,18 +350,40 @@ export default function WorkbenchApp({
   }
 
   async function persistNoteSnapshot(note: ActiveGraphNote): Promise<{ serverSaved: boolean; localSaved: boolean }> {
-    const draft: NoteDraft = { ...note.identity, content: note.content, updatedAt: new Date().toISOString() };
-    const localSaved = writeNoteDraft(draft);
+    const draft: NoteDraft = { ...note.identity, vaultRoot: note.vaultRoot, content: note.content, updatedAt: new Date().toISOString() };
+    const contextMismatch = note.vaultRoot === '' || vaultRootRef.current !== note.vaultRoot || note.rootMismatch;
+    const localSaved = contextMismatch && note.rootMismatchSaved
+      ? readNoteDraft(note.identity, note.vaultRoot)?.content === note.content
+      : writeNoteDraft(draft);
     refreshPendingDrafts();
-    if (sameNoteIdentity(activeNoteRef.current?.identity, note.identity) && activeNoteRef.current?.content === note.content
-      && activeNoteRef.current.status !== 'saving') {
-      replaceActiveNote({ ...activeNoteRef.current, status: 'saving', error: undefined });
+    const sameContext = (current: ActiveGraphNote | null | undefined): current is ActiveGraphNote =>
+      sameNoteIdentity(current?.identity, note.identity) && current?.vaultRoot === note.vaultRoot;
+    const currentAtStart = activeNoteRef.current;
+    if (sameContext(currentAtStart) && !currentAtStart.rootMismatch && vaultRootRef.current === note.vaultRoot
+      && currentAtStart.content === note.content && currentAtStart.status !== 'saving') {
+      replaceActiveNote({ ...currentAtStart, status: 'saving', error: undefined });
+    }
+
+    if (contextMismatch) {
+      const matchingDraft = readNoteDraft(note.identity, note.vaultRoot)?.content === note.content;
+      const retained = note.rootMismatchSaved || matchingDraft || writeNoteDraft(draft);
+      const current = activeNoteRef.current;
+      if (sameContext(current)) {
+        replaceActiveNote({
+          ...current,
+          status: 'error',
+          rootMismatch: true,
+          error: `Vault 已切换；正文仍绑定到「${note.vaultRoot || '未知 Vault'}」，未发送保存请求。${note.status === 'saved' ? '正文已保存于原 Vault。' : retained ? '草稿已保留在本机。' : '本机草稿保存失败，请先复制正文。'}`,
+          draftRecoverable: !note.rootMismatchSaved && (matchingDraft || retained),
+        });
+      }
+      return { serverSaved: false, localSaved: retained };
     }
 
     if (note.content.length > MAX_GRAPH_NOTE_CHARS) {
       const error = `正文为 ${note.content.length.toLocaleString()} 个字符，超过服务器上限 ${MAX_GRAPH_NOTE_CHARS.toLocaleString()} 个字符。${localSaved ? '草稿已保存在本机；请缩短正文后重试。' : '本机草稿也无法保存；请缩短正文后重试。'}`;
       const current = activeNoteRef.current;
-      if (sameNoteIdentity(current?.identity, note.identity) && current?.content === note.content) {
+      if (sameContext(current) && current.content === note.content) {
         replaceActiveNote({ ...current, status: 'error', error, draftRecoverable: localSaved });
       }
       return { serverSaved: false, localSaved };
@@ -274,14 +391,18 @@ export default function WorkbenchApp({
 
     let serverSaved = false;
     let saveError: string | undefined;
+    let savedEtag = note.etag;
     const operation = noteSaveChain.current.catch(() => undefined).then(async () => {
       try {
-        await api.saveGraphNote(note.identity.topicId, {
+        if (vaultRootRef.current !== note.vaultRoot) throw new Error('Vault 已切换；保存请求已取消，正文保留在原 Vault 草稿中。');
+        const saved = await api.saveGraphNote(note.identity.topicId, {
           chapterId: note.identity.chapterId,
           content: note.content,
-        });
+          ...(note.etag === null ? {} : { expectedEtag: note.etag }),
+        }, note.vaultRoot);
         serverSaved = true;
-        clearNoteDraft(note.identity, note.content);
+        savedEtag = saved.etag;
+        clearNoteDraft(note.identity, note.content, note.vaultRoot);
       } catch (error) {
         saveError = describeError(error);
       }
@@ -291,10 +412,22 @@ export default function WorkbenchApp({
     refreshPendingDrafts();
 
     const current = activeNoteRef.current;
-    if (sameNoteIdentity(current?.identity, note.identity) && current?.content === note.content) {
-      replaceActiveNote(serverSaved
-        ? { ...current, status: 'saved', error: undefined, draftRecoverable: false }
-        : { ...current, status: 'error', error: saveError ?? '保存失败。', draftRecoverable: localSaved });
+    if (sameContext(current) && current.content === note.content) {
+      if (vaultRootRef.current !== note.vaultRoot || current.rootMismatch) {
+        if (serverSaved) replaceActiveNote({
+          ...current,
+          etag: savedEtag,
+          status: 'error',
+          rootMismatch: true,
+          rootMismatchSaved: true,
+          error: `Vault 已切换；正文已保存于原 Vault「${note.vaultRoot}」，不会写入当前 Vault。`,
+          draftRecoverable: false,
+        });
+      } else {
+        replaceActiveNote(serverSaved
+          ? { ...current, etag: savedEtag, status: 'saved', error: undefined, draftRecoverable: false }
+          : { ...current, status: 'error', error: saveError ?? '保存失败。', draftRecoverable: localSaved });
+      }
     }
     return { serverSaved, localSaved };
   }
@@ -305,7 +438,7 @@ export default function WorkbenchApp({
       if (active === null) return true;
       if (active.status === 'loading') return true;
       if (active.loadFailed) return false;
-      if (active.status === 'saved' && readNoteDraft(active.identity) === null) return true;
+      if (active.status === 'saved' && readNoteDraft(active.identity, active.vaultRoot) === null) return true;
       if (noteSaveTimer.current !== null) {
         clearTimeout(noteSaveTimer.current);
         noteSaveTimer.current = null;
@@ -320,14 +453,25 @@ export default function WorkbenchApp({
   async function loadNote(identity: NoteIdentity, title: string, selection: WorkbenchContent, options: LoadNoteOptions): Promise<void> {
     const { intent, addHistory = true, transitionPrepared = false, collapseNavigation = true, forceReload = false } = options;
     if (!isCurrentNavigationIntent(intent)) return;
+    const loadRoot = vaultRootRef.current;
     const current = contentRef.current;
     if (contentIdentity(current) !== contentIdentity(selection)) {
       if (!transitionPrepared && !(await prepareContentTransition(selection, addHistory, intent))) return;
-      if (!isCurrentNavigationIntent(intent)) return;
+      if (!isCurrentNavigationIntent(intent) || vaultRootRef.current !== loadRoot) return;
+    }
+
+    if (loadRoot === '') {
+      replaceActiveNote({ identity, vaultRoot: '', title, content: '', etag: null, status: 'error', loadFailed: true, error: 'Vault 尚未就绪；正文没有绑定到可写入的笔记目录。' });
+      return;
     }
 
     const active = activeNoteRef.current;
-    if (shouldReuseActiveNote(active?.identity ?? null, identity, forceReload)) {
+    if (active !== null && active.vaultRoot !== loadRoot) {
+      if (active.status === 'loading') return;
+      const preserved = await persistNoteSnapshot(active);
+      if (!preserved.localSaved || vaultRootRef.current !== loadRoot) return;
+    }
+    if (active?.vaultRoot === loadRoot && shouldReuseActiveNote(active.identity, identity, forceReload)) {
       if (active === null) return;
       replaceContent(selection);
       setChapterChoice(null);
@@ -345,33 +489,33 @@ export default function WorkbenchApp({
     if (collapseNavigation) setNavCollapsed(true);
 
     const requestId = ++noteLoadRequestId.current;
-    replaceActiveNote({ identity, title, content: '', status: 'loading' });
+    replaceActiveNote({ identity, vaultRoot: loadRoot, title, content: '', etag: null, status: 'loading' });
     try {
       const [serverResult, indexResult] = await Promise.allSettled([
         api.graphNote(identity.topicId, identity.chapterId),
         api.listGraphNotes(identity.topicId),
       ]);
-      if (requestId !== noteLoadRequestId.current) return;
+      if (requestId !== noteLoadRequestId.current || vaultRootRef.current !== loadRoot) return;
       if (indexResult.status === 'fulfilled') setGraphNotes(indexResult.value.notes);
       else setGraphNotes([]);
       if (serverResult.status === 'rejected') throw serverResult.reason;
 
       const serverNote = serverResult.value;
-      const draft = readNoteDraft(identity);
+      const draft = readNoteDraft(identity, loadRoot);
       const draftWins = draft !== null && (serverNote.updatedAt === null
         || (Number.isFinite(Date.parse(draft.updatedAt)) && Number.isFinite(Date.parse(serverNote.updatedAt))
           ? Date.parse(draft.updatedAt) >= Date.parse(serverNote.updatedAt)
           : true));
-      if (draft !== null && !draftWins) clearNoteDraft(identity, draft.content);
+      if (draft !== null && !draftWins) clearNoteDraft(identity, draft.content, loadRoot);
       const content = draftWins ? draft!.content : serverNote.content;
-      replaceActiveNote({ identity, title, content, status: draftWins ? 'saving' : 'saved', draftRecoverable: draftWins });
+      replaceActiveNote({ identity, vaultRoot: loadRoot, title, content, etag: serverNote.etag, status: draftWins ? 'saving' : 'saved', draftRecoverable: draftWins });
     } catch (error) {
-      if (requestId !== noteLoadRequestId.current) return;
-      const draft = readNoteDraft(identity);
+      if (requestId !== noteLoadRequestId.current || vaultRootRef.current !== loadRoot) return;
+      const draft = readNoteDraft(identity, loadRoot);
       if (draft !== null) {
-        replaceActiveNote({ identity, title, content: draft.content, status: 'error', error: `服务器暂不可用：${describeError(error)}`, draftRecoverable: true });
+        replaceActiveNote({ identity, vaultRoot: loadRoot, title, content: draft.content, etag: null, status: 'error', error: `服务器暂不可用：${describeError(error)}`, draftRecoverable: true });
       } else {
-        replaceActiveNote({ identity, title, content: '', status: 'error', error: describeError(error), loadFailed: true });
+        replaceActiveNote({ identity, vaultRoot: loadRoot, title, content: '', etag: null, status: 'error', error: describeError(error), loadFailed: true });
       }
     }
     refreshPendingDrafts();
@@ -454,10 +598,12 @@ export default function WorkbenchApp({
     setSelectedNodeId(null);
     setQuery('');
     setKindFilter('all');
+    setWorkspaceMode('library');
     invalidateItems();
   }
 
   async function selectTreeNode(id: string): Promise<void> {
+    setWorkspaceMode('library');
     const intent = beginNavigationIntent();
     const route = selectionForTreeNode(tree, id);
     if (route === null) {
@@ -704,10 +850,10 @@ export default function WorkbenchApp({
 
   function changeNoteContent(content: string): void {
     const active = activeNoteRef.current;
-    if (active === null || active.status === 'loading') return;
+    if (active === null || active.status === 'loading' || active.rootMismatch || active.vaultRoot === '' || active.vaultRoot !== vaultRootRef.current) return;
     const next: ActiveGraphNote = { ...active, content, status: 'saving', error: undefined };
     replaceActiveNote(next);
-    const cached = writeNoteDraft({ ...next.identity, content, updatedAt: new Date().toISOString() });
+    const cached = writeNoteDraft({ ...next.identity, vaultRoot: next.vaultRoot, content, updatedAt: new Date().toISOString() });
     refreshPendingDrafts();
     replaceActiveNote({ ...next, draftRecoverable: cached, ...(cached ? {} : { error: '本地恢复草稿不可用；自动保存仍会重试服务器。' }) });
   }
@@ -715,7 +861,7 @@ export default function WorkbenchApp({
   async function retryActiveNote(): Promise<void> {
     const active = activeNoteRef.current;
     if (active === null) return;
-    if (active.loadFailed) {
+    if (active.loadFailed || active.rootMismatch) {
       await loadNote(active.identity, active.title, contentRef.current, { intent: beginNavigationIntent(), addHistory: false, forceReload: true });
       return;
     }
@@ -724,6 +870,17 @@ export default function WorkbenchApp({
   }
 
   async function openDraft(draft: NoteDraft): Promise<void> {
+    const root = vaultRootRef.current;
+    if (root === '') {
+      setNotice('Vault 尚未就绪，无法安全打开恢复草稿。');
+      return;
+    }
+    if (draft.vaultRoot !== undefined && draft.vaultRoot !== root) {
+      setNotice(`这份草稿属于「${draft.vaultRoot}」，当前打开的是「${root}」。草稿仍保留在本机，请切回原 Vault 后恢复。`);
+      return;
+    }
+    const needsManualBinding = draft.vaultRoot === undefined;
+    if (needsManualBinding && !window.confirm(`这份旧草稿没有 Vault 归属信息。是否手动导入到当前 Vault「${root}」？`)) return;
     const intent = beginNavigationIntent();
     let title = draft.chapterId === null
       ? graphNodes.find((node) => node.id === draft.topicId)?.title ?? graphNodeFromTree(tree, draft.topicId)?.title ?? '主题概览'
@@ -732,7 +889,12 @@ export default function WorkbenchApp({
     const selection: WorkbenchContent = draft.chapterId === null
       ? { kind: 'topic', topicId: draft.topicId }
       : { kind: 'chapter', topicId: draft.topicId, chapterId: draft.chapterId };
-    if (!(await prepareContentTransition(selection, true, intent)) || !isCurrentNavigationIntent(intent)) return;
+    if (!(await prepareContentTransition(selection, true, intent)) || !isCurrentNavigationIntent(intent) || vaultRootRef.current !== root) return;
+    if (needsManualBinding && !writeNoteDraft({ ...draft, vaultRoot: root })) {
+      setNotice('无法创建当前 Vault 的安全恢复副本，旧草稿仍保留且未导入。');
+      return;
+    }
+    if (needsManualBinding) clearNoteDraft(draft, draft.content);
     if (draft.chapterId !== null && title === '章节正文') {
       try {
         const detail = await api.nodeDetail(draft.chapterId);
@@ -859,7 +1021,7 @@ export default function WorkbenchApp({
     noteSaveTimer.current = setTimeout(() => {
       noteSaveTimer.current = null;
       const latest = activeNoteRef.current;
-      if (latest !== null && sameNoteIdentity(latest.identity, activeNote.identity) && latest.content === activeNote.content) {
+      if (latest !== null && sameNoteIdentity(latest.identity, activeNote.identity) && latest.vaultRoot === activeNote.vaultRoot && latest.content === activeNote.content) {
         void persistNoteSnapshot(latest);
       }
     }, 650);
@@ -869,7 +1031,7 @@ export default function WorkbenchApp({
         noteSaveTimer.current = null;
       }
     };
-  }, [activeNote?.identity.topicId, activeNote?.identity.chapterId, activeNote?.content, activeNote?.status]);
+  }, [activeNote?.identity.topicId, activeNote?.identity.chapterId, activeNote?.vaultRoot, activeNote?.content, activeNote?.status]);
 
   useEffect(() => {
     const requestId = ++graphSearchRequestId.current;
@@ -1222,7 +1384,7 @@ export default function WorkbenchApp({
   }
 
   return (
-    <div ref={shellRef} className={`library-shell${contentSelection.kind !== 'library' ? graphScope !== null ? ` library-shell-notebook library-shell-graph-${graphMode}` : ' library-shell-notebook library-shell-notebook-no-graph' : ''}${pendingDrafts.length > 0 ? ' has-pending-drafts' : ''}`} data-theme={theme} style={{ '--graph-panel-width': `${graphPanelWidth}px` } as CSSProperties}>
+    <div ref={shellRef} className={`library-shell${workspaceMode === 'vault-notes' || contentSelection.kind !== 'library' ? ` library-shell-notebook${workspaceMode === 'vault-notes' || graphScope !== null ? ` library-shell-graph-${graphMode}` : ' library-shell-notebook-no-graph'}` : ''}${pendingDrafts.length > 0 ? ' has-pending-drafts' : ''}`} data-theme={theme} style={{ '--graph-panel-width': `${graphPanelWidth}px` } as CSSProperties}>
       <aside className={`library-sidebar${navCollapsed ? ' library-sidebar-tree-collapsed' : ''}`} aria-label="知识库侧栏">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">知</div>
@@ -1232,7 +1394,17 @@ export default function WorkbenchApp({
           </div>
         </div>
 
-        <div className="sidebar-label">资料库</div>
+        <div className="sidebar-label">工作区</div>
+        <nav className="library-nav" aria-label="工作区">
+          <button className={workspaceMode === 'vault-notes' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => setWorkspaceMode('vault-notes')} type="button">
+            <span className="nav-glyph" aria-hidden="true">✎</span><span>Markdown 笔记</span>
+          </button>
+          <button className={workspaceMode === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { setWorkspaceMode('library'); void navigateToLibrary('all'); }} type="button">
+            <span className="nav-glyph" aria-hidden="true">▦</span><span>资料库</span>
+          </button>
+        </nav>
+
+        <div className="sidebar-label">资料筛选</div>
         <nav className="library-nav" aria-label="资料筛选">
           <button className={view === 'all' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('all'); }} type="button">
             <span className="nav-glyph" aria-hidden="true">▦</span><span>全部资料</span>
@@ -1273,11 +1445,11 @@ export default function WorkbenchApp({
         <div className="sidebar-bottom">
           {pendingDrafts.length > 0 ? <details className="sidebar-draft-recovery">
             <summary>待同步草稿（{pendingDrafts.length}）</summary>
-            {pendingDrafts.map((draft) => <button className="draft-recovery-row" type="button" key={`${draft.topicId}:${draft.chapterId ?? ''}`} onClick={() => { void openDraft(draft); }}>
+            {pendingDrafts.map((draft) => <button className="draft-recovery-row" type="button" key={`${draft.topicId}:${draft.chapterId ?? ''}:${draft.vaultRoot ?? 'unbound'}`} title={draft.vaultRoot ?? '旧草稿没有 Vault 归属；打开时会要求手动导入'} onClick={() => { void openDraft(draft); }}>
               <span>{draft.chapterId === null
                 ? `主题概览 · ${graphNodes.find((node) => node.id === draft.topicId)?.title ?? graphNodeFromTree(tree, draft.topicId)?.title ?? '主题概览'}`
                 : `章节 · ${graphChapterTitle(draft.topicId, draft.chapterId, graphNodes, tree, graphNotes)}${graphChapterAttachment(graphNotes, draft.topicId, draft.chapterId) === 'detached' ? ' · 未归属' : ''}`}</span>
-              <small>{new Date(draft.updatedAt).toLocaleString()}</small>
+              <small>{new Date(draft.updatedAt).toLocaleString()}{draft.vaultRoot === undefined ? ' · 旧草稿，需手动导入' : ` · ${draft.vaultRoot}`}</small>
             </button>)}
           </details> : null}
           <button type="button" className="settings-link" onClick={() => setOverlay('settings')}>
@@ -1291,9 +1463,10 @@ export default function WorkbenchApp({
         </div>
       </aside>
 
-      <main ref={centerRef} className={`library-main${contentSelection.kind === 'library' ? '' : ' notebook-main'}`}>
-        {contentSelection.kind === 'library' && chapterChoiceView !== null ? <ChapterChoicePanel chapterTitle={chapterChoiceView.chapterTitle} candidates={chapterChoiceView.candidates} action={chapterChoiceView.action} onChoose={(topicId) => { void chooseChapterTopic(topicId); }} /> : null}
-        {contentSelection.kind !== 'library' ? <GraphNotebook
+      <main ref={centerRef} className={`library-main${workspaceMode === 'vault-notes' || contentSelection.kind !== 'library' ? ' notebook-main' : ''}`}>
+        <WorkbenchNotes api={api} active={workspaceMode === 'vault-notes'} requestedOpen={vaultOpenRequest} previewRequest={vaultPreviewRequest} tagQuery={vaultTagQuery} vaultTagCounts={vaultTagCounts} onContextChange={(rootPath, selectedPath, revision) => { setVaultRoot(rootPath); setVaultSelectedPath(selectedPath); setVaultRevision(revision); }} />
+        {workspaceMode === 'library' && contentSelection.kind === 'library' && chapterChoiceView !== null ? <ChapterChoicePanel chapterTitle={chapterChoiceView.chapterTitle} candidates={chapterChoiceView.candidates} action={chapterChoiceView.action} onChoose={(topicId) => { void chooseChapterTopic(topicId); }} /> : null}
+        {workspaceMode === 'library' && contentSelection.kind !== 'library' ? <GraphNotebook
           content={contentSelection}
           scope={graphScope}
           nodes={graphNodes}
@@ -1339,7 +1512,7 @@ export default function WorkbenchApp({
           onCollect={() => setOverlay('collect')}
           onToggleTheme={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
           theme={theme}
-        /> : <>
+        /> : workspaceMode === 'library' ? <>
         <header className="library-header">
           <div className="header-copy">
             <div className="eyebrow">{selectedPath.length > 0 ? selectedPath.join(' / ') : '我的知识空间'}</div>
@@ -1424,40 +1597,39 @@ export default function WorkbenchApp({
             {loadingMore ? '正在载入…' : '再看一些'}
           </button></div>
         ) : null}
-        </>}
+        </> : null}
       </main>
 
-      {contentSelection.kind !== 'library' && graphScope !== null ? <aside ref={graphPanelRef} className={`graph-panel graph-panel-${graphMode}`} aria-label="Graph 面板">
-        <button
-          type="button"
-          className="graph-resizer"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="调整 Graph 面板宽度"
-          aria-valuenow={graphPanelWidth}
-          aria-valuemin={300}
-          aria-valuemax={Math.max(300, shellRef.current?.clientWidth ?? 300)}
-          onPointerDown={beginGraphResize}
-          onPointerMove={moveGraphResize}
-          onPointerUp={endGraphResize}
-          onPointerCancel={endGraphResize}
-          onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); adjustGraphResize(1); } else if (event.key === 'ArrowRight') { event.preventDefault(); adjustGraphResize(-1); } }}
-        />
+      {workspaceMode === 'vault-notes' ? <aside ref={graphPanelRef} className={`graph-panel graph-panel-${graphMode}`} aria-label="Vault Graph 面板">
         {graphMode === 'entry' ? <div className="graph-entry">
-          {graphError !== null ? <p className="graph-entry-error" role="alert">Graph 暂不可用：{graphError}</p> : null}
-          {graphLoading ? <span className="graph-entry-loading" role="status">正在读取 Graph…</span> : null}
-          <button type="button" className="button-soft graph-entry-button" onClick={() => changeGraphMode('expanded')}>展开graph view</button>
-          {graphError !== null ? <button type="button" className="text-action" onClick={() => graphScope !== null && void loadGraph(graphScope)}>重新载入</button> : null}
-        </div> : graphError !== null ? <div className="graph-panel-status" role="alert"><span>Graph 暂不可用：{graphError}</span><button type="button" className="text-action" onClick={() => graphScope !== null && void loadGraph(graphScope)}>重新载入</button></div> : graphLoading && graphNodes.length === 0 ? <div className="graph-panel-status" role="status"><span className="loader" />正在读取 Graph…</div> : <WorkbenchGraph
-          nodes={graphNodes}
-          edges={graphEdges}
-          scopeIdentity={graphScopeIdentity(graphScope)}
-          selectedNodeId={contentSelection.kind === 'topic' ? contentSelection.topicId : contentSelection.kind === 'chapter' ? contentSelection.chapterId : null}
-          mode={graphMode}
-          onNodeOpen={(node) => { void handleGraphNodeOpen(node); }}
-          onModeChange={changeGraphMode}
-          onNodeMore={openMoreForGraphNode}
+          {vaultGraphError !== null ? <p className="graph-entry-error" role="alert">Graph 暂不可用：{vaultGraphError}</p> : null}
+          {vaultGraphLoading ? <span className="graph-entry-loading" role="status">正在读取 Vault Graph…</span> : null}
+          <button type="button" className="button-soft graph-entry-button" onClick={() => changeGraphMode('expanded')}>展开 Graph View</button>
+          {vaultGraphError !== null ? <button type="button" className="text-action" onClick={() => setVaultRevision((revision) => revision + 1)}>重新载入</button> : null}
+        </div> : <WorkbenchGraph
+          data={graphForCurrentVault}
+          vaultRoot={vaultRoot}
+          mode={vaultGraphMode}
+          focusedPath={vaultSelectedPath}
+          selectedPath={vaultSelectedPath}
+          loading={vaultGraphLoading}
+          error={vaultGraphError}
+          onRefresh={() => setVaultRevision((revision) => revision + 1)}
+          evaluateQuery={evaluateVaultQuery}
+          onModeChange={changeVaultGraphMode}
+          onNodeOpen={(path, intent) => {
+            setWorkspaceMode('vault-notes');
+            setVaultOpenRequest({ path, intent, id: ++vaultOpenRequestId.current });
+          }}
+          onTagOpen={(tag) => {
+            changeVaultGraphMode('global');
+            setVaultTagQuery(`tag:${tag.replace(/^#/, '')}`);
+            setWorkspaceMode('vault-notes');
+          }}
+          onNodeHover={(path, anchor) => setVaultPreviewRequest({ path, anchor, id: ++vaultPreviewRequestId.current })}
         />}
+      </aside> : workspaceMode === 'library' && contentSelection.kind !== 'library' && graphScope !== null ? <aside ref={graphPanelRef} className={`graph-panel graph-panel-${graphMode}`} aria-label="Graph 面板">
+        <div className="graph-entry"><p className="graph-entry-loading">学术知识树仍用于章节与主题导航。</p><button type="button" className="button-soft graph-entry-button" onClick={() => setWorkspaceMode('vault-notes')}>打开 Vault Graph</button></div>
       </aside> : null}
 
       {compareIds.length > 0 ? (

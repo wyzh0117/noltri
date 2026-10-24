@@ -31,6 +31,22 @@ describe('recoverable note drafts', () => {
     expect(listNoteDrafts()).toEqual([topicDraft, chapterDraft]);
   });
 
+  it('keeps drafts isolated by Vault and never treats an old unscoped draft as a current-root draft', () => {
+    vi.stubGlobal('window', { localStorage: storage });
+    const identity = { topicId: 'topic-a', chapterId: null };
+    const legacy = { ...identity, content: 'old unbound', updatedAt: '2026-10-20T00:00:00.000Z' };
+    const rootA = { ...identity, vaultRoot: '/tmp/知序 Vault A', content: 'A', updatedAt: '2026-10-20T00:01:00.000Z' };
+    const rootB = { ...identity, vaultRoot: '/tmp/知序 Vault B', content: 'B', updatedAt: '2026-10-20T00:02:00.000Z' };
+
+    expect(writeNoteDraft(legacy)).toBe(true);
+    expect(writeNoteDraft(rootA)).toBe(true);
+    expect(writeNoteDraft(rootB)).toBe(true);
+    expect(readNoteDraft(identity)).toEqual(legacy);
+    expect(readNoteDraft(identity, rootA.vaultRoot)).toEqual(rootA);
+    expect(readNoteDraft(identity, rootB.vaultRoot)).toEqual(rootB);
+    expect(readNoteDraft(identity, '/tmp/elsewhere')).toBeNull();
+  });
+
   it('clears only the version the server accepted, preserving edits made in flight', () => {
     vi.stubGlobal('window', { localStorage: storage });
     const identity = { topicId: 'topic-a', chapterId: null };

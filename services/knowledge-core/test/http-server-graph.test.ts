@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { afterAll, describe, expect, it } from 'vitest';
-import { MAX_GRAPH_NOTE_CHARS, apiErrorSchema, captureResultSchema, graphSelectionSchema, treeResponseSchema, type KnowledgeNode } from '@noltri/schema';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { MAX_GRAPH_NOTE_CHARS, apiErrorSchema, captureResultSchema, graphSelectionSchema, noteLinksResponseSchema, noteMatchesResponseSchema, noteSearchResponseSchema, treeResponseSchema, vaultDeletePreviewSchema, vaultSettingsSchema, vaultSubpathResponseSchema, type KnowledgeNode } from '@noltri/schema';
 import { FileGrantStore, issueGrant } from '../src/authorization';
 import { startServer } from '../src/server';
 import { SqliteRepository } from '../../../packages/storage/src/sqlite';
@@ -13,6 +14,124 @@ const directories: string[] = [];
 afterAll(() => directories.forEach((directory) => rmSync(directory, { recursive: true, force: true })));
 
 describe('Graph v3.1 over the local HTTP server and SQLite', () => {
+  it.each(['/api/vault/file', '/api/vault/file/'])(
+    'keeps delayed Vault writes bound to the encoded Unicode root captured before the body arrives (%s)',
+    async (mutationPath) => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'noltri-vault-root-http-'));
+    directories.push(directory);
+    const sqliteFile = path.join(directory, 'profile.sqlite');
+    const env = {
+      STORAGE_DRIVER: 'sqlite',
+      NOLTRI_SQLITE_FILE: sqliteFile,
+      NOLTRI_DATA_DIR: directory,
+      NOLTRI_GRANT_FILE: path.join(directory, 'grants.json'),
+      NOLTRI_DEV_USER_ID: 'vault-root-http-user',
+      NOLTRI_DEV_REQUIRE_TOKEN: 'false',
+      NOLTRI_DEV_TOKEN: '',
+      AI_PROVIDER: 'offline',
+    } as const;
+    const previous = new Map<string, string | undefined>();
+    for (const [key, value] of Object.entries(env)) {
+      previous.set(key, process.env[key]);
+      process.env[key] = value;
+    }
+    let running: Awaited<ReturnType<typeof startServer>> | undefined;
+    let delayed: ReturnType<typeof httpRequest> | undefined;
+    let restoreCapture: (() => void) | undefined;
+    try {
+      running = await startServer({ port: 0 });
+      const address = running.server.address() as AddressInfo;
+      const base = `http://127.0.0.1:${String(address.port)}`;
+      const rootA = path.join(directory, '资料 Vault A');
+      const rootB = path.join(directory, '资料 Vault B');
+      const openA = await fetch(`${base}/api/vault/open`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rootPath: rootA }),
+      });
+      expect(openA.status).toBe(200);
+      const openedA = await openA.json() as { rootPath: string };
+      const encodedRootA = encodeURIComponent(openedA.rootPath);
+      const activeRootWrite = await fetch(`${base}${mutationPath}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'x-noltri-vault-root': encodedRootA },
+        body: JSON.stringify({ path: 'Active.md', content: '# active root write' }),
+      });
+      expect(activeRootWrite.status).toBe(200);
+
+      const preflight = await fetch(`${base}${mutationPath}`, {
+        method: 'OPTIONS', headers: {
+          origin: 'http://127.0.0.1:1423',
+          'access-control-request-method': 'PUT',
+          'access-control-request-headers': 'content-type,x-noltri-vault-root',
+        },
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get('access-control-allow-headers')).toContain('x-noltri-vault-root');
+
+      let reportRoot!: (root: string) => void;
+      const rootCaptured = new Promise<string>((resolve) => { reportRoot = resolve; });
+      const captureRoot = running.bundle.vault.captureRootForMutation.bind(running.bundle.vault);
+      const captureSpy = vi.spyOn(running.bundle.vault, 'captureRootForMutation').mockImplementation(async () => {
+        const root = await captureRoot();
+        reportRoot(root);
+        return root;
+      });
+      restoreCapture = () => captureSpy.mockRestore();
+      let resolveDelayedResponse!: (result: { status: number; body: string }) => void;
+      let rejectDelayedResponse!: (error: Error) => void;
+      const delayedResponse = new Promise<{ status: number; body: string }>((resolve, reject) => {
+        resolveDelayedResponse = resolve;
+        rejectDelayedResponse = reject;
+      });
+      delayed = httpRequest({
+        hostname: '127.0.0.1', port: address.port, path: mutationPath, method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+      }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => resolveDelayedResponse({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      delayed.on('error', rejectDelayedResponse);
+      delayed.write('{"path":"Delayed.md",');
+      expect(await rootCaptured).toBe(openedA.rootPath);
+
+      const openB = await fetch(`${base}/api/vault/open`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rootPath: rootB }),
+      });
+      expect(openB.status).toBe(200);
+      delayed.end('"content":"# delayed old-root write"}');
+      const delayedResult = await delayedResponse;
+      delayed = undefined;
+      expect(delayedResult.status).toBe(409);
+      expect(delayedResult.body).toContain('Vault 已切换');
+
+      const encodedOldRoot = encodedRootA;
+      expect([...encodedOldRoot].every((character) => character.charCodeAt(0) < 128)).toBe(true);
+      const explicitStaleRoot = await fetch(`${base}${mutationPath}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'x-noltri-vault-root': encodedOldRoot },
+        body: JSON.stringify({ path: 'NoCreate.md', content: '# must not enter root B' }),
+      });
+      expect(explicitStaleRoot.status).toBe(409);
+      const invalidRoot = await fetch(`${base}${mutationPath}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'x-noltri-vault-root': 'bad%XX' },
+        body: JSON.stringify({ path: 'Invalid.md', content: '# must reject malformed token' }),
+      });
+      expect(invalidRoot.status).toBe(400);
+      const missing = await fetch(`${base}/api/vault/file?path=NoCreate.md`);
+      expect(missing.status).toBe(404);
+    } finally {
+      delayed?.destroy();
+      restoreCapture?.();
+      if (running !== undefined) await running.stop();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    },
+  );
+
   it('enforces exact-node grants, preserves existing discipline anchors and accepts the bounded note maximum', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'noltri-graph-http-'));
     directories.push(directory);
@@ -97,14 +216,126 @@ describe('Graph v3.1 over the local HTTP server and SQLite', () => {
       const noteWriter = (await issueGrant(grants, {
         label: 'note writer', scopes: ['read', 'mutate'], nodeIds: [topicA.id, chapter.id],
       })).secret;
+      const defaultVaultSettings = vaultSettingsSchema.parse(await (await fetch(`${base}/api/vault/settings`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(defaultVaultSettings).toEqual({ newLinkFormat: 'shortest' });
+      const updatedVaultSettings = await fetch(`${base}/api/vault/settings`, {
+        method: 'PUT', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ newLinkFormat: 'relative' }),
+      });
+      expect(vaultSettingsSchema.parse(await updatedVaultSettings.json())).toEqual({ newLinkFormat: 'relative' });
+      const legacyBefore = await fetch(`${base}/api/notes/${topicA.id}?chapterId=${chapter.id}`, { headers: { authorization: `Bearer ${noteWriter}` } });
+      expect(legacyBefore.status).toBe(200);
+      const legacyNote = await legacyBefore.json() as { path: string; etag: string };
+      expect(legacyNote.etag).toBeTruthy();
       // U+0001 forces JSON's six-byte control-character escape without SQLite's special NUL handling.
-      const body = JSON.stringify({ chapterId: chapter.id, content });
+      const body = JSON.stringify({ chapterId: chapter.id, content, expectedEtag: legacyNote.etag });
       expect(Buffer.byteLength(body)).toBeLessThan(256_000);
       const saved = await fetch(`${base}/api/notes/${topicA.id}`, {
         method: 'PUT', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' }, body,
       });
       expect(saved.status).toBe(200);
-      expect((await repository.getKnowledgeNote(userId, topicA.id, chapter.id))?.content).toBe(content);
+      const savedNote = await saved.json() as { path: string; etag: string };
+      expect(savedNote.path).toBe(legacyNote.path);
+      expect((await running.bundle.vault.getFile(savedNote.path)).content).toBe(content);
+      expect((await repository.getKnowledgeNote(userId, topicA.id, chapter.id))?.content).toBe('索引不可越权');
+
+      const searchFile = await fetch(`${base}/api/vault/file`, {
+        method: 'PUT', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'Search.md', content: '---\ntags: [sample]\n---\n# SearchTitle\nneedle text\n\n## Other\n### Child\n\n## Parent\n### Child\nTarget paragraph ^Anchor\n\n# 中文 标题\n## Hello World\n### A#B\nEncoded paragraph ^Block-ID\n\n# Coverage 100%' }),
+      });
+      expect(searchFile.status).toBe(200);
+      const contentSearch = noteSearchResponseSchema.parse(await (await fetch(`${base}/api/vault/search?q=needle`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(contentSearch.results[0]?.snippet.slice(contentSearch.results[0]!.snippetMatches[0]!.start, contentSearch.results[0]!.snippetMatches[0]!.end)).toBe('needle');
+      const titleSearch = noteSearchResponseSchema.parse(await (await fetch(`${base}/api/vault/search?q=SearchTitle`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(titleSearch.results[0]?.title.slice(titleSearch.results[0]!.titleMatches[0]!.start, titleSearch.results[0]!.titleMatches[0]!.end)).toBe('SearchTitle');
+      const tagSearch = noteMatchesResponseSchema.parse(await (await fetch(`${base}/api/vault/match?q=tag%3Asample`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(tagSearch).toMatchObject({ paths: ['Search.md'], matchingTags: ['#sample'], attachmentPaths: [] });
+      const nestedSubpath = vaultSubpathResponseSchema.parse(await (await fetch(`${base}/api/vault/subpath?path=Search.md&subpath=Parent%23Child`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(nestedSubpath.position?.start.line).toBe(11);
+      const caseInsensitiveBlock = vaultSubpathResponseSchema.parse(await (await fetch(`${base}/api/vault/subpath?path=Search.md&subpath=%5Eanchor`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(caseInsensitiveBlock.position?.start.line).toBe(12);
+      const missingSubpath = vaultSubpathResponseSchema.parse(await (await fetch(`${base}/api/vault/subpath?path=Search.md&subpath=missing`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(missingSubpath.position).toBeNull();
+      const encodedChineseFragment = new URLSearchParams({ path: 'Search.md', subpath: '中文%20标题#Hello%20World#A%23B' });
+      const encodedFragment = vaultSubpathResponseSchema.parse(await (await fetch(`${base}/api/vault/subpath?${encodedChineseFragment}`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(encodedFragment.position?.start.line).toBe(16);
+      const encodedBlockFragment = new URLSearchParams({ path: 'Search.md', subpath: encodeURIComponent('^BLOCK-ID') });
+      const encodedBlock = vaultSubpathResponseSchema.parse(await (await fetch(`${base}/api/vault/subpath?${encodedBlockFragment}`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(encodedBlock.position?.start.line).toBe(17);
+      const rawPercentFragment = new URLSearchParams({ path: 'Search.md', subpath: 'Coverage 100%' });
+      const rawPercent = vaultSubpathResponseSchema.parse(await (await fetch(`${base}/api/vault/subpath?${rawPercentFragment}`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      const encodedPercentFragment = new URLSearchParams({ path: 'Search.md', subpath: 'Coverage 100%25' });
+      const encodedPercent = vaultSubpathResponseSchema.parse(await (await fetch(`${base}/api/vault/subpath?${encodedPercentFragment}`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(rawPercent.position?.start.line).toBe(19);
+      expect(encodedPercent.position).toEqual(rawPercent.position);
+
+      for (const [pathName, fileContent] of [
+        ['Target.md', '# root target'],
+        ['Nested/Target.md', '# nested target'],
+        ['Friendly Target.md', '---\naliases: [Friendly]\n---\n# friendly'],
+        ['Nested/Source.md', '[local](Target.md?mode=1#A#B)\n[root](../Target.md)\n[alias bait](Friendly)\n[[Friendly]]'],
+      ] as const) {
+        const created = await fetch(`${base}/api/vault/file`, {
+          method: 'PUT', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ path: pathName, content: fileContent }),
+        });
+        expect(created.status).toBe(200);
+      }
+      const resolveTypedLink = async (linkpath: string, kind?: 'wikilink' | 'markdown') => {
+        const response = await fetch(`${base}/api/vault/resolve-link`, {
+          method: 'POST', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ linkpath, sourcePath: 'Nested/Source.md', ...(kind === undefined ? {} : { kind }) }),
+        });
+        expect(response.status).toBe(200);
+        return await response.json() as { path: string | null };
+      };
+      expect(await resolveTypedLink('Target.md?mode=1#A#B', 'markdown')).toEqual({ path: 'Nested/Target.md' });
+      expect(await resolveTypedLink('../Target.md', 'markdown')).toEqual({ path: 'Target.md' });
+      expect(await resolveTypedLink('Friendly', 'markdown')).toEqual({ path: null });
+      expect(await resolveTypedLink('Friendly')).toEqual({ path: 'Friendly Target.md' });
+      expect(await resolveTypedLink('#A#B', 'markdown')).toEqual({ path: 'Nested/Source.md' });
+      expect(await resolveTypedLink('../../../outside.md', 'markdown')).toEqual({ path: null });
+      const typedLinks = noteLinksResponseSchema.parse(await (await fetch(`${base}/api/vault/links`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(typedLinks.resolvedLinks['Nested/Source.md']).toMatchObject({ 'Nested/Target.md': 1, 'Target.md': 1, 'Friendly Target.md': 1 });
+      expect(typedLinks.unresolvedLinks['Nested/Source.md']).toMatchObject({ Friendly: 1 });
+
+      const createFolder = await fetch(`${base}/api/vault/folder`, {
+        method: 'POST', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'Folder' }),
+      });
+      expect(createFolder.status).toBe(200);
+      const folderChild = await fetch(`${base}/api/vault/file`, {
+        method: 'PUT', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'Folder/Child.md', content: '# original' }),
+      });
+      const folderChildFile = await folderChild.json() as { etag: string };
+      const folderPreviewResponse = await fetch(`${base}/api/vault/delete-preview?path=Folder`, { headers: { authorization: `Bearer ${noteWriter}` } });
+      const folderPreview = vaultDeletePreviewSchema.parse(await folderPreviewResponse.json());
+      expect(folderPreview).toMatchObject({ kind: 'folder', descendantCount: 1, backlinkCount: 0 });
+      const editChild = await fetch(`${base}/api/vault/file`, {
+        method: 'PUT', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'Folder/Child.md', content: '# changed', expectedEtag: folderChildFile.etag }),
+      });
+      expect(editChild.status).toBe(200);
+      const staleFolderDelete = await fetch(`${base}/api/vault/file?path=Folder&expectedEtag=${encodeURIComponent(folderPreview.etag)}&orphanPolicy=never`, {
+        method: 'DELETE', headers: { authorization: `Bearer ${noteWriter}` },
+      });
+      expect(staleFolderDelete.status).toBe(409);
+      expect((await running.bundle.vault.getFile('Folder/Child.md')).content).toBe('# changed');
+      const freshFolderPreview = vaultDeletePreviewSchema.parse(await (await fetch(`${base}/api/vault/delete-preview?path=Folder`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      const folderDelete = await fetch(`${base}/api/vault/file?path=Folder&expectedEtag=${encodeURIComponent(freshFolderPreview.etag)}&orphanPolicy=never`, {
+        method: 'DELETE', headers: { authorization: `Bearer ${noteWriter}` },
+      });
+      expect(folderDelete.status).toBe(200);
+      const deletedChildHistory = await fetch(`${base}/api/vault/history?path=Folder%2FChild.md`, { headers: { authorization: `Bearer ${noteWriter}` } });
+      const deletedVersions = await deletedChildHistory.json() as { versions: Array<{ id: string }> };
+      expect(deletedVersions.versions).toHaveLength(2);
+      const restoredChild = await fetch(`${base}/api/vault/history/restore`, {
+        method: 'POST', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'Folder/Child.md', versionId: deletedVersions.versions[0]!.id }),
+      });
+      expect(restoredChild.status).toBe(200);
+      expect(await running.bundle.vault.getFile('Folder/Child.md').then(({ content: value }) => value)).toBe('# changed');
 
       const tooLong = await fetch(`${base}/api/notes/${topicA.id}`, {
         method: 'PUT', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
@@ -114,7 +345,29 @@ describe('Graph v3.1 over the local HTTP server and SQLite', () => {
       expect(apiErrorSchema.parse(await tooLong.json()).error.details).toMatchObject({
         0: expect.objectContaining({ message: expect.stringContaining(String(MAX_GRAPH_NOTE_CHARS)) }),
       });
-      expect((await repository.getKnowledgeNote(userId, topicA.id, chapter.id))?.content).toBe(content);
+      expect((await repository.getKnowledgeNote(userId, topicA.id, chapter.id))?.content).toBe('索引不可越权');
+
+      const removeLegacy = await fetch(`${base}/api/vault/file?path=${encodeURIComponent(savedNote.path)}&expectedEtag=${encodeURIComponent(savedNote.etag)}&orphanPolicy=never`, {
+        method: 'DELETE', headers: { authorization: `Bearer ${noteWriter}` },
+      });
+      expect(removeLegacy.status).toBe(200);
+      const afterDelete = await fetch(`${base}/api/notes/${topicA.id}?chapterId=${chapter.id}`, { headers: { authorization: `Bearer ${noteWriter}` } });
+      expect(await afterDelete.json()).toMatchObject({ path: savedNote.path, content: '', etag: null });
+
+      await running.stop();
+      running = await startServer({ port: 0 });
+      const restartedAddress = running.server.address() as AddressInfo;
+      const restartedBase = `http://127.0.0.1:${String(restartedAddress.port)}`;
+      const afterRestart = await fetch(`${restartedBase}/api/notes/${topicA.id}?chapterId=${chapter.id}`, { headers: { authorization: `Bearer ${noteWriter}` } });
+      expect(await afterRestart.json()).toMatchObject({ path: savedNote.path, content: '', etag: null });
+      const restartedSettings = vaultSettingsSchema.parse(await (await fetch(`${restartedBase}/api/vault/settings`, { headers: { authorization: `Bearer ${noteWriter}` } })).json());
+      expect(restartedSettings).toEqual({ newLinkFormat: 'relative' });
+      const explicitRestore = await fetch(`${restartedBase}/api/vault/legacy-note/restore`, {
+        method: 'POST', headers: { authorization: `Bearer ${noteWriter}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ topicId: topicA.id, chapterId: chapter.id }),
+      });
+      expect(explicitRestore.status).toBe(200);
+      expect(await explicitRestore.json()).toMatchObject({ path: savedNote.path, content: '索引不可越权' });
     } finally {
       if (running !== undefined) await running.stop();
       for (const [key, value] of previous) {
@@ -125,7 +378,7 @@ describe('Graph v3.1 over the local HTTP server and SQLite', () => {
 
     const reopened = new SqliteRepository({ file: sqliteFile });
     try {
-      expect((await reopened.getKnowledgeNote('graph-http-user', topicId, chapterId))?.content).toBe(content);
+      expect((await reopened.getKnowledgeNote('graph-http-user', topicId, chapterId))?.content).toBe('索引不可越权');
     } finally {
       await reopened.close();
     }

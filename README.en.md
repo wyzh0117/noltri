@@ -11,9 +11,9 @@ Noltri is a local personal knowledge library. Save useful passages from webpages
 
 ## Quick start
 
-Version 0.1.4 targets Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
+Version 0.2.0 targets Apple Silicon (arm64) Macs running macOS 13.5 or later. Download the [macOS installer](https://github.com/wyzh0117/noltri/releases/latest), open the disk image, and drag Noltri to the Applications folder.
 
-Version 0.1.4 release notes and acceptance results will be completed after this release's fixes and validation; see the [release notes](docs/releases/0.1.4.md). Version 0.1.3 adds direct reading and editing for knowledge topics and chapters, with graph browsing by subject scope and recovery for unsaved drafts. Version 0.1.2's provider management continues to support OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages. Configure a provider's API URL and write-only key, then fetch available models or add one manually. Apply saves provider and model settings; **Use this model** selects the global model before Noltri processes content. Version 0.1.3 uses ad-hoc signing and **has no Developer ID signature or Apple notarization**, so macOS may still block the first launch. Check the download against `SHA256SUMS.txt` in Releases, then follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445).
+Version 0.2.0 adds a Notes workspace backed by local Markdown files, CodeMirror Live Preview and reading views, search/properties/history, and a shared Vault Graph. See the [release notes](docs/releases/0.2.0.md) and [acceptance record](docs/testing/vault-notes-graph/acceptance.md) for verified behavior and known limits. This release uses ad-hoc signing, with **no Developer ID signature or Apple notarization**, so macOS may still block the first launch. Check the download against `SHA256SUMS.txt` in Releases, then follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445).
 
 If macOS still reports that the app is damaged, verify the download source and checksum, then remove quarantine for this app only:
 
@@ -98,7 +98,7 @@ Collect passages from two papers about the same question. Noltri keeps each sour
 
 ## Verification and builds
 
-The 0.1.1 live DeepSeek acceptance covers Python, TypeScript, Rust, Go, SQL and short excerpts from physics, econometrics, molecular biology and psychology papers. See the [test guide](docs/testing/README.md) and [recorded results](docs/testing/0.1.1-deepseek-results.json). The 0.1.2 automated checks, isolated protocol/restart tests, and built-UI mock-bridge workflows are recorded in the [test guide](docs/testing/README.md). Graph v3.1 follows the [development guide](Noltri_大模型开发指南_20261020.md) (Chinese); its 563 automated tests and 12 Rust tests pass, as do browser checks A01–A14 and the final More-entry UI review. A15/A16 describe original-stage capabilities that remain incomplete. See the [acceptance matrix](docs/testing/graph-v3.1/acceptance.md), [test guide](docs/testing/README.md), and [release notes](docs/releases/0.1.3.md). Installers contain no test credentials or user data.
+Version 0.2.0 adds a Markdown Vault notes editor, progressive reading, shared search and a Worker/WebGL graph. Current code checks pass 224 Core, 107 Desktop, 33 API client and 19 MCP tests. The Notes long run passed its data-integrity checks, while its raw runner end state remains invalid; the `beforeinput→rAF` p95 and 5k Graph settle budgets were not met. See the [release notes](docs/releases/0.2.0.md) and [acceptance matrix](docs/testing/vault-notes-graph/acceptance.md). Historical 0.1.1–0.1.3 results remain in the [test guide](docs/testing/README.md), [Graph v3.1 matrix](docs/testing/graph-v3.1/acceptance.md), and their release notes. Installers contain no test credentials or user data.
 
 ```bash
 pnpm typecheck
