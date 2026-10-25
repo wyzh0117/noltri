@@ -47,8 +47,8 @@ export async function checkEditorSaveRace(container:HTMLElement){
 
 export async function checkInboxArchivePage(container:HTMLElement){
  const items:LibraryItem[]=Array.from({length:201},(_,i)=>({id:`item-${i}`,content:`Original input ${i}`,summary:null,kind:'paper_excerpt',source:{type:'manual',title:`Input ${i}`,url:null,platform:null,appName:null,capturedAt:'2026-10-26T00:00:00Z',citation:null,page:null,author:null,doi:null},previewImageUrl:null,subjectPath:[],researchPoint:null,tags:[],aiStatus:'pending',createdAt:'2026-10-26T00:00:00Z',archived:false}));
- const offsets:number[]=[];
- const api={listItems:async({state,limit,offset}:{state:string;limit:number;offset:number})=>{offsets.push(offset);return {items:items.filter(item=>state==='all'||(state==='archive'?item.archived:!item.archived)).slice(offset,offset+limit)};},listItemRelations:async()=>[],archiveItem:async(id:string)=>{const item=items.find(item=>item.id===id)!;item.archived=true;return {item:{...item}};}} as unknown as WorkbenchApi;
+ const offsets:number[]=[],requests:string[]=[];let delayArchive=false,finishArchive:(()=>void)|null=null;
+ const api={listItems:async({state,limit,offset}:{state:string;limit:number;offset:number})=>{offsets.push(offset);requests.push(`${state}:${offset}`);return {items:items.filter(item=>state==='all'||(state==='archive'?item.archived:!item.archived)).slice(offset,offset+limit)};},listItemRelations:async()=>[],archiveItem:(id:string)=>new Promise<{item:LibraryItem}>(resolve=>{const finish=()=>{const item=items.find(item=>item.id===id)!;item.archived=true;resolve({item:{...item}});};if(delayArchive)finishArchive=finish;else finish();})} as unknown as WorkbenchApi;
  const root=createRoot(container);root.render(<MaterialsInbox api={api} paths={[]} onClose={()=>{}} onUpdated={()=>{}}/>);
  const button=(text:string)=>[...container.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent===text);
  try{
@@ -60,6 +60,17 @@ export async function checkInboxArchivePage(container:HTMLElement){
   assert(titles.includes('Input 200'),`Last input unreachable after archive; offsets ${JSON.stringify(offsets)}`);
   assert(!titles.includes('Input 0'),'Archived input remains in pending list');
   assert(Boolean(button('并排研究比较（1/2）')),'Archive reset the comparison selection');
-  return {passed:true,visible:titles.length,offsets,retainedComparison:1};
+  const pageOffsets=[...offsets];delayArchive=true;
+  (container.querySelector('.cw-inbox-open') as HTMLButtonElement).click();await until(()=>Boolean(button('移到归档')));
+  button('移到归档')!.click();await until(()=>Boolean(finishArchive));(container.querySelector('[aria-label="关闭详情"]') as HTMLButtonElement).click();await frame();
+  button('已归档')!.click();await until(()=>container.querySelector('.cw-inbox-open')?.textContent==='Input 0');
+  finishArchive!();await frame();await frame();
+  const reopened=container.querySelector<HTMLButtonElement>('[aria-label="关闭详情"]');if(reopened){reopened.click();await frame();await frame();}
+  const archivedTitles=[...container.querySelectorAll('.cw-inbox-open')].map(element=>element.textContent);
+  assert(button('已归档')?.getAttribute('aria-pressed')==='true','Current filter changed after delayed archive');
+  assert(JSON.stringify(archivedTitles)==='["Input 0","Input 1"]',`Delayed archive replaced the active filter: ${JSON.stringify({requests,archivedTitles})}`);
+  assert(!reopened,'Delayed archive reopened closed details');
+  assert(Boolean(button('并排研究比较（1/2）')),'Delayed archive reset comparison selection');
+  return {passed:true,visible:titles.length,offsets:pageOffsets,retainedComparison:1,delayedFilter:{requests,archivedTitles,reopened:Boolean(reopened)}};
  }finally{root.unmount();}
 }
