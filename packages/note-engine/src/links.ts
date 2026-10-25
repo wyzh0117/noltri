@@ -59,8 +59,13 @@ export function resolveKnowledgeLink(context: LinkContext, rawLink: string, targ
     if (block) return { status: 'resolved', target: { ...context.stableTarget, courseChapterId: block.courseChapterId ?? null, ...(block.entryId ? { entryId: block.entryId } : {}) } };
     return { status: 'subpath-missing', target: base, subpath };
   }
-  // An existing resolved identity survives heading/title changes; absence still invalidates it.
-  if (context.stableTarget?.entryId && !context.stableTarget.blockId && course.headings?.some((heading) => heading.entryId === context.stableTarget!.entryId)) return { status: 'resolved', target: context.stableTarget };
+  // A bound subpath cannot silently fall through to a sibling after the original is removed.
+  if (context.stableTarget?.entryId && context.stableTarget.headingPath) {
+    const heading = course.headings?.find((heading) => heading.entryId === context.stableTarget!.entryId && JSON.stringify(heading.path.map(normalizeHeading)) === JSON.stringify(context.stableTarget!.headingPath!.map(normalizeHeading)));
+    return heading ? { status: 'resolved', target: { ...context.stableTarget, courseChapterId: heading.courseChapterId ?? null } } : { status: 'subpath-missing', target: base, subpath };
+  }
+  if (context.stableTarget?.kind === 'chapter') return course.headings?.some((heading) => heading.courseChapterId === context.stableTarget!.courseChapterId)
+    ? { status: 'resolved', target: context.stableTarget } : { status: 'subpath-missing', target: base, subpath };
   if (subpath.startsWith('^')) {
     const key = normalizeIdentity(subpath.slice(1));
     const blocks = (course.blocks ?? []).filter((block) => [block.id, block.alias].some((id) => id && normalizeIdentity(id) === key));
@@ -147,8 +152,53 @@ export function formatLinkTarget(location: EngineLocation, targets: readonly Lin
     return `${location.courseId}#^${block?.alias ?? location.blockId}`;
   }
   if (location.courseChapterId || location.entryId) {
-    const heading = course.headings?.find((candidate) => (location.entryId ? candidate.entryId === location.entryId : candidate.courseChapterId === location.courseChapterId) && (!location.headingPath || location.headingPath.at(-1) === candidate.path.at(-1)));
+    const heading = course.headings?.find((candidate) => (location.entryId ? candidate.entryId === location.entryId : candidate.courseChapterId === location.courseChapterId) && (!location.headingPath || JSON.stringify(location.headingPath.map(normalizeHeading)) === JSON.stringify(candidate.path.map(normalizeHeading))));
     if (heading) return `${location.courseId}#${heading.path.join('#')}`;
+    if (location.headingPath) return `${location.courseId}#${location.headingPath.join('#')}`;
   }
   return location.courseId;
+}
+
+/** Keep only reference ranges provably unchanged by the original-coordinate transaction. */
+export function rebaseReferenceRanges<T extends Span & { raw: string }>(oldText: string, newText: string, references: readonly T[], changes?: readonly (Span & { insert: string })[]): T[] {
+  let prefix = 0, suffix = 0;
+  if (!changes) {
+    while (prefix < Math.min(oldText.length, newText.length) && oldText[prefix] === newText[prefix]) prefix++;
+    while (suffix < Math.min(oldText.length, newText.length) && oldText[oldText.length - suffix - 1] === newText[newText.length - suffix - 1]) suffix++;
+  }
+  const map = (position: number, right: boolean): number => position + (changes ?? []).reduce((delta, change) => delta + (change.to < position || (change.to === position && (change.from < change.to || right)) ? change.insert.length - (change.to - change.from) : 0), 0);
+  return references.flatMap((reference) => {
+    let from: number, to: number;
+    if (changes) {
+      if (changes.some((change) => change.from < reference.to && change.to > reference.from || change.from === change.to && change.from > reference.from && change.from < reference.to)) return [];
+      from = map(reference.from, true); to = map(reference.to, false);
+    } else {
+      const left = reference.to <= prefix, right = reference.from >= oldText.length - suffix;
+      if (!left && !right || left && right && oldText.length !== newText.length) return [];
+      from = reference.from + (left ? 0 : newText.length - oldText.length); to = reference.to + (left ? 0 : newText.length - oldText.length);
+    }
+    return oldText.slice(reference.from, reference.to) === reference.raw && newText.slice(from, to) === reference.raw ? [{ ...reference, from, to }] : [];
+  });
+}
+
+interface ReferenceDocument { courseId: string; entries: { id: string; markdown: string; revision: number }[]; projection: { kind: string; from: number; to: number; entryId: string | null }[]; markdown: string }
+/** Data transactions call this before publishing saves; identical inserted refs cannot borrow IDs. */
+export function rebaseWorkspaceReferenceBindings<T extends Span & { raw: string }>(state: { resolvedReferences: Record<string, { content: string; revision: number; references: T[] }> }, before: ReferenceDocument, after: ReferenceDocument, changes: readonly (Span & { insert: string })[]): void {
+  const migrated = new Map<string, T[]>();
+  for (const entry of before.entries) {
+    const ownerKey = `entry:${entry.id}`; const binding = state.resolvedReferences[ownerKey]; delete state.resolvedReferences[ownerKey];
+    const projection = before.projection.find((range) => range.kind === 'entry' && range.entryId === entry.id);
+    if (!binding || !projection) continue;
+    const references = rebaseReferenceRanges(binding.content, entry.markdown, binding.references).map((reference) => ({ ...reference, from: projection.from + reference.from, to: projection.from + reference.to }));
+    for (const reference of rebaseReferenceRanges(before.markdown, after.markdown, references, changes)) {
+      const destination = after.projection.find((range) => range.kind === 'entry' && range.entryId && range.from <= reference.from && range.to >= reference.to);
+      if (!destination?.entryId) continue;
+      const mapped = { ...reference, from: reference.from - destination.from, to: reference.to - destination.from };
+      const values = migrated.get(destination.entryId) ?? []; values.push(mapped); migrated.set(destination.entryId, values);
+    }
+  }
+  for (const [entryId, references] of migrated) {
+    const entry = after.entries.find((entry) => entry.id === entryId)!;
+    state.resolvedReferences[`entry:${entryId}`] = { content: entry.markdown, revision: entry.revision, references };
+  }
 }

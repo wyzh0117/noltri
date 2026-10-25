@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parseMarkdown, type ParsedMarkdown } from '@noltri/note-engine';
 import { createInMemoryRepository } from '@noltri/storage';
 import { createOfflineProvider } from '@noltri/ai-provider';
 import { silentLogger } from '@noltri/shared';
 import type { CoreDeps } from '../src/types';
 import { testConfig } from './fakes';
-import { loadWorkspace } from '../src/services/course-workspace';
+import { loadWorkspace, getCourseDocument, applyCourseDocumentPatch } from '../src/services/course-workspace';
 import { getMetadataIndex, searchKnowledge, getBacklinks, resolveWorkspaceLink, rebuildMetadata, closeMetadata, subscribeMetadata } from '../src/services/metadata';
 import { MarkdownParseThread, MetadataWorker } from '../src/workers/metadata-worker';
+import { createSqliteRepository } from '../../../packages/storage/src/sqlite';
 
 const actor = { userId: 'meta-user', actor: 'test' };
 const closing: (() => Promise<void>)[] = [];
@@ -79,6 +83,57 @@ describe('authoritative metadata/search/backlink service', () => {
     const after = await getMetadataIndex(deps, actor);
     expect(after.links.find((link) => link.reference.target === '未来课程')?.resolution).toEqual({ status: 'resolved', target: { kind: 'course', courseId: future.id } });
     const rebuilt = await rebuildMetadata(deps, actor); expect(rebuilt.links).toEqual(after.links); expect(rebuilt.revision).toBe(after.revision);
+  });
+  it('keeps resolved identities through duplicate names, cache rebuild/restart and an identical source insertion', async () => {
+    const { deps, repository, a, b } = await fixture();
+    const initial = await getMetadataIndex(deps, actor);
+    expect(initial.links.filter((link) => link.reference.target === 'C++#变量').every((link) => link.resolution.status === 'resolved' && link.resolution.target.courseId === a.id)).toBe(true);
+    const duplicate = await repository.createNode({ userId: actor.userId, title: 'C++', nodeType: 'topic' });
+    await closeMetadata(deps, actor.userId);
+    const restarted = await getMetadataIndex(deps, actor);
+    expect(restarted.links.filter((link) => link.reference.target === 'C++#变量').every((link) => link.resolution.status === 'resolved' && link.resolution.target.courseId === a.id)).toBe(true);
+    expect((await rebuildMetadata(deps, actor)).links).toEqual(restarted.links);
+    const beforeRevision = (await repository.getWorkspaceState(actor.userId)).revision;
+    await rebuildMetadata(deps, actor);
+    expect((await repository.getWorkspaceState(actor.userId)).revision).toBe(beforeRevision);
+    const doc = await getCourseDocument(deps, actor, b.id);
+    const at = doc.markdown.indexOf('[[C++#变量]]');
+    await applyCourseDocumentPatch(deps, actor, { courseId: b.id, baseDocumentRevision: doc.documentRevision, entryRevisions: Object.fromEntries(doc.entries.map((entry) => [entry.id, entry.revision])), requestId: 'insert-identical-link', changes: [{ from: at, to: at, insert: '[[C++#变量]] ' }] });
+    const inserted = await getMetadataIndex(deps, actor);
+    const references = inserted.links.filter((link) => link.courseId === b.id && link.reference.target === 'C++#变量').sort((a, b) => a.reference.from - b.reference.from);
+    expect(references.map((link) => link.resolution.status)).toEqual(['ambiguous', 'resolved', 'resolved']);
+    expect(references.slice(1).every((link) => link.resolution.status === 'resolved' && link.resolution.target.courseId !== duplicate.id)).toBe(true);
+    await closeMetadata(deps, actor.userId);
+    const secondRestart = await getMetadataIndex(deps, actor);
+    expect(secondRestart.links.filter((link) => link.courseId === b.id && link.reference.target === 'C++#变量').map((link) => link.resolution.status)).toEqual(['ambiguous', 'resolved', 'resolved']);
+  });
+  it('serves a full-AST cold first batch from 10,000 authoritative entries within 300ms', async () => {
+    const { deps, repository, a } = await fixture();
+    const state = await loadWorkspace(deps, actor);
+    state.entries = Array.from({ length: 10000 }, (_, index) => ({ id: `cold-${index}`, userId: actor.userId, courseId: a.id, courseChapterId: null, markdown: `### 条目${index}\n中文 alpha #编程/基础`, order: index, revision: 1, properties: {}, blocks: [] }));
+    state.sourceLinks = [];
+    await repository.commitWorkspaceState(actor.userId, state.revision, state);
+    const start = performance.now();
+    const result = await searchKnowledge(deps, actor, 'content:中文 tag:编程 -(file:missing OR [hidden:true])', undefined, { limit: 30 });
+    expect(result.hits).toHaveLength(30); expect(result.cursor).toBeTruthy();
+    expect(performance.now() - start).toBeLessThan(300);
+  });
+  it('retains resolved reference targets after closing and reopening the SQLite database', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'noltri-link-identities-'));
+    const file = join(directory, 'knowledge.sqlite');
+    let repository = await createSqliteRepository({ file });
+    let deps: CoreDeps = { repository, provider: createOfflineProvider(), config: testConfig(), logger: silentLogger };
+    try {
+      const target = await repository.createNode({ userId: actor.userId, title: 'Python', nodeType: 'topic' });
+      const source = await repository.createNode({ userId: actor.userId, title: 'References', nodeType: 'topic' });
+      await repository.saveKnowledgeNote({ userId: actor.userId, topicId: source.id, chapterId: null, content: '[[Python]]' });
+      await getMetadataIndex(deps, actor);
+      await repository.createNode({ userId: actor.userId, title: 'Python', nodeType: 'topic' });
+      await closeMetadata(deps, actor.userId); await repository.close();
+      repository = await createSqliteRepository({ file }); deps = { ...deps, repository };
+      const index = await getMetadataIndex(deps, actor);
+      expect(index.links[0].resolution).toEqual({ status: 'resolved', target: { kind: 'course', courseId: target.id } });
+    } finally { await closeMetadata(deps, actor.userId); await repository.close(); await rm(directory, { recursive: true, force: true }); }
   });
   it('searches exact objects, returns stable cursor, and respects actor snippet caps and user isolation', async () => {
     const { deps, a } = await fixture();

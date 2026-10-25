@@ -18,6 +18,7 @@ export interface ParsedMarkdown {
   footnotes: (Span & { id: string; definition: boolean })[];
   properties: Record<string, unknown>; aliases: string[]; excluded: Span[];
   frontmatter?: Span & { valueFrom: number; valueTo: number };
+  frontmatterError?: string;
 }
 export interface EngineLocation { kind: 'course' | 'chapter' | 'entry'; courseId: string; courseChapterId?: string | null; entryId?: string; blockId?: string; headingPath?: string[] }
 export interface LinkTarget {
@@ -27,6 +28,7 @@ export interface LinkTarget {
 export interface LinkContext {
   courseId: string; courseChapterId?: string | null; entryId?: string; sourcePath?: string;
   importPaths?: Record<string, EngineLocation[]>; stableTarget?: EngineLocation;
+  referenceFrom?: number;
 }
 export type LinkResolution =
   | { status: 'resolved'; target: EngineLocation }

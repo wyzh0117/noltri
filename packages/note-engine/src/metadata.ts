@@ -29,7 +29,7 @@ function wikiLinks(text: string, offset: number, kind: MarkdownLink['kind'], pro
 }
 
 /** CommonMark/GFM owns syntax and positions; extensions only inspect eligible AST text/scalars. */
-export function parseMarkdown(content: string): ParsedMarkdown {
+export function parseMarkdown(content: string, options: { tolerateInvalidFrontmatter?: boolean } = {}): ParsedMarkdown {
   const ast = parser.parse(content) as MarkdownNode;
   const result: ParsedMarkdown = { ast, headings: [], sections: [], links: [], tags: [], blocks: [], tasks: [], footnotes: [], properties: {}, aliases: [], excluded: [] };
   const definitions = new Map<string, MarkdownNode>();
@@ -55,6 +55,7 @@ export function parseMarkdown(content: string): ParsedMarkdown {
       const valueFrom = range.from + opening[0].length;
       const valueTo = range.from + closing.index + (/^\r\n/.test(closing[0]) ? 2 : 1);
       result.frontmatter = { ...range, valueFrom, valueTo };
+      try {
       const doc = parseDocument(content.slice(valueFrom, valueTo), { keepSourceTokens: true });
       if (doc.errors.length) throw new Error(`Invalid YAML: ${doc.errors[0].message}`);
       const value: unknown = doc.toJS({ maxAliasCount: 100 });
@@ -74,6 +75,11 @@ export function parseMarkdown(content: string): ParsedMarkdown {
       scalars(doc.contents, []);
       const aliases = result.properties['aliases'] ?? result.properties['alias'];
       result.aliases = typeof aliases === 'string' ? [aliases] : Array.isArray(aliases) ? aliases.filter((x): x is string => typeof x === 'string') : [];
+      } catch (error) {
+        if (!options.tolerateInvalidFrontmatter) throw error;
+        result.frontmatterError = error instanceof Error ? error.message : String(error);
+        result.properties = {}; result.aliases = [];
+      }
     }
     if (blocked.has(node.type)) { result.excluded.push(range); return; }
     if (node.type === 'link' || node.type === 'image' || node.type === 'linkReference' || node.type === 'imageReference') {

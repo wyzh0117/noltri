@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMarkdown, setFrontmatterProperties, findUnlinkedMentions, resolveKnowledgeLink, rewriteReferences, formatLinkTarget, compileQuery, matchQuery, matchingCourseIds, rankFuzzy, fuzzyMatch, type LinkTarget } from '../src';
+import { parseMarkdown, setFrontmatterProperties, findUnlinkedMentions, resolveKnowledgeLink, rewriteReferences, formatLinkTarget, rebaseReferenceRanges, compileQuery, matchQuery, matchingCourseIds, rankFuzzy, fuzzyMatch, type LinkTarget } from '../src';
 
 const targets: LinkTarget[] = [
   { courseId: 'cpp', title: 'C++', path: '理学/计算机/C++', aliases: ['C 语言进阶'], headings: [
@@ -47,6 +47,13 @@ describe('CommonMark metadata with UTF-16 locations', () => {
     expect(changed.slice(parseMarkdown(changed).frontmatter!.to)).toBe('\n正文');
     expect(parseMarkdown('- list item ^id').blocks.filter((block) => block.alias)).toHaveLength(1);
   });
+  it('can retain malformed legacy YAML as raw content without losing later AST metadata', () => {
+    const content = '---\nbroken: [\n---\n## Preserve me\n正文';
+    expect(() => parseMarkdown(content)).toThrow('YAML');
+    const tolerant = parseMarkdown(content, { tolerateInvalidFrontmatter: true });
+    expect(tolerant.frontmatterError).toContain('YAML'); expect(tolerant.properties).toEqual({});
+    expect(tolerant.headings[0].text).toBe('Preserve me'); expect(content.slice(tolerant.frontmatter!.from, tolerant.frontmatter!.to)).toBe('---\nbroken: [\n---');
+  });
 });
 
 describe('stable course-local knowledge resolution', () => {
@@ -86,9 +93,21 @@ describe('stable course-local knowledge resolution', () => {
     expect(formatLinkTarget({ kind: 'entry', courseId: 'cpp', entryId: 'cpp-entry', blockId: 'stable-block' }, targets)).toBe('cpp#^定义');
     expect(resolveKnowledgeLink({ courseId: 'python', stableTarget: { kind: 'entry', courseId: 'cpp', entryId: 'cpp-entry', blockId: 'stable-block' } }, '[[旧名#^旧块名]]', targets)).toMatchObject({ status: 'resolved', target: { blockId: 'stable-block' } });
   });
+  it('formats complete heading paths when equal leaf labels exist', () => {
+    const heading = targets[0].headings![1];
+    const target = { ...targets[0], headings: [{ ...heading, path: ['First', 'Same'] }, { ...heading, path: ['Second', 'Same'] }] };
+    expect(formatLinkTarget({ kind: 'entry', courseId: 'cpp', entryId: 'cpp-entry', headingPath: ['Second', 'Same'] }, [target])).toBe('cpp#Second#Same');
+    expect(resolveKnowledgeLink({ courseId: 'python', stableTarget: { kind: 'entry', courseId: 'cpp', entryId: 'cpp-entry', headingPath: ['Removed', 'Same'] } }, '[[C++#Removed#Same]]', [target]).status).toBe('subpath-missing');
+  });
 });
 
 describe('reference-aware rewrites', () => {
+  it('rebases only unchanged original AST references and never gives an inserted identical link the prior binding', () => {
+    const oldText = '[[Python]]'; const newText = '[[Python]] [[Python]]';
+    const prior = { from: 0, to: oldText.length, raw: oldText, identity: 'old-target' };
+    expect(rebaseReferenceRanges(oldText, newText, [prior], [{ from: 0, to: 0, insert: '[[Python]] ' }])).toEqual([{ ...prior, from: 11, to: 21 }]);
+    expect(rebaseReferenceRanges(oldText, newText, [prior])).toEqual([]);
+  });
   it('rewrites only AST references, preserves custom labels/Markdown display and YAML unknown keys/comments', () => {
     const text = '---\nrelated: "[[Old|自定义]]" # keep\nuntouched: "Old"\nnested:\n  relation: "[[Old]]"\n---\n[[Old|自定义]] [[Old|Old]] [Old](Old.md)\n`[[Old]]`\n正文 Old';
     const links = parseMarkdown(text).links;
