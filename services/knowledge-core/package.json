@@ -1,6 +1,6 @@
 {
   "name": "@noltri/knowledge-core",
-  "version": "0.1.4",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -23,7 +23,8 @@
     "@noltri/storage": "workspace:*",
     "dotenv": "^18.0.5",
     "tsx": "^4.23.15",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "@noltri/note-engine": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

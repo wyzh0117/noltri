@@ -1,6 +1,6 @@
 {
   "name": "@noltri/desktop",
-  "version": "0.1.4",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,8 @@
     "tauri": "tauri",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "native:check": "cargo check --manifest-path src-tauri/Cargo.toml"
+    "native:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "build:graph-wasm": "node scripts/build-course-graph-wasm.mjs"
   },
   "dependencies": {
     "@noltri/api-client": "workspace:*",

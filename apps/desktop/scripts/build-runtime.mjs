@@ -46,6 +46,7 @@ const entries = [
   // The Core server uses the `server.mjs` suffix to recognise direct execution.
   ['services/knowledge-core/src/server.ts', 'core-server.mjs'],
   ['services/mcp-server/src/index.ts', 'mcp-server.mjs'],
+  ['services/knowledge-core/src/workers/metadata-parser.ts', 'metadata-parser.mjs'],
 ];
 
 for (const [entry, outfile] of entries) {
