@@ -19,8 +19,8 @@ export async function restoreSnapshot(deps: CoreDeps, actor: ActorContext, snaps
   const before = workspaceContent(state);
   const keys = new Set(snapshot.objectKeys);
   const affectedCourses = new Set<string>();
-  for (const collection of ['courses', 'concepts', 'chapters', 'entries'] as const) {
-    const prefix = collection === 'courses' ? 'course' : collection === 'concepts' ? 'concept' : collection === 'chapters' ? 'chapter' : 'entry';
+  for (const collection of ['courses', 'concepts', 'chapters', 'entries', 'attachments'] as const) {
+    const prefix = collection === 'courses' ? 'course' : collection === 'concepts' ? 'concept' : collection === 'chapters' ? 'chapter' : collection === 'attachments' ? 'attachment' : 'entry';
     const existing = state[collection] as Array<{ id: string; courseId?: string; revision?: number; documentRevision?: number }>;
     const replacements = structuredClone(snapshot.before[collection]) as typeof existing;
     const restored = existing.filter((item) => !keys.has(`${prefix}:${item.id}`));
@@ -38,6 +38,15 @@ export async function restoreSnapshot(deps: CoreDeps, actor: ActorContext, snaps
   }
   const entryKeys = new Set([...keys].filter((key) => key.startsWith('entry:')).map((key) => key.slice(6)));
   state.sourceLinks = [...state.sourceLinks.filter((link) => !entryKeys.has(link.entryId)), ...structuredClone(snapshot.before.sourceLinks.filter((link) => entryKeys.has(link.entryId)))];
+  const ownerKeys = [...keys].filter((key) => /^(course|chapter|entry):/.test(key));
+  const belongsToRestoredOwner = (bindingKey: string): boolean => ownerKeys.some((key) => bindingKey === key || bindingKey.startsWith(`${key}:property:`));
+  state.resolvedReferences = Object.fromEntries([
+    ...Object.entries(state.resolvedReferences).filter(([key]) => !belongsToRestoredOwner(key)),
+    ...Object.entries(snapshot.before.resolvedReferences).filter(([key]) => belongsToRestoredOwner(key)).map(([key, binding]) => {
+      const owner = ownerKeys.find((ownerKey) => key === ownerKey || key.startsWith(`${ownerKey}:property:`))!;
+      return [key, { ...structuredClone(binding), revision: objectRevisions(state)[owner] ?? binding.revision }];
+    }),
+  ]);
   const protection = takeSnapshot(state, before, actor, 'before-restore');
   affectedCourses.delete('');
   return finishMutation(deps, actor, state, [...affectedCourses].filter((id) => state.courses.some((course) => course.id === id)), protection);

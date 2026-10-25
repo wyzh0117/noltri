@@ -16,7 +16,7 @@ const stableId = (...parts: string[]) => createHash('sha256').update(JSON.string
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sorted = <T extends { order: number; id: string }>(values: T[]): T[] => [...values].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 export function workspaceContent(state: WorkspaceState): WorkspaceContent {
-  return structuredClone({ courses: state.courses, concepts: state.concepts, chapters: state.chapters, entries: state.entries, sourceLinks: state.sourceLinks });
+  return structuredClone({ courses: state.courses, concepts: state.concepts, chapters: state.chapters, entries: state.entries, sourceLinks: state.sourceLinks, resolvedReferences: state.resolvedReferences, attachments: state.attachments });
 }
 export function objectRevisions(state: WorkspaceState): Record<string, number> {
   return { ...state.tombstones, ...Object.fromEntries([
@@ -24,6 +24,7 @@ export function objectRevisions(state: WorkspaceState): Record<string, number> {
     ...state.chapters.map((item) => [`chapter:${item.id}`, item.revision]),
     ...state.entries.map((item) => [`entry:${item.id}`, item.revision]),
     ...state.concepts.map((item) => [`concept:${item.id}`, item.revision]),
+    ...state.attachments.map((item) => [`attachment:${item.id}`, item.revision]),
   ]) };
 }
 function entities(content: WorkspaceContent): Map<string, unknown> {
@@ -32,6 +33,7 @@ function entities(content: WorkspaceContent): Map<string, unknown> {
     ...content.chapters.map((item) => [`chapter:${item.id}`, item] as const),
     ...content.entries.map((item) => [`entry:${item.id}`, { ...item, sourceLinks: content.sourceLinks.filter((link) => link.entryId === item.id) }] as const),
     ...content.concepts.map((item) => [`concept:${item.id}`, item] as const),
+    ...content.attachments.map((item) => [`attachment:${item.id}`, item] as const),
   ]);
 }
 export function changedObjectKeys(before: WorkspaceContent, after: WorkspaceContent): string[] {
@@ -201,11 +203,11 @@ function checkReplay(state: WorkspaceState, requestId: string, request: unknown)
 function refreshIndex(deps: CoreDeps, actor: ActorContext): void {
   void import('./metadata').then(({ refreshMetadata }) => refreshMetadata(deps, actor)).catch((error: unknown) => deps.logger.warn('Workspace metadata refresh failed', { reason: error instanceof Error ? error.message : String(error) }));
 }
-export async function finishMutation(deps: CoreDeps, actor: ActorContext, state: WorkspaceState, courseIds: string[], snapshotId: string | null, requestId?: string, request?: unknown): Promise<WorkspaceMutationResult> {
+export async function finishMutation(deps: CoreDeps, actor: ActorContext, state: WorkspaceState, courseIds: string[], snapshotId: string | null, requestId?: string, request?: unknown, attachmentResult?: Record<string, unknown>): Promise<WorkspaceMutationResult> {
   const documents = await Promise.all([...new Set(courseIds)].map((courseId) => documentFromState(deps, actor, state, courseId)));
   const affectedLocations: ContentLocation[] = documents.flatMap((document) => [{ kind: 'course' as const, courseId: document.courseId }, ...document.entries.map((entry) => ({ kind: 'entry' as const, courseId: entry.courseId, courseChapterId: entry.courseChapterId, entryId: entry.id }))]);
   const result = workspaceMutationResultSchema.parse({ documents, affectedLocations, revisions: objectRevisions(state), snapshotId });
-  if (requestId) state.requests[requestId] = { fingerprint: fingerprint(request), result };
+  if (requestId) state.requests[requestId] = { fingerprint: fingerprint(request), result, ...(attachmentResult ? { attachmentResult } : {}) };
   await deps.repository.commitWorkspaceState(actor.userId, state.revision, state);
   refreshIndex(deps, actor);
   return result;

@@ -2,7 +2,7 @@ import { workspaceStateSchema, type WorkspaceState } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
 
 export function emptyWorkspaceState(): WorkspaceState {
-  return { revision: 0, courses: [], concepts: [], chapters: [], entries: [], sourceLinks: [], snapshots: [], requests: {}, tombstones: {}, resolvedReferences: {}, attachments: [], imports: {}, settings: { snapshotIntervalSeconds: 60, snapshotRetentionDays: 30 }, migration: { version: 0, mappings: {}, unconfirmed: [] } };
+  return { revision: 0, courses: [], concepts: [], chapters: [], entries: [], sourceLinks: [], snapshots: [], requests: {}, tombstones: {}, resolvedReferences: {}, attachments: [], imports: {}, settings: { snapshotIntervalSeconds: 60, snapshotRetentionDays: 30, attachmentCleanup: 'ask' }, migration: { version: 0, mappings: {}, unconfirmed: [] } };
 }
 
 /** Validate the aggregate before the CAS, identically for both drivers. */

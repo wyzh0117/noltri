@@ -71,3 +71,29 @@ describe.each(['memory', 'sqlite'] as const)('%s source assignments/recovery', (
     await expect(patchWorkspaceProperties(deps, actor, { owner: { kind: 'entry', id: 'moving' }, expectedRevision: 1, properties: {}, requestId: 'stale-properties' })).rejects.toMatchObject({ code: 'conflict' });
   });
 });
+
+it('restores original body/property bindings under a newly ambiguous title without touching other owners', async () => {
+  const { getMetadataIndex, rebuildMetadata, closeMetadata } = await import('../src/services/metadata');
+  const { repository, deps, actor, a, b, c } = await workspaceFixture();
+  try {
+    await repository.saveKnowledgeNote({ userId: actor.userId, topicId: b.id, chapterId: null, content: '[[Python]]' });
+    await repository.saveKnowledgeNote({ userId: actor.userId, topicId: c.id, chapterId: null, content: '[[Java]]' });
+    let state = await loadWorkspace(deps, actor);
+    state.courses.find((course) => course.id === b.id)!.properties = { citation: '[[Python]]' };
+    await repository.commitWorkspaceState(actor.userId, state.revision, state);
+    await getMetadataIndex(deps, actor);
+    const doc = await getCourseDocument(deps, actor, b.id); const entry = doc.entries[0];
+    const range = doc.projection.find((value) => value.entryId === entry.id)!;
+    const result = await applyCourseDocumentPatch(deps, actor, { courseId: b.id, baseDocumentRevision: doc.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from: range.from, to: range.to, insert: 'changed' }], requestId: 'snapshot-bound-reference' });
+    state = await loadWorkspace(deps, actor); const snapshot = state.snapshots.find((item) => item.id === result.snapshotId)!;
+    expect(snapshot.before.resolvedReferences[`entry:${entry.id}`].references[0].target).toMatchObject({ courseId: a.id });
+    await repository.createNode({ userId: actor.userId, title: 'Python', nodeType: 'topic' });
+    await getMetadataIndex(deps, actor);
+    const unrelated = structuredClone((await repository.getWorkspaceState(actor.userId)).resolvedReferences[`entry:${(await getCourseDocument(deps, actor, c.id)).entries[0].id}`]);
+    await restoreSnapshot(deps, actor, snapshot.id, snapshot.afterRevisions);
+    const restored = await rebuildMetadata(deps, actor);
+    expect(restored.links.filter((link) => link.courseId === b.id && link.reference.target === 'Python').every((link) => link.resolution.status === 'resolved' && link.resolution.target.courseId === a.id)).toBe(true);
+    expect(restored.links.filter((link) => link.courseId === b.id && link.reference.target === 'Python')).toHaveLength(2);
+    expect((await repository.getWorkspaceState(actor.userId)).resolvedReferences[`entry:${(await getCourseDocument(deps, actor, c.id)).entries[0].id}`]).toEqual(unrelated);
+  } finally { await closeMetadata(deps, actor.userId); }
+});

@@ -16,3 +16,6 @@ export const WORKSPACE_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 export const WORKSPACE_ATTACHMENT_CHUNK_MAX_BYTES = 1024 * 1024;
 export const WORKSPACE_ATTACHMENT_JSON_MAX_BYTES = 2 * 1024 * 1024;
 export type AttachmentUploadResult = WorkspaceAttachment | { complete: false; uploadId: string; receivedChunks: number; totalChunks: number };
+export const renameAttachmentSchema = z.object({ attachmentId: id, path: id.max(1024), expectedRevision: z.number().int().positive(), expectedDocumentRevisions: z.record(z.string(), z.number().int().nonnegative()), expectedEntryRevisions: z.record(z.string(), z.number().int().nonnegative()), requestId: id.max(200) });
+export type RenameAttachmentRequest = z.infer<typeof renameAttachmentSchema>;
+export interface AttachmentCleanupResult { policy: 'never' | 'ask' | 'always'; confirmationRequired: boolean; candidateIds: string[]; candidateRevisions: Record<string, number>; deletedIds: string[] }

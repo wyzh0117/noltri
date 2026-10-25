@@ -3,17 +3,17 @@ import { mkdir, readFile, writeFile, rm, readdir, lstat, realpath } from 'node:f
 import { watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import {
-  uploadAttachmentSchema, workspaceAttachmentSchema, importMarkdownSchema, courseMarkdownExportSchema,
+  uploadAttachmentSchema, workspaceAttachmentSchema, importMarkdownSchema, courseMarkdownExportSchema, renameAttachmentSchema,
   WORKSPACE_ATTACHMENT_MAX_BYTES, WORKSPACE_ATTACHMENT_CHUNK_MAX_BYTES,
   type WorkspaceAttachment, type UploadAttachmentRequest, type AttachmentUploadResult,
   type ImportMarkdownRequest, type ImportMarkdownResult, type CourseMarkdownExport,
-  type WorkspaceState, type WorkspaceContent,
+  type WorkspaceState, type WorkspaceContent, type WorkspaceMutationResult, type RenameAttachmentRequest, type AttachmentCleanupResult,
 } from '@noltri/schema';
-import { parseMarkdown, setFrontmatterProperties, rewriteReferences } from '@noltri/note-engine';
+import { parseMarkdown, setFrontmatterProperties, rewriteReferences, rebaseReferenceRanges } from '@noltri/note-engine';
 import { createId, knowledgeError, nowIso } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
 import { runCapture } from '../pipeline/capture';
-import { loadWorkspace, getCourseDocument, validateRequestSize, applyCourseDocumentPatch } from './course-workspace';
+import { loadWorkspace, getCourseDocument, validateRequestSize, applyCourseDocumentPatch, workspaceContent, takeSnapshot, finishMutation, syncBlocks } from './course-workspace';
 
 const digest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const pathKey = (value: string) => value.normalize('NFC').toLocaleLowerCase('en-US');
@@ -105,6 +105,7 @@ export async function uploadAttachment(deps: CoreDeps, actor: ActorContext, inpu
   }
   if (state.attachments.some((item) => pathKey(item.originalPath) === pathKey(originalPath))) throw knowledgeError('conflict', 'Attachment path already exists (case and Unicode normalized)');
   const id = digest(`${actor.userId}\0${request.requestId}`).slice(0, 32);
+  if (state.tombstones[`attachment:${id}`] !== undefined) throw knowledgeError('conflict', 'This attachment identity was cleaned up; submit a new requestId');
   await mkdir(resourceRoot(deps, actor), { recursive: true });
   const filename = resourceFile(deps, actor, id);
   try { await writeFile(filename, bytes, { flag: 'wx', mode: 0o600 }); }
@@ -115,12 +116,15 @@ export async function uploadAttachment(deps: CoreDeps, actor: ActorContext, inpu
   if (staging) await rm(staging, { recursive: true, force: true });
   return attachmentView(state, record);
 }
+function hasRecoveryReference(state: WorkspaceState, value: WorkspaceState['attachments'][number]): boolean {
+  return state.snapshots.some((snapshot) => snapshot.objectKeys.includes(`attachment:${value.id}`) || referenceCourses(snapshot.before, snapshot.before.attachments.find((old) => old.id === value.id) ?? value).length > 0);
+}
 export async function deleteAttachment(deps: CoreDeps, actor: ActorContext, id: string, expectedRevision: number): Promise<void> {
   const state = await loadWorkspace(deps, actor);
   const value = state.attachments.find((item) => item.id === id);
   if (!value) throw knowledgeError('not_found', 'Attachment not found');
   if (value.revision !== expectedRevision) throw knowledgeError('conflict', 'Attachment changed');
-  if (referenceCourses(state, value).length || state.snapshots.some((snapshot) => referenceCourses(snapshot.before, value).length > 0)) throw knowledgeError('conflict', 'Attachment is referenced by content or recovery history');
+  if (referenceCourses(state, value).length || hasRecoveryReference(state, value)) throw knowledgeError('conflict', 'Attachment is referenced by content or recovery history');
   state.attachments = state.attachments.filter((item) => item.id !== id);
   await deps.repository.commitWorkspaceState(actor.userId, state.revision, state);
   // Keep bytes until profile maintenance: a successful metadata delete must never race a restoring reader.
@@ -240,4 +244,97 @@ export async function startMarkdownDirectoryWatcher(deps: CoreDeps, actor: Actor
   const watcher: FSWatcher = watch(directory, { recursive: true }, () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { void scan().catch((error: unknown) => deps.logger.warn('Watched directory scan failed', { reason: String(error) })); }, 200); });
   try { await scan(); } catch (error) { watcher.close(); throw error; }
   return { scan, close() { closed = true; watcher.close(); if (timer) clearTimeout(timer); } };
+}
+
+export async function renameAttachment(deps: CoreDeps, actor: ActorContext, input: RenameAttachmentRequest): Promise<WorkspaceMutationResult & { attachment: WorkspaceAttachment }> {
+  validateRequestSize(input);
+  const request = renameAttachmentSchema.parse(input);
+  const state = await loadWorkspace(deps, actor);
+  const requestKey = `attachment-rename:${request.requestId}`;
+  const replay = state.requests[requestKey];
+  if (replay) {
+    if (replay.fingerprint !== digest(JSON.stringify(request)) || !replay.attachmentResult) throw knowledgeError('conflict', 'Attachment rename requestId was already used');
+    return { ...structuredClone(replay.result), attachment: workspaceAttachmentSchema.parse(replay.attachmentResult) };
+  }
+  const attachment = state.attachments.find((value) => value.id === request.attachmentId);
+  if (!attachment) throw knowledgeError('not_found', 'Attachment not found');
+  if (attachment.revision !== request.expectedRevision) throw knowledgeError('conflict', 'Attachment changed');
+  const originalPath = normalizeResourcePath(request.path);
+  if (state.attachments.some((value) => value.id !== attachment.id && pathKey(value.originalPath) === pathKey(originalPath))) throw knowledgeError('conflict', 'Attachment destination path already exists');
+  const before = workspaceContent(state);
+  const oldPath = attachment.path;
+  const nextPath = `attachments/${attachment.id}/${path.posix.basename(originalPath).replace(/\s+/g, '-')}`;
+  const courses = new Set<string>();
+  const verifyCourse = (courseId: string): void => {
+    const course = state.courses.find((value) => value.id === courseId)!;
+    if (request.expectedDocumentRevisions[courseId] !== course.documentRevision) throw knowledgeError('conflict', 'Attachment reference course changed', { courseId });
+    courses.add(courseId);
+  };
+  const rewrite = (text: string): { text: string; changes: { from: number; to: number; insert: string }[] } => {
+    const edits = parseMarkdown(text, { tolerateInvalidFrontmatter: true }).links.filter((reference) => reference.target === oldPath).map((reference) => ({ reference, target: nextPath }));
+    return { text: edits.length ? rewriteReferences(text, edits) : text, changes: edits.map(({ reference, target }) => ({ from: reference.targetFrom, to: reference.targetTo, insert: target })) };
+  };
+  if (oldPath !== nextPath) {
+    for (const entry of state.entries) {
+      const rewritten = rewrite(entry.markdown);
+      if (rewritten.text === entry.markdown) continue;
+      verifyCourse(entry.courseId);
+      if (request.expectedEntryRevisions[entry.id] !== entry.revision) throw knowledgeError('conflict', 'Attachment reference entry changed', { entryId: entry.id });
+      const previous = entry.markdown; entry.markdown = rewritten.text; entry.revision++; syncBlocks(entry);
+      const binding = state.resolvedReferences[`entry:${entry.id}`];
+      if (binding) {
+        binding.references = rebaseReferenceRanges(previous, entry.markdown, rebaseReferenceRanges(binding.content, previous, binding.references), rewritten.changes);
+        binding.content = entry.markdown; binding.revision = entry.revision;
+      }
+    }
+    for (const object of [...state.courses, ...state.chapters, ...state.entries]) {
+      const text = setFrontmatterProperties('', object.properties); const rewritten = rewrite(text).text;
+      if (rewritten === text) continue;
+      const courseId = 'courseId' in object ? object.courseId : object.id;
+      verifyCourse(courseId);
+      if ('markdown' in object && request.expectedEntryRevisions[object.id] !== before.entries.find((entry) => entry.id === object.id)?.revision) throw knowledgeError('conflict', 'Attachment property reference entry changed', { entryId: object.id });
+      object.properties = parseMarkdown(rewritten).properties;
+      const ownerKey = `${'markdown' in object ? 'entry' : 'conceptId' in object ? 'chapter' : 'course'}:${object.id}`;
+      for (const [key, binding] of Object.entries(state.resolvedReferences)) if (key.startsWith(`${ownerKey}:property:`)) {
+        const propertyPath = JSON.parse(key.slice(`${ownerKey}:property:`.length)) as (string | number)[];
+        let value: unknown = object.properties;
+        for (const part of propertyPath) value = value !== null && typeof value === 'object' ? (value as Record<string | number, unknown>)[part] : undefined;
+        if (typeof value === 'string') {
+          const updated = rewrite(binding.content);
+          if (updated.text === value) { binding.references = rebaseReferenceRanges(binding.content, value, binding.references, updated.changes); binding.content = value; }
+        }
+      }
+      if ('revision' in object) object.revision++;
+    }
+  }
+  attachment.path = nextPath; attachment.originalPath = originalPath; attachment.revision++;
+  for (const course of state.courses) if (courses.has(course.id)) { course.documentRevision++; course.updatedAt = nowIso(); }
+  const snapshotId = takeSnapshot(state, before, actor, 'attachment-rename');
+  const view = attachmentView(state, attachment);
+  const result = await finishMutation(deps, actor, state, [...courses], snapshotId, requestKey, request, view);
+  return { ...result, attachment: view };
+}
+
+export async function cleanupAttachments(deps: CoreDeps, actor: ActorContext, input: { confirmed?: boolean; attachmentIds?: string[]; expectedRevisions?: Record<string, number> } = {}): Promise<AttachmentCleanupResult> {
+  const state = await loadWorkspace(deps, actor);
+  const policy = state.settings.attachmentCleanup;
+  let candidates = state.attachments.filter((value) => referenceCourses(state, value).length === 0 && !hasRecoveryReference(state, value));
+  const candidateRevisions = Object.fromEntries(candidates.map((value) => [value.id, value.revision]));
+  if (policy === 'never' || policy === 'ask' && !input.confirmed) return { policy, confirmationRequired: policy === 'ask' && candidates.length > 0, candidateIds: candidates.map((value) => value.id), candidateRevisions, deletedIds: [] };
+  if (policy === 'ask') {
+    if (!input.attachmentIds || !input.expectedRevisions || new Set(input.attachmentIds).size !== input.attachmentIds.length) throw knowledgeError('invalid_request', 'Confirm the reviewed attachment IDs and revisions');
+    for (const id of input.attachmentIds) if (candidateRevisions[id] === undefined || candidateRevisions[id] !== input.expectedRevisions[id]) throw knowledgeError('conflict', 'Attachment cleanup candidates changed', { attachmentId: id });
+    const selected = new Set(input.attachmentIds); candidates = candidates.filter((value) => selected.has(value.id));
+  }
+  const candidateIds = candidates.map((value) => value.id);
+  const ids = new Set(candidateIds);
+  for (const value of candidates) state.tombstones[`attachment:${value.id}`] = value.revision + 1;
+  state.attachments = state.attachments.filter((value) => !ids.has(value.id));
+  if (candidateIds.length) await deps.repository.commitWorkspaceState(actor.userId, state.revision, state);
+  const deletedIds: string[] = [];
+  for (const id of candidateIds) {
+    try { await rm(resourceFile(deps, actor, id), { force: true }); deletedIds.push(id); }
+    catch (error) { deps.logger.warn('Attachment cleanup retained orphan bytes', { attachmentId: id, reason: String(error) }); }
+  }
+  return { policy, confirmationRequired: false, candidateIds, candidateRevisions: Object.fromEntries(candidates.map((value) => [value.id, value.revision])), deletedIds };
 }

@@ -4,9 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { workspaceFixture } from './workspace-fixture';
-import { normalizeResourcePath, uploadAttachment, readAttachment, listAttachments, deleteAttachment, importMarkdown, exportCourseMarkdown, startMarkdownDirectoryWatcher } from '../src/services/workspace-resources';
-import { applyCourseDocumentPatch, getCourseDocument } from '../src/services/course-workspace';
+import { normalizeResourcePath, uploadAttachment, readAttachment, listAttachments, deleteAttachment, importMarkdown, exportCourseMarkdown, startMarkdownDirectoryWatcher, renameAttachment, cleanupAttachments } from '../src/services/workspace-resources';
+import { applyCourseDocumentPatch, getCourseDocument, loadWorkspace, patchWorkspaceProperties } from '../src/services/course-workspace';
 import { closeMetadata } from '../src/services/metadata';
+import { restoreSnapshot, getWorkspaceSettings, updateWorkspaceSettings } from '../src/services/recovery';
 
 async function fixture(driver: 'memory' | 'sqlite' = 'memory') {
   const f = await workspaceFixture(driver);
@@ -90,6 +91,58 @@ describe('controlled workspace resources', () => {
       expect(second.document.sources.map((source) => source.id)).toEqual(expect.arrayContaining([first.rawSourceId, second.rawSourceId]));
       expect((await f.repository.getWorkspaceState(f.actor.userId)).imports['replace.md'].sourceId).toBe(second.rawSourceId);
       expect((await f.repository.findRawSource(first.rawSourceId, f.actor.userId))!.rawText).toBe('first original');
+    } finally { await f.close(); }
+  });
+  it('renames/moves one stable resource and exact references atomically with restorable mapping and conflict guards', async () => {
+    const f = await fixture();
+    try {
+      const uploaded = await uploadAttachment(f.deps, f.actor, { path: 'papers/old.pdf', mimeType: 'application/pdf', contentBase64: Buffer.from('pdf bytes').toString('base64'), requestId: 'rename-paper' });
+      if (!('id' in uploaded)) throw new Error('Expected final resource');
+      let a = await getCourseDocument(f.deps, f.actor, f.a.id);
+      const body = `![paper](${uploaded.path})\n\n~~~md\n![literal](${uploaded.path})\n~~~`;
+      a = (await applyCourseDocumentPatch(f.deps, f.actor, { courseId: f.a.id, baseDocumentRevision: a.documentRevision, entryRevisions: {}, changes: [{ from: a.markdown.length, to: a.markdown.length, insert: body }], requestId: 'paper-reference' })).documents[0];
+      const b = (await patchWorkspaceProperties(f.deps, f.actor, { owner: { kind: 'course', id: f.b.id }, expectedRevision: 1, properties: { paper: `[[${uploaded.path}|keep alias]]` }, requestId: 'paper-property' })).documents[0];
+      const entry = a.entries[0];
+      const request = { attachmentId: uploaded.id, path: 'archive/renamed.pdf', expectedRevision: uploaded.revision, expectedDocumentRevisions: { [a.courseId]: a.documentRevision, [b.courseId]: b.documentRevision }, expectedEntryRevisions: { [entry.id]: entry.revision }, requestId: 'rename-resource' };
+      const before = await loadWorkspace(f.deps, f.actor);
+      await expect(renameAttachment(f.deps, f.actor, { ...request, expectedEntryRevisions: {} })).rejects.toMatchObject({ code: 'conflict' });
+      expect(await loadWorkspace(f.deps, f.actor)).toEqual(before);
+      const result = await renameAttachment(f.deps, f.actor, request);
+      expect(await renameAttachment(f.deps, f.actor, request)).toEqual(result);
+      expect(result.attachment.id).toBe(uploaded.id); expect(result.attachment.originalPath).toBe('archive/renamed.pdf');
+      expect(result.documents.find((doc) => doc.courseId === f.a.id)!.entries[0].markdown).toContain(`![paper](${result.attachment.path})`);
+      expect(result.documents.find((doc) => doc.courseId === f.a.id)!.entries[0].markdown).toContain(`![literal](${uploaded.path})`);
+      expect(result.documents.find((doc) => doc.courseId === f.b.id)!.properties.paper).toBe(`[[${result.attachment.path}|keep alias]]`);
+      expect(Buffer.from((await readAttachment(f.deps, f.actor, uploaded.id)).bytes).toString()).toBe('pdf bytes');
+      const state = await loadWorkspace(f.deps, f.actor); const snapshot = state.snapshots.find((value) => value.id === result.snapshotId)!;
+      expect(snapshot.objectKeys).toContain(`attachment:${uploaded.id}`);
+      await restoreSnapshot(f.deps, f.actor, snapshot.id, snapshot.afterRevisions);
+      expect((await listAttachments(f.deps, f.actor))[0].path).toBe(uploaded.path);
+      expect((await getCourseDocument(f.deps, f.actor, f.b.id)).properties.paper).toBe(`[[${uploaded.path}|keep alias]]`);
+    } finally { await f.close(); }
+  });
+  it('defaults cleanup to ask, honors never/confirmation/always, and never deletes referenced or historical bytes', async () => {
+    const f = await fixture();
+    try {
+      expect((await getWorkspaceSettings(f.deps, f.actor)).attachmentCleanup).toBe('ask');
+      const uploaded = await uploadAttachment(f.deps, f.actor, { path: 'unused.png', mimeType: 'image/png', contentBase64: Buffer.from('unused').toString('base64'), requestId: 'cleanup-unused' });
+      if (!('id' in uploaded)) throw new Error('Expected resource');
+      expect(await cleanupAttachments(f.deps, f.actor)).toMatchObject({ confirmationRequired: true, candidateIds: [uploaded.id], deletedIds: [] });
+      await updateWorkspaceSettings(f.deps, f.actor, { attachmentCleanup: 'never' });
+      expect((await cleanupAttachments(f.deps, f.actor, { confirmed: true })).deletedIds).toEqual([]);
+      await updateWorkspaceSettings(f.deps, f.actor, { attachmentCleanup: 'ask' });
+      expect((await cleanupAttachments(f.deps, f.actor, { confirmed: true, attachmentIds: [uploaded.id], expectedRevisions: { [uploaded.id]: uploaded.revision } })).deletedIds).toEqual([uploaded.id]);
+      await expect(readAttachment(f.deps, f.actor, uploaded.id)).rejects.toMatchObject({ code: 'not_found' });
+      const referenced = await uploadAttachment(f.deps, f.actor, { path: 'referenced.png', mimeType: 'image/png', contentBase64: Buffer.from('referenced').toString('base64'), requestId: 'cleanup-referenced' });
+      if (!('id' in referenced)) throw new Error('Expected resource');
+      let doc = await getCourseDocument(f.deps, f.actor, f.a.id);
+      doc = (await applyCourseDocumentPatch(f.deps, f.actor, { courseId: f.a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: {}, changes: [{ from: doc.markdown.length, to: doc.markdown.length, insert: `![ref](${referenced.path})` }], requestId: 'cleanup-embed' })).documents[0];
+      await updateWorkspaceSettings(f.deps, f.actor, { attachmentCleanup: 'always' });
+      expect((await cleanupAttachments(f.deps, f.actor)).candidateIds).not.toContain(referenced.id);
+      const entry = doc.entries[0]; const range = doc.projection.find((value) => value.entryId === entry.id)!;
+      await applyCourseDocumentPatch(f.deps, f.actor, { courseId: f.a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from: range.from, to: range.to, insert: '' }], requestId: 'cleanup-remove-ref' });
+      expect((await cleanupAttachments(f.deps, f.actor)).candidateIds).not.toContain(referenced.id);
+      expect(Buffer.from((await readAttachment(f.deps, f.actor, referenced.id)).bytes).toString()).toBe('referenced');
     } finally { await f.close(); }
   });
   it('watches only configured directory, imports real files, and preserves local conflicts and external originals', async () => {
