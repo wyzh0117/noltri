@@ -7,9 +7,9 @@ impl Hasher for GridHash {fn finish(&self)->u64{self.0}fn write(&mut self,bytes:
 #[derive(Clone, Copy)]
 struct Cell { x:f64,y:f64,size:f64,mass:f64,cx:f64,cy:f64,children:[usize;4],point:usize }
 impl Cell {fn new(x:f64,y:f64,size:f64)->Self{Self{x,y,size,mass:0.,cx:0.,cy:0.,children:[usize::MAX;4],point:usize::MAX}}}
-struct Simulation {nodes:Vec<[f64;8]>,edges:Vec<[u32;2]>,degree:Vec<f64>,cells:Vec<Cell>,next:Vec<usize>,alpha:f64}
-thread_local!{static SIM:RefCell<Simulation>=RefCell::new(Simulation{nodes:vec![],edges:vec![],degree:vec![],cells:vec![],next:vec![],alpha:1.});}
-#[no_mangle] pub extern "C" fn initialize(n:usize,m:usize){SIM.with(|s|{let mut s=s.borrow_mut();s.nodes=vec![[0.;8];n];s.edges=vec![[0;2];m];s.degree=vec![0.;n];s.next=vec![usize::MAX;n];s.alpha=1.;});}
+struct Simulation {nodes:Vec<[f64;8]>,edges:Vec<[u32;2]>,degree:Vec<f64>,cells:Vec<Cell>,next:Vec<usize>,grid:HashMap<(i32,i32),usize,BuildHasherDefault<GridHash>>,alpha:f64}
+thread_local!{static SIM:RefCell<Simulation>=RefCell::new(Simulation{nodes:vec![],edges:vec![],degree:vec![],cells:vec![],next:vec![],grid:HashMap::default(),alpha:1.});}
+#[no_mangle] pub extern "C" fn initialize(n:usize,m:usize){SIM.with(|s|{let mut s=s.borrow_mut();s.nodes=vec![[0.;8];n];s.edges=vec![[0;2];m];s.degree=vec![0.;n];s.next=vec![usize::MAX;n];s.grid.clear();s.grid.reserve(n);s.alpha=1.;});}
 #[no_mangle] pub extern "C" fn nodes_ptr()->*const f64{SIM.with(|s|s.borrow().nodes.as_ptr() as *const f64)}
 #[no_mangle] pub extern "C" fn edges_ptr()->*const u32{SIM.with(|s|s.borrow().edges.as_ptr() as *const u32)}
 #[no_mangle] pub extern "C" fn set_alpha(alpha:f64){SIM.with(|s|s.borrow_mut().alpha=alpha);}
@@ -41,9 +41,10 @@ fn push(node:&mut [f64;8],x:f64,y:f64,mass:f64,charge:f64,index:usize){let mut d
  s.nodes[i][2]-=s.nodes[i][0]*center*alpha*0.01;s.nodes[i][3]-=s.nodes[i][1]*center*alpha*0.01;
  }
  for edge in &s.edges{let a=edge[0]as usize;let b=edge[1]as usize;if a>=n||b>=n||a==b{continue;}let mut dx=s.nodes[b][0]+s.nodes[b][2]-s.nodes[a][0]-s.nodes[a][2];let mut dy=s.nodes[b][1]+s.nodes[b][3]-s.nodes[a][1]-s.nodes[a][3];if dx==0.&&dy==0.{dx=0.01;}let d=(dx*dx+dy*dy).sqrt();let f=(d-distance)/d*alpha*strength/s.degree[a].max(s.degree[b]).max(1.)*0.5;dx*=f;dy*=f;s.nodes[a][2]+=dx;s.nodes[a][3]+=dy;s.nodes[b][2]-=dx;s.nodes[b][3]-=dy;}
- let mut grid:HashMap<(i32,i32),Vec<usize>,BuildHasherDefault<GridHash>>=HashMap::with_capacity_and_hasher(n,Default::default());
- for(i,p)in s.nodes.iter().enumerate(){grid.entry(((p[0]/120.).floor()as i32,(p[1]/120.).floor()as i32)).or_default().push(i);}
- for i in 0..n{let gx=(s.nodes[i][0]/120.).floor()as i32;let gy=(s.nodes[i][1]/120.).floor()as i32;for x in gx-1..=gx+1{for y in gy-1..=gy+1{if let Some(bucket)=grid.get(&(x,y)){for &j in bucket{if i>=j{continue;}let mut dx=s.nodes[j][0]-s.nodes[i][0];let mut dy=s.nodes[j][1]-s.nodes[i][1];if dx==0.&&dy==0.{dx=0.01;dy=0.007;}let d2=dx*dx+dy*dy;let radius=60.+(s.nodes[i][4]+s.nodes[j][4])*0.5;if d2>=radius*radius{continue;}let d=d2.sqrt();let f=(radius-d)/d*0.25;s.nodes[i][2]-=dx*f;s.nodes[i][3]-=dy*f;s.nodes[j][2]+=dx*f;s.nodes[j][3]+=dy*f;}}}}}
+ // Repulsion has finished with next; reuse it for ascending collision bucket chains.
+ s.grid.clear();
+ for i in (0..n).rev(){let p=s.nodes[i];s.next[i]=s.grid.insert(((p[0]/120.).floor()as i32,(p[1]/120.).floor()as i32),i).unwrap_or(usize::MAX);}
+ for i in 0..n{let gx=(s.nodes[i][0]/120.).floor()as i32;let gy=(s.nodes[i][1]/120.).floor()as i32;for x in gx-1..=gx+1{for y in gy-1..=gy+1{if let Some(&head)=s.grid.get(&(x,y)){let mut next=head;while next!=usize::MAX{let j=next;next=s.next[j];if i>=j{continue;}let mut dx=s.nodes[j][0]-s.nodes[i][0];let mut dy=s.nodes[j][1]-s.nodes[i][1];if dx==0.&&dy==0.{dx=0.01;dy=0.007;}let d2=dx*dx+dy*dy;let radius=60.+(s.nodes[i][4]+s.nodes[j][4])*0.5;if d2>=radius*radius{continue;}let d=d2.sqrt();let f=(radius-d)/d*0.25;s.nodes[i][2]-=dx*f;s.nodes[i][3]-=dy*f;s.nodes[j][2]+=dx*f;s.nodes[j][3]+=dy*f;}}}}}
  for node in &mut s.nodes{if node[5].is_finite(){node[0]=node[5];node[2]=0.;}else{node[2]*=0.6;node[0]+=node[2];}if node[6].is_finite(){node[1]=node[6];node[3]=0.;}else{node[3]*=0.6;node[1]+=node[3];}}
  if s.alpha>0.001||target>0.{1}else{0}
 })}

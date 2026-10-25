@@ -9,6 +9,13 @@ export class GraphRenderer {
   private program?:WebGLProgram;
   private buffer?:WebGLBuffer;
   private overlay:CanvasRenderingContext2D;
+  private cachedGraph?:WorkspaceGraph;
+  private cachedTheme?:string;
+  private byId=new Map<string,number>();
+  private lineEnds:number[]=[];
+  private nodeColors:number[][]=[];
+  private lines=new Float32Array();
+  private points=new Float32Array();
   constructor(private canvas:HTMLCanvasElement, private labels:HTMLCanvasElement, forceCanvas=false) {
     this.gl=forceCanvas?null:canvas.getContext('webgl',{antialias:true,alpha:true,preserveDrawingBuffer:true});
     this.engine=this.gl?'webgl':'canvas';this.context=this.gl?null:canvas.getContext('2d');
@@ -26,20 +33,28 @@ export class GraphRenderer {
   draw(graph:WorkspaceGraph,positions:Float32Array,camera:GraphCamera,options:GraphPaintOptions):void {
     const dpr=Math.min(3,window.devicePixelRatio||1), width=this.canvas.width/dpr,height=this.canvas.height/dpr;
     const overlay=this.overlay;overlay.setTransform(dpr,0,0,dpr,0,0);overlay.clearRect(0,0,width,height);
-    const byId=new Map(graph.nodes.map((n,i)=>[n.id,i])),accent=options.theme==='dark'?'#FF4545':'#2656D9',normal=options.theme==='dark'?'#b3b4ba':'#777b86',edgeColor=options.theme==='dark'?'#44464e':'#d1d3da';
+    const accent=options.theme==='dark'?'#FF4545':'#2656D9',normal=options.theme==='dark'?'#b3b4ba':'#777b86',edgeColor=options.theme==='dark'?'#44464e':'#d1d3da';
+    if(this.cachedGraph!==graph||this.cachedTheme!==options.theme){
+      this.cachedGraph=graph;this.cachedTheme=options.theme;this.byId=new Map(graph.nodes.map((n,i)=>[n.id,i]));
+      const pairs=new Set<string>(),colors:number[][]=[];this.lineEnds=[];
+      for(const e of graph.edges){const a=this.byId.get(e.from),b=this.byId.get(e.to);if(a===undefined||b===undefined)continue;const key=a<b?`${a}:${b}`:`${b}:${a}`;if(pairs.has(key))continue;pairs.add(key);this.lineEnds.push(a,b);colors.push(rgb(e.kind==='link'||e.kind==='embed'?accent:edgeColor));}
+      this.lines=new Float32Array(this.lineEnds.length*6);for(let i=0;i<this.lineEnds.length;i++){this.lines.set(colors[Math.floor(i/2)],i*6+2);this.lines[i*6+5]=1;}
+      this.nodeColors=graph.nodes.map(n=>rgb(n.linked?accent:n.color??normal));this.points=new Float32Array(graph.nodes.length*6);
+    }
+    const byId=this.byId;
     const adjacent=new Set<string>();if(options.hovered){adjacent.add(options.hovered);for(const e of graph.edges){if(e.from===options.hovered)adjacent.add(e.to);if(e.to===options.hovered)adjacent.add(e.from);}}
     const project=(i:number)=>({x:positions[i*2]*camera.scale+camera.x+width/2,y:positions[i*2+1]*camera.scale+camera.y+height/2});
     const size=(i:number)=>Math.max(3,Math.min(18,Math.min(30,Math.max(8,3*Math.sqrt(graph.nodes[i].weight+1)))*Math.sqrt(camera.scale)));
     const color=(i:number)=>graph.nodes[i].linked?accent:graph.nodes[i].color??normal;
-    const lines:number[]=[],points:number[]=[],pairs=new Set<string>();
-    for(const e of graph.edges){const a=byId.get(e.from),b=byId.get(e.to);if(a===undefined||b===undefined)continue;const key=[e.from,e.to].sort().join('\0');if(pairs.has(key))continue;pairs.add(key);const c=rgb(e.kind==='link'||e.kind==='embed'?accent:edgeColor);for(const i of [a,b])lines.push(positions[i*2],positions[i*2+1],...c,1);}
-    for(let i=0;i<graph.nodes.length;i++){const p=project(i);if(p.x<-40||p.y<-40||p.x>width+40||p.y>height+40)continue;points.push(positions[i*2],positions[i*2+1],...rgb(color(i)),size(i)*2);}
+    const lines=this.lines,points=this.points;let pointCount=0;
+    for(let i=0;i<this.lineEnds.length;i++){const at=this.lineEnds[i]*2;lines[i*6]=positions[at];lines[i*6+1]=positions[at+1];}
+    for(let i=0;i<graph.nodes.length;i++){const p=project(i);if(p.x<-40||p.y<-40||p.x>width+40||p.y>height+40)continue;const at=pointCount++*6;points[at]=positions[i*2];points[at+1]=positions[i*2+1];points.set(this.nodeColors[i],at+2);points[at+5]=size(i)*2;}
     if(this.gl&&this.program&&this.buffer){
       const gl=this.gl,p=this.program;gl.viewport(0,0,this.canvas.width,this.canvas.height);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(p);gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);
       for(const [name,count,offset] of [['a_position',2,0],['a_color',3,8],['a_size',1,20]] as const){const a=gl.getAttribLocation(p,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,count,gl.FLOAT,false,24,offset);}
       gl.uniform2f(gl.getUniformLocation(p,'u_view'),width,height);gl.uniform3f(gl.getUniformLocation(p,'u_camera'),camera.x,camera.y,camera.scale);gl.uniform1f(gl.getUniformLocation(p,'u_dpr'),dpr);
-      gl.uniform1i(gl.getUniformLocation(p,'u_points'),0);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(lines),gl.DYNAMIC_DRAW);gl.drawArrays(gl.LINES,0,lines.length/6);
-      gl.uniform1i(gl.getUniformLocation(p,'u_points'),1);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(points),gl.DYNAMIC_DRAW);gl.drawArrays(gl.POINTS,0,points.length/6);
+      gl.uniform1i(gl.getUniformLocation(p,'u_points'),0);gl.bufferData(gl.ARRAY_BUFFER,lines,gl.DYNAMIC_DRAW);gl.drawArrays(gl.LINES,0,lines.length/6);
+      gl.uniform1i(gl.getUniformLocation(p,'u_points'),1);gl.bufferData(gl.ARRAY_BUFFER,points.subarray(0,pointCount*6),gl.DYNAMIC_DRAW);gl.drawArrays(gl.POINTS,0,pointCount);
     }else if(this.context){
       const ctx=this.context;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);ctx.lineWidth=1;
       for(const e of graph.edges){const a=byId.get(e.from),b=byId.get(e.to);if(a===undefined||b===undefined)continue;const p=project(a),q=project(b);ctx.strokeStyle=e.kind==='link'||e.kind==='embed'?accent:edgeColor;ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();}

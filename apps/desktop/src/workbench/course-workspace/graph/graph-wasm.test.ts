@@ -16,3 +16,11 @@ describe('independent WebAssembly solver',()=>{
   for(let i=0;i<400;i++)wasm.tick();expect(wasm.tick()).toBe(false);expect(wasm.nodes.every(n=>Number.isFinite(n.x)&&Number.isFinite(n.y))).toBe(true);
  });
 });
+
+it('preserves collision pair order with reused buckets across multiple ticks',async()=>{
+ const {instance}=await WebAssembly.instantiate(await readFile(new URL('./graph-force.wasm',import.meta.url)));
+ const edges=Array.from({length:15},(_,i)=>({from:String(i),to:String(i+1)})),nodes=initializeForces(Array.from({length:16},(_,i)=>({id:String(i)})),edges);
+ nodes.forEach((n,i)=>{n.x=(i%4)*40-60;n.y=Math.floor(i/4)*40-60;});
+ const js=new ForceSimulation(structuredClone(nodes),edges),wasm=new WasmForceSimulation(instance,structuredClone(nodes),edges,DEFAULT_FORCES);
+ for(let tick=0;tick<10;tick++){js.tick();wasm.tick();for(let i=0;i<nodes.length;i++){expect(wasm.nodes[i].x).toBeCloseTo(js.nodes[i].x,6);expect(wasm.nodes[i].y).toBeCloseTo(js.nodes[i].y,6);}}
+});
