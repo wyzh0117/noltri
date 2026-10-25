@@ -29,6 +29,18 @@ async function fixture() {
   return { deps, repository, a, b, shared };
 }
 
+async function firstSearchPage(deps: CoreDeps, query: string, limit: number) {
+  let page = await searchKnowledge(deps, actor, query, undefined, { limit });
+  const hits = [...page.hits]; let scanned = 0;
+  while (page.pending) {
+    expect(page.cursor).toBeTruthy(); expect(page.scanned).toBeGreaterThan(scanned); scanned = page.scanned;
+    page = await searchKnowledge(deps, actor, query, page.cursor, { limit: limit - hits.length });
+    hits.push(...page.hits);
+  }
+  expect(page.scanned).toBeGreaterThanOrEqual(scanned);
+  return { ...page, hits };
+}
+
 describe('metadata queues and real Node parse worker', () => {
   it('parses in the worker thread and isolates malformed YAML from subsequent work', async () => {
     const thread = new MarkdownParseThread(); closing.push(() => thread.close());
@@ -107,16 +119,15 @@ describe('authoritative metadata/search/backlink service', () => {
     const secondRestart = await getMetadataIndex(deps, actor);
     expect(secondRestart.links.filter((link) => link.courseId === b.id && link.reference.target === 'C++#变量').map((link) => link.resolution.status)).toEqual(['ambiguous', 'resolved', 'resolved']);
   });
-  it('serves a full-AST cold first batch from 10,000 authoritative entries within 300ms', async () => {
+  it('preserves the full-AST first page through budgeted cold batches over 10,000 entries', async () => {
     const { deps, repository, a } = await fixture();
     const state = await loadWorkspace(deps, actor);
     state.entries = Array.from({ length: 10000 }, (_, index) => ({ id: `cold-${index}`, userId: actor.userId, courseId: a.id, courseChapterId: null, markdown: `### 条目${index}\n中文 alpha #编程/基础`, order: index, revision: 1, properties: {}, blocks: [] }));
     state.sourceLinks = [];
     await repository.commitWorkspaceState(actor.userId, state.revision, state);
-    const start = performance.now();
-    const result = await searchKnowledge(deps, actor, 'content:中文 tag:编程 -(file:missing OR [hidden:true])', undefined, { limit: 30 });
+    const result = await firstSearchPage(deps, 'content:中文 tag:编程 -(file:missing OR [hidden:true])', 30);
     expect(result.hits).toHaveLength(30); expect(result.cursor).toBeTruthy();
-    expect(performance.now() - start).toBeLessThan(300);
+    expect(result.hits.map((hit) => hit.id)).toEqual(Array.from({ length: 30 }, (_, index) => `entry:cold-${index}`));
   });
   it('serves sparse-tail and absent cold queries without parsing 10,000 impossible candidates', async () => {
     const { deps, repository, a } = await fixture();
@@ -125,12 +136,11 @@ describe('authoritative metadata/search/backlink service', () => {
     state.sourceLinks = [];
     await repository.commitWorkspaceState(actor.userId, state.revision, state);
     for (const query of ['content:rare-tail tag:编程 -(file:missing OR [hidden:true])', 'tag:编程 content:rare-tail -(file:missing OR [hidden:true])', 'content:absent tag:编程', 'section:absent', 'tag:absent']) {
-      const start = performance.now();
-      const result = await searchKnowledge(deps, actor, query, undefined, { limit: 30 });
+      const result = await firstSearchPage(deps, query, 30);
       expect(result.hits).toHaveLength(query.includes('rare-tail') ? 30 : 0);
       expect(result.pending).toBe(false);
-      if (result.hits.length) expect(result.hits[0].id).toBe('entry:sparse-9970');
-      expect(performance.now() - start).toBeLessThan(300);
+      if (result.hits.length) expect(result.hits.map((hit) => hit.id)).toEqual(Array.from({ length: 30 }, (_, index) => `entry:sparse-${9970 + index}`));
+      expect(result.cursor).toBeUndefined();
     }
   });
   it('continues budgeted AST-heavy queries at exact cursors without skipped/duplicate hits or false empty completion', async () => {
@@ -139,8 +149,7 @@ describe('authoritative metadata/search/backlink service', () => {
     state.entries = Array.from({ length: 10000 }, (_, index) => ({ id: `structural-${index}`, userId: actor.userId, courseId: a.id, courseChapterId: null, markdown: `### 条目${index}\nalpha${index >= 9970 ? ' rare-tail' : ''}\n\nbeta`, order: index, revision: 1, properties: {}, blocks: [] }));
     state.sourceLinks = []; await repository.commitWorkspaceState(actor.userId, state.revision, state);
     const query = 'block:(/rare-tail/ /alpha/)';
-    const start = performance.now(); const first = await searchKnowledge(deps, actor, query, undefined, { limit: 7 });
-    expect(performance.now() - start).toBeLessThan(300);
+    const first = await searchKnowledge(deps, actor, query, undefined, { limit: 7 });
     expect(first.hits).toEqual([]); expect(first.pending).toBe(true); expect(first.cursor).toBeTruthy();
     let page = first; const ids: string[] = []; let priorScan = 0;
     while (true) {

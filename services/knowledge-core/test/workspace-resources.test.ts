@@ -51,7 +51,7 @@ describe('controlled workspace resources', () => {
       const final = await uploadAttachment(f.deps, f.actor, finalInput);
       if (!('id' in final)) throw new Error('Expected attachment');
       expect(final.size).toBe(bytes.length); expect(await uploadAttachment(f.deps, f.actor, finalInput)).toEqual(final);
-      expect(Buffer.from((await readAttachment(f.deps, f.actor, final.id)).bytes)).toEqual(bytes);
+      expect(createHash('sha256').update((await readAttachment(f.deps, f.actor, final.id)).bytes).digest('hex')).toBe(sha256);
       await deleteAttachment(f.deps, f.actor, final.id, final.revision);
       expect(await listAttachments(f.deps, f.actor)).toEqual([]);
     } finally { await f.close(); }
