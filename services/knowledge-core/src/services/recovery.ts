@@ -6,11 +6,44 @@ import { loadWorkspace, workspaceContent, objectRevisions, takeSnapshot, finishM
 export async function listSnapshots(deps: CoreDeps, actor: ActorContext): Promise<WorkspaceSnapshot[]> {
   return (await loadWorkspace(deps, actor)).snapshots.slice().reverse().map((snapshot) => workspaceSnapshotSchema.parse(snapshot));
 }
+/** Include only dependencies that would become invalid in the reviewed historical state. */
+function recoveryKeys(state: WorkspaceState, snapshot: WorkspaceSnapshot): Set<string> {
+  const keys = new Set(snapshot.objectKeys);
+  const projected = <T extends { id: string }>(current: T[], before: T[], kind: string): T[] => [
+    ...current.filter(item => !keys.has(`${kind}:${item.id}`)), ...before.filter(item => keys.has(`${kind}:${item.id}`)),
+  ];
+  let size: number;
+  do {
+    size = keys.size;
+    const courses = new Set(projected(state.courses, snapshot.before.courses, 'course').map(item => item.id));
+    const concepts = new Set(projected(state.concepts, snapshot.before.concepts, 'concept').map(item => item.id));
+    const chapters = new Map(projected(state.chapters, snapshot.before.chapters, 'chapter').map(item => [item.id, item]));
+    for (const chapter of chapters.values()) {
+      if (courses.has(chapter.courseId) && concepts.has(chapter.conceptId)) continue;
+      const key = `chapter:${chapter.id}`;
+      if (!keys.has(key)) keys.add(key);
+      else {
+        if (!courses.has(chapter.courseId)) keys.add(`course:${chapter.courseId}`);
+        if (!concepts.has(chapter.conceptId)) keys.add(`concept:${chapter.conceptId}`);
+      }
+    }
+    for (const entry of projected(state.entries, snapshot.before.entries, 'entry')) {
+      if (courses.has(entry.courseId) && (entry.courseChapterId === null || chapters.get(entry.courseChapterId)?.courseId === entry.courseId)) continue;
+      const key = `entry:${entry.id}`;
+      if (!keys.has(key)) keys.add(key);
+      else {
+        if (!courses.has(entry.courseId)) keys.add(`course:${entry.courseId}`);
+        if (entry.courseChapterId !== null) keys.add(`chapter:${entry.courseChapterId}`);
+      }
+    }
+  } while (keys.size !== size);
+  return keys;
+}
 export async function compareSnapshot(deps: CoreDeps, actor: ActorContext, snapshotId: string) {
   const state = await loadWorkspace(deps, actor), snapshot = state.snapshots.find(item => item.id === snapshotId);
   if (!snapshot) throw knowledgeError('not_found', 'Snapshot not found');
   const revisions = objectRevisions(state);
-  return { current: workspaceContent(state), revisions, conflicts: snapshot.objectKeys.filter(key => revisions[key] !== snapshot.afterRevisions[key]) };
+  return { current: workspaceContent(state), revisions, conflicts: [...recoveryKeys(state, snapshot)].filter(key => revisions[key] !== snapshot.afterRevisions[key]) };
 }
 export async function restoreSnapshot(deps: CoreDeps, actor: ActorContext, snapshotId: string, expectedRevisions: Record<string, number>, resolveConflicts = false): Promise<WorkspaceMutationResult> {
   const state = await loadWorkspace(deps, actor);
@@ -24,7 +57,7 @@ export async function restoreSnapshot(deps: CoreDeps, actor: ActorContext, snaps
   });
   if (conflicts.length) throw knowledgeError('conflict', '快照涉及的对象已变更，尚未恢复任何内容', { conflicts, current: workspaceContent(state), snapshot: snapshot.before });
   const before = workspaceContent(state);
-  const keys = new Set(snapshot.objectKeys);
+  const keys = resolveConflicts ? recoveryKeys(state, snapshot) : new Set(snapshot.objectKeys);
   const affectedCourses = new Set<string>();
   for (const collection of ['courses', 'concepts', 'chapters', 'entries', 'attachments'] as const) {
     const prefix = collection === 'courses' ? 'course' : collection === 'concepts' ? 'concept' : collection === 'chapters' ? 'chapter' : collection === 'attachments' ? 'attachment' : 'entry';

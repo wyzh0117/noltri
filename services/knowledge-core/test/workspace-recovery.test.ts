@@ -58,3 +58,30 @@ it('rejects a stale property form instead of dropping a remotely added field',as
  await expect(patchWorkspaceProperties(f.deps,f.actor,{owner:{kind:'course',id:f.a.id},expectedRevision:shown.documentRevision,properties:{aliases:['my alias']},requestId:'stale-property-form'})).rejects.toMatchObject({code:'conflict'});
  expect((await getCourseDocument(f.deps,f.actor,f.a.id)).properties).toEqual({reviewed:true});}finally{await closeMetadata(f.deps,f.actor.userId);}
 });
+
+it('explicitly restores a removed chapter together with reviewed later dependents and can undo that recovery',async()=>{
+ const f=await workspaceFixture('sqlite');
+ try{
+  let doc=await getCourseDocument(f.deps,f.actor,f.a.id);
+  const append=async(text:string,id:string)=>{const result=await applyCourseDocumentPatch(f.deps,f.actor,{courseId:doc.courseId,baseDocumentRevision:doc.documentRevision,entryRevisions:Object.fromEntries(doc.entries.map(e=>[e.id,e.revision])),changes:[{from:doc.markdown.length,to:doc.markdown.length,insert:text}],requestId:id});doc=result.documents[0];return result;};
+  const first=await append('## Added chapter\n\nInitial body','add-chapter'),chapter=doc.chapters.find(c=>c.title==='Added chapter')!;
+  await append('Later separate paragraph ^retained','later-entry');
+  const later=doc.entries.find(e=>e.markdown.includes('Later separate'))!,state=await loadWorkspace(f.deps,f.actor);
+  const source=await f.repository.createRawSource({userId:f.actor.userId,rawText:later.markdown,sourceType:'manual',capturedAt:new Date().toISOString()});
+  state.sourceLinks.push({entryId:later.id,sourceId:source.id,locations:[]});
+  state.resolvedReferences[`entry:${later.id}`]={content:later.markdown,revision:later.revision,references:[]};
+  await f.repository.commitWorkspaceState(f.actor.userId,state.revision,state);
+  const comparison=await compareSnapshot(f.deps,f.actor,first.snapshotId!);
+  expect(comparison.conflicts).toContain(`entry:${later.id}`);
+  await expect(restoreSnapshot(f.deps,f.actor,first.snapshotId!,comparison.revisions)).rejects.toMatchObject({code:'conflict'});
+  const partial={...comparison.revisions};delete partial[`entry:${later.id}`];
+  await expect(restoreSnapshot(f.deps,f.actor,first.snapshotId!,partial,true)).rejects.toMatchObject({code:'conflict'});
+  const result=await restoreSnapshot(f.deps,f.actor,first.snapshotId!,comparison.revisions,true),after=await loadWorkspace(f.deps,f.actor);
+  expect(after.chapters.some(c=>c.id===chapter.id)).toBe(false);expect(after.entries.some(e=>e.courseChapterId===chapter.id)).toBe(false);
+  expect(after.sourceLinks.some(link=>link.entryId===later.id)).toBe(false);expect(after.resolvedReferences[`entry:${later.id}`]).toBeUndefined();
+  const protection=after.snapshots.find(s=>s.id===result.snapshotId)!;expect(protection.objectKeys).toContain(`entry:${later.id}`);expect(protection.before.entries.find(e=>e.id===later.id)).toEqual(later);
+  await restoreSnapshot(f.deps,f.actor,protection.id,protection.afterRevisions);
+  const undone=await loadWorkspace(f.deps,f.actor);expect(undone.chapters.some(c=>c.id===chapter.id)).toBe(true);expect(undone.entries.find(e=>e.id===later.id)).toMatchObject({markdown:later.markdown,blocks:later.blocks,courseChapterId:chapter.id});
+  expect(undone.sourceLinks).toContainEqual({entryId:later.id,sourceId:source.id,locations:[]});expect(undone.resolvedReferences[`entry:${later.id}`]?.content).toBe(later.markdown);
+ }finally{await closeMetadata(f.deps,f.actor.userId);if('close'in f.repository&&typeof f.repository.close==='function')await f.repository.close();}
+});
