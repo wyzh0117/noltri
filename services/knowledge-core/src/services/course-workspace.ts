@@ -91,7 +91,8 @@ export function syncBlocks(entry: ContentEntry, previous: ContentBlock[] = entry
 /** Import only explicit identities/edges. Legacy note text never gets guessed source associations. */
 export async function loadWorkspace(deps: CoreDeps, actor: ActorContext): Promise<WorkspaceState> {
   let state = await deps.repository.getWorkspaceState(actor.userId);
-  const original = JSON.stringify(state);
+  const migrationState = () => JSON.stringify({ ...workspaceContent(state), migration: state.migration });
+  const original = migrationState();
   const prior = workspaceContent(state);
   const alreadyMigrated = state.migration.version >= 1;
   const [nodes, edges] = await Promise.all([deps.repository.listNodes(actor.userId, { includeArchived: true }), deps.repository.listEdges(actor.userId)]);
@@ -157,7 +158,7 @@ export async function loadWorkspace(deps: CoreDeps, actor: ActorContext): Promis
     }
   }
   state.migration.version = 1;
-  if (JSON.stringify(state) !== original) state = await deps.repository.commitWorkspaceState(actor.userId, state.revision, state);
+  if (migrationState() !== original) state = await deps.repository.commitWorkspaceState(actor.userId, state.revision, state);
   return state;
 }
 
@@ -198,6 +199,7 @@ function checkReplay(state: WorkspaceState, requestId: string, request: unknown)
   const found = state.requests[requestId];
   if (!found) return null;
   if (found.fingerprint !== fingerprint(request)) throw knowledgeError('conflict', 'requestId was already used with different content');
+  if (!found.result) throw knowledgeError('conflict', '此请求已完成，但回放正文已过期；请刷新并比较当前内容', { requestId, replayExpired: true });
   return structuredClone(found.result);
 }
 function refreshIndex(deps: CoreDeps, actor: ActorContext): void {
@@ -208,6 +210,13 @@ export async function finishMutation(deps: CoreDeps, actor: ActorContext, state:
   const affectedLocations: ContentLocation[] = documents.flatMap((document) => [{ kind: 'course' as const, courseId: document.courseId }, ...document.entries.map((entry) => ({ kind: 'entry' as const, courseId: entry.courseId, courseChapterId: entry.courseChapterId, entryId: entry.id }))]);
   const result = workspaceMutationResultSchema.parse({ documents, affectedLocations, revisions: objectRevisions(state), snapshotId });
   if (requestId) state.requests[requestId] = { fingerprint: fingerprint(request), result, ...(attachmentResult ? { attachmentResult } : {}) };
+  // Keep durable fingerprints forever; evict only replay bodies, never permit an old ID to execute again.
+  let replayBytes = 0, replayCount = 0;
+  for (const receipt of Object.values(state.requests).reverse()) {
+    if (!receipt.result) continue;
+    replayBytes += Buffer.byteLength(JSON.stringify(receipt.result), 'utf8');
+    if (++replayCount > 8 || replayBytes > 2 * 1024 * 1024) { delete receipt.result; delete receipt.attachmentResult; }
+  }
   await deps.repository.commitWorkspaceState(actor.userId, state.revision, state);
   refreshIndex(deps, actor);
   return result;

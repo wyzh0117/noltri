@@ -253,7 +253,7 @@ export async function renameAttachment(deps: CoreDeps, actor: ActorContext, inpu
   const requestKey = `attachment-rename:${request.requestId}`;
   const replay = state.requests[requestKey];
   if (replay) {
-    if (replay.fingerprint !== digest(JSON.stringify(request)) || !replay.attachmentResult) throw knowledgeError('conflict', 'Attachment rename requestId was already used');
+    if (replay.fingerprint !== digest(JSON.stringify(request)) || !replay.attachmentResult || !replay.result) throw knowledgeError('conflict', 'Attachment rename requestId was already used');
     return { ...structuredClone(replay.result), attachment: workspaceAttachmentSchema.parse(replay.attachmentResult) };
   }
   const attachment = state.attachments.find((value) => value.id === request.attachmentId);
