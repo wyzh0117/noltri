@@ -6,3 +6,9 @@ export function linkedMarkdown(document:CourseDocument,target:ResolvedTarget):st
  if(target.kind==='chapter'&&target.courseChapterId){const range=document.projection.find(p=>p.kind==='chapter'&&p.courseChapterId===target.courseChapterId);if(!range)return '';const end=document.projection.find(p=>p.kind==='chapter'&&p.from>range.from)?.from??document.markdown.length;return document.markdown.slice(range.from,end);}
  return document.markdown;
 }
+
+/** Offset of the rendered linked slice in the continuous authoritative projection. */
+export function linkedContentOffset(document:CourseDocument,target:ResolvedTarget):number{
+ if(target.kind==='entry'&&target.entryId){const range=document.projection.find(p=>p.entryId===target.entryId),entry=document.entries.find(e=>e.id===target.entryId);if(!range||!entry)return 0;if(target.blockId)return range.from+(entry.blocks.find(b=>b.id===target.blockId||b.alias===target.blockId)?.from??0);if(target.headingPath){const heading=parseMarkdown(entry.markdown).headings.find(h=>target.headingPath!.every((part,i)=>h.path[h.path.length-target.headingPath!.length+i]===part));return range.from+(heading?.from??0);}return range.from;}
+ return target.kind==='chapter'?document.projection.find(p=>p.kind==='chapter'&&p.courseChapterId===target.courseChapterId)?.from??0:0;
+}

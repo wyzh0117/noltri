@@ -2,6 +2,8 @@ import { ApiClient } from '@noltri/api-client';
 
 export type WorkbenchApi = Pick<
   ApiClient,
+  | 'renameAttachment'
+  | 'cleanupAttachments'
   | 'uploadAttachment'
   | 'listAttachments'
   | 'deleteAttachment'
