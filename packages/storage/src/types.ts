@@ -1,3 +1,4 @@
+import type { WorkspaceState } from '@noltri/schema';
 import type {
   Conversation,
   ConversationMessage,
@@ -189,6 +190,10 @@ export interface NodeStats {
  */
 export interface KnowledgeRepository {
   readonly driver: StorageDriverName;
+
+  getWorkspaceState(userId: string): Promise<WorkspaceState>;
+  /** Whole affected-object set commits atomically; stale aggregate revision fails without writes. */
+  commitWorkspaceState(userId: string, expectedStateRevision: number, state: WorkspaceState): Promise<WorkspaceState>;
 
   createRawSource(input: CreateRawSourceInput): Promise<RawSource>;
   /**

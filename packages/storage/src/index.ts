@@ -28,3 +28,5 @@ export * from './types';
 export { InMemoryRepository, createInMemoryRepository } from './in-memory';
 export type { SqliteRepositoryOptions, SqliteStorageStatus } from './sqlite';
 export type { SqlitePragmas, SqliteOpenOptions } from './sqlite-schema';
+
+export { emptyWorkspaceState, validateWorkspaceState } from './workspace';

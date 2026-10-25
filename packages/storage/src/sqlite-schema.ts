@@ -13,7 +13,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /** Bumped by appending a new entry to MIGRATIONS; stored in `PRAGMA user_version`. */
-export const SQLITE_SCHEMA_VERSION = 7;
+export const SQLITE_SCHEMA_VERSION = 8;
 
 export interface SqliteOpenOptions {
   /** Absolute path to the database file, or `:memory:`. */
@@ -595,6 +595,13 @@ const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => 
   { version: 5, apply: (db) => db.exec(DDL_V5) },
   { version: 6, apply: (db) => db.exec(DDL_V6) },
   { version: 7, apply: (db) => db.exec(DDL_V7) },
+  { version: 8, apply: (db) => db.exec(`
+    create table course_workspaces (
+      user_id text primary key,
+      revision integer not null check (revision >= 1),
+      state_json text not null check (json_valid(state_json))
+    );
+  `) },
 ];
 
 function readString(db: DatabaseSync, sql: string): string {

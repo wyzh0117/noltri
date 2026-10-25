@@ -498,7 +498,7 @@ describe('the capture idempotency migration', () => {
     seededV6(file);
     const repo = new SqliteRepository({ file });
     try {
-      expect(repo.storageStatus().schemaVersion).toBe(7);
+      expect(repo.storageStatus().schemaVersion).toBe(SQLITE_SCHEMA_VERSION);
       expect(await repo.findNode('v6-topic', 'v6-user')).toMatchObject({ id: 'v6-topic', title: '旧主题' });
       expect(await repo.findNode('v6-chapter', 'v6-user')).toMatchObject({ id: 'v6-chapter', parentId: 'v6-topic' });
       expect(await repo.listEdges('v6-user')).toContainEqual(expect.objectContaining({

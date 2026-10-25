@@ -1,3 +1,5 @@
+import type { WorkspaceState } from '@noltri/schema';
+import { emptyWorkspaceState, validateWorkspaceState, workspaceKnowledgeNote } from './workspace';
 /**
  * SQLite implementation of `KnowledgeRepository` — the local-desktop persistence engine.
  *
@@ -286,6 +288,29 @@ function placeholders(count: number): string {
 
 export class SqliteRepository implements KnowledgeRepository {
   readonly driver: StorageDriverName = 'sqlite';
+
+  // ponytail: one user aggregate serializes writes; split into row CAS only when workspace size requires it.
+  async getWorkspaceState(userId: string): Promise<WorkspaceState> {
+    const row = this.db.prepare('select state_json from course_workspaces where user_id = ?').get(userId);
+    return row ? validateWorkspaceState(userId, JSON.parse(String(row.state_json)) as WorkspaceState) : emptyWorkspaceState();
+  }
+
+  async commitWorkspaceState(userId: string, expectedStateRevision: number, state: WorkspaceState): Promise<WorkspaceState> {
+    const parsed = validateWorkspaceState(userId, { ...state, revision: expectedStateRevision + 1 });
+    this.db.exec('begin immediate');
+    try {
+      const row = this.db.prepare('select revision from course_workspaces where user_id = ?').get(userId);
+      const actual = row ? Number(row.revision) : 0;
+      if (actual !== expectedStateRevision) throw knowledgeError('conflict', 'Workspace changed; reload before saving', { expectedStateRevision, actualStateRevision: actual });
+      for (const link of parsed.sourceLinks) {
+        if (!this.db.prepare('select id from raw_sources where id = ? and user_id = ?').get(link.sourceId, userId)) throw knowledgeError('not_found', 'Source not found');
+      }
+      for (const course of parsed.courses) this.db.prepare('update knowledge_nodes set title = ?, updated_at = ? where id = ? and user_id = ? and title <> ?').run(course.title, course.updatedAt, course.id, userId, course.title);
+      this.db.prepare('insert into course_workspaces(user_id, revision, state_json) values (?, ?, ?) on conflict(user_id) do update set revision = excluded.revision, state_json = excluded.state_json').run(userId, parsed.revision, JSON.stringify(parsed));
+      this.db.exec('commit');
+      return parsed;
+    } catch (error) { this.db.exec('rollback'); throw error; }
+  }
 
   private readonly db: DatabaseSync;
   private readonly vectors: VectorIndex;
@@ -1101,6 +1126,8 @@ export class SqliteRepository implements KnowledgeRepository {
   }
 
   async getKnowledgeNote(userId: string, topicId: string, chapterId: string | null): Promise<KnowledgeNote | null> {
+    const projected = workspaceKnowledgeNote(await this.getWorkspaceState(userId), userId, topicId, chapterId);
+    if (projected) return projected;
     const row = this.one(
       `select user_id, topic_id, chapter_id, content, created_at, updated_at
          from knowledge_notes

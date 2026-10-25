@@ -6,3 +6,5 @@ export * from './api';
 export * from './grants';
 export * from './config';
 export * from './library';
+export * from './course-workspace';
+export * from './workspace-graph';

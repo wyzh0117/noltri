@@ -1,3 +1,5 @@
+import type { WorkspaceState } from '@noltri/schema';
+import { emptyWorkspaceState, validateWorkspaceState, workspaceKnowledgeNote } from './workspace';
 import type {
   Conversation,
   ConversationMessage,
@@ -54,6 +56,25 @@ const MAX_INBOX_PAGE = 200;
 
 export class InMemoryRepository implements KnowledgeRepository {
   readonly driver: StorageDriverName = 'memory';
+
+  private readonly workspaces = new Map<string, WorkspaceState>();
+
+  async getWorkspaceState(userId: string): Promise<WorkspaceState> {
+    return clone(this.workspaces.get(userId) ?? emptyWorkspaceState());
+  }
+
+  async commitWorkspaceState(userId: string, expectedStateRevision: number, state: WorkspaceState): Promise<WorkspaceState> {
+    const current = this.workspaces.get(userId) ?? emptyWorkspaceState();
+    if (current.revision !== expectedStateRevision) throw knowledgeError('conflict', 'Workspace changed; reload before saving', { expectedStateRevision, actualStateRevision: current.revision });
+    const parsed = validateWorkspaceState(userId, { ...state, revision: expectedStateRevision + 1 });
+    for (const link of parsed.sourceLinks) if (this.rawSources.get(link.sourceId)?.userId !== userId) throw knowledgeError('not_found', 'Source not found');
+    for (const course of parsed.courses) {
+      const node = this.nodes.get(course.id);
+      if (node?.userId === userId && node.title !== course.title) { node.title = course.title; node.updatedAt = course.updatedAt; }
+    }
+    this.workspaces.set(userId, clone(parsed));
+    return clone(parsed);
+  }
 
   private readonly rawSources = new Map<string, RawSource>();
   private readonly items = new Map<string, KnowledgeItem>();
@@ -554,6 +575,8 @@ export class InMemoryRepository implements KnowledgeRepository {
   }
 
   async getKnowledgeNote(userId: string, topicId: string, chapterId: string | null): Promise<KnowledgeNote | null> {
+    const projected = workspaceKnowledgeNote(this.workspaces.get(userId), userId, topicId, chapterId);
+    if (projected) return projected;
     const found = this.notes.get(`${userId}\u0000${topicId}\u0000${chapterId ?? ''}`);
     return found ? clone(found) : null;
   }
