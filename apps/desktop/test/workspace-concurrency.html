@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Workspace concurrency checks</title></head><body>
+<h1>Production workspace concurrency checks</h1>
+<p>Run: pnpm --dir apps/desktop exec vite --host 127.0.0.1 --port 1437, then open /test/workspace-concurrency.html.</p>
+<button id="editor">Run editor race</button><button id="inbox">Run inbox archive</button>
+<pre id="metrics">Ready</pre><main id="fixture"></main>
+<script type="module">
+import {checkEditorSaveRace,checkInboxArchivePage} from './workspace-concurrency.browser.tsx';
+const metrics=document.querySelector('#metrics');
+for(const [id,check] of [['editor',checkEditorSaveRace],['inbox',checkInboxArchivePage]])document.getElementById(id).onclick=async()=>{
+ metrics.textContent='Running '+id;
+ try{metrics.textContent=JSON.stringify({check:id,...await check(document.querySelector('#fixture'))},null,2);}
+ catch(error){metrics.textContent=JSON.stringify({check:id,passed:false,error:String(error)},null,2);}
+};
+</script></body></html>
