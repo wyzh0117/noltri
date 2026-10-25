@@ -118,6 +118,46 @@ describe('authoritative metadata/search/backlink service', () => {
     expect(result.hits).toHaveLength(30); expect(result.cursor).toBeTruthy();
     expect(performance.now() - start).toBeLessThan(300);
   });
+  it('serves sparse-tail and absent cold queries without parsing 10,000 impossible candidates', async () => {
+    const { deps, repository, a } = await fixture();
+    const state = await loadWorkspace(deps, actor);
+    state.entries = Array.from({ length: 10000 }, (_, index) => ({ id: `sparse-${index}`, userId: actor.userId, courseId: a.id, courseChapterId: null, markdown: `### 条目${index}\n中文 alpha #编程/基础${index >= 9970 ? ' rare-tail' : ''}`, order: index, revision: 1, properties: {}, blocks: [] }));
+    state.sourceLinks = [];
+    await repository.commitWorkspaceState(actor.userId, state.revision, state);
+    for (const query of ['content:rare-tail tag:编程 -(file:missing OR [hidden:true])', 'tag:编程 content:rare-tail -(file:missing OR [hidden:true])', 'content:absent tag:编程', 'section:absent', 'tag:absent']) {
+      const start = performance.now();
+      const result = await searchKnowledge(deps, actor, query, undefined, { limit: 30 });
+      expect(result.hits).toHaveLength(query.includes('rare-tail') ? 30 : 0);
+      expect(result.pending).toBe(false);
+      if (result.hits.length) expect(result.hits[0].id).toBe('entry:sparse-9970');
+      expect(performance.now() - start).toBeLessThan(300);
+    }
+  });
+  it('continues budgeted AST-heavy queries at exact cursors without skipped/duplicate hits or false empty completion', async () => {
+    const { deps, repository, a } = await fixture();
+    const state = await loadWorkspace(deps, actor);
+    state.entries = Array.from({ length: 10000 }, (_, index) => ({ id: `structural-${index}`, userId: actor.userId, courseId: a.id, courseChapterId: null, markdown: `### 条目${index}\nalpha${index >= 9970 ? ' rare-tail' : ''}\n\nbeta`, order: index, revision: 1, properties: {}, blocks: [] }));
+    state.sourceLinks = []; await repository.commitWorkspaceState(actor.userId, state.revision, state);
+    const query = 'block:(/rare-tail/ /alpha/)';
+    const start = performance.now(); const first = await searchKnowledge(deps, actor, query, undefined, { limit: 7 });
+    expect(performance.now() - start).toBeLessThan(300);
+    expect(first.hits).toEqual([]); expect(first.pending).toBe(true); expect(first.cursor).toBeTruthy();
+    let page = first; const ids: string[] = []; let priorScan = 0;
+    while (true) {
+      expect(page.scanned).toBeGreaterThan(priorScan); priorScan = page.scanned;
+      ids.push(...page.hits.map((hit) => hit.id));
+      if (!page.cursor) { expect(page.pending).toBe(false); break; }
+      page = await searchKnowledge(deps, actor, query, page.cursor, { limit: 7 });
+    }
+    expect(ids).toEqual(Array.from({ length: 30 }, (_, index) => `entry:structural-${9970 + index}`));
+    const noHits = await searchKnowledge(deps, actor, 'block:(/alpha/ /beta/)', undefined, { limit: 7 });
+    expect(noHits.hits).toEqual([]); expect(noHits.pending).toBe(true); expect(noHits.cursor).toBeTruthy();
+    const controller = new AbortController(); controller.abort();
+    await expect(searchKnowledge(deps, actor, query, first.cursor, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    const changed = await repository.getWorkspaceState(actor.userId); changed.entries[0].markdown += '\nchanged'; changed.entries[0].revision++;
+    await repository.commitWorkspaceState(actor.userId, changed.revision, changed);
+    await expect(searchKnowledge(deps, actor, query, first.cursor)).rejects.toMatchObject({ code: 'conflict' });
+  }, 15000);
   it('retains resolved reference targets after closing and reopening the SQLite database', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'noltri-link-identities-'));
     const file = join(directory, 'knowledge.sqlite');

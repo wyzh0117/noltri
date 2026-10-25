@@ -60,13 +60,17 @@ function* queryObjects(state: WorkspaceState, nodes: KnowledgeNode[], sources: R
   for (const course of state.courses) yield { id: `course:${course.id}`, kind: 'course', courseId: course.id, title: course.title, path: pathOf(course.id), content: '', properties: course.properties, tags: strings(course.properties.tags), location: { kind: 'course', courseId: course.id } };
   for (const chapter of state.chapters) yield { id: `chapter:${chapter.id}`, kind: 'chapter', courseId: chapter.courseId, title: chapter.title, path: `${pathOf(chapter.courseId)}/${chapter.title}`, content: '', properties: chapter.properties, tags: strings(chapter.properties.tags), location: { kind: 'chapter', courseId: chapter.courseId, courseChapterId: chapter.id } };
   for (const entry of state.entries) {
-    const chapter = chapterById.get(entry.courseChapterId ?? ''); const metadata = metadataFor(entry);
+    const chapter = chapterById.get(entry.courseChapterId ?? '');
+    let parsed: ParsedMarkdown | undefined;
+    const metadata = () => parsed ??= metadataFor(entry);
     const associated = sourcesByEntry.get(entry.id) ?? [];
     const filenames = associated.flatMap((source) => { const filename = source.metadata.fileName ?? source.metadata.filename ?? source.metadata.originalFilename; return typeof filename === 'string' ? [filename] : []; });
     const paths = associated.flatMap((source) => { const path = source.metadata.importPath; return typeof path === 'string' ? [path] : []; });
     if (typeof entry.properties.importPath === 'string') paths.push(entry.properties.importPath);
     for (const record of Object.values(state.imports)) if (record.entryIds.includes(entry.id)) { paths.push(record.path); if (!filenames.includes(record.path.split('/').at(-1)!)) filenames.push(record.path.split('/').at(-1)!); }
-    yield { id: `entry:${entry.id}`, kind: 'entry', entryId: entry.id, courseId: entry.courseId, title: chapter?.title ?? courseById.get(entry.courseId)?.title ?? '', path: [pathOf(entry.courseId), chapter?.title, ...paths].filter(Boolean).join('/'), ...(filenames.length ? { file: filenames.join('\n') } : {}), content: entry.markdown, properties: entry.properties, tags: [...new Set([...metadata.tags.map((tag) => tag.tag), ...strings(entry.properties.tags)])], metadata, location: { kind: 'entry', courseId: entry.courseId, courseChapterId: entry.courseChapterId, entryId: entry.id } };
+    // Raw body/property strings contain every tag unless YAML decoding may introduce characters.
+    const tagText = /^(?:\uFEFF)?---[^\S\n]*\r?\n/u.test(entry.markdown) ? undefined : `${entry.markdown}\n${strings(entry.properties.tags).join('\n')}`;
+    yield { id: `entry:${entry.id}`, kind: 'entry', entryId: entry.id, courseId: entry.courseId, title: chapter?.title ?? courseById.get(entry.courseId)?.title ?? '', path: [pathOf(entry.courseId), chapter?.title, ...paths].filter(Boolean).join('/'), ...(filenames.length ? { file: filenames.join('\n') } : {}), content: entry.markdown, properties: entry.properties, tagText, get tags() { return [...new Set([...metadata().tags.map((tag) => tag.tag), ...strings(entry.properties.tags)])]; }, get metadata() { return metadata(); }, location: { kind: 'entry', courseId: entry.courseId, courseChapterId: entry.courseChapterId, entryId: entry.id } };
   }
 }
 
@@ -204,7 +208,9 @@ export async function getBacklinks(deps: CoreDeps, actor: ActorContext, target: 
   return { revision: index.revision, target, references, count: references.length };
 }
 
-export async function searchKnowledge(deps: CoreDeps, actor: ActorContext, query: string, cursor?: string, options: { signal?: AbortSignal; limit?: number } = {}): Promise<{ revision: number; query: string; hits: { id: string; location: ContentLocation; title: string; snippet: string; matches: QueryHit[] }[]; cursor?: string }> {
+export async function searchKnowledge(deps: CoreDeps, actor: ActorContext, query: string, cursor?: string, options: { signal?: AbortSignal; limit?: number } = {}): Promise<{ revision: number; query: string; hits: { id: string; location: ContentLocation; title: string; snippet: string; matches: QueryHit[] }[]; pending: boolean; scanned: number; cursor?: string }> {
+  const started = performance.now();
+  if (options.signal?.aborted) throw new DOMException('Search cancelled', 'AbortError');
   const ast = compileQuery(query); const state = await loadWorkspace(deps, actor);
   const ready = coordinator(deps, actor.userId).index;
   let objects: Iterable<WorkspaceQueryObject>;
@@ -224,11 +230,13 @@ export async function searchKnowledge(deps: CoreDeps, actor: ActorContext, query
   }
   const limit = Math.min(100, Math.max(1, options.limit ?? 30));
   const hits: { id: string; location: ContentLocation; title: string; snippet: string; matches: QueryHit[] }[] = [];
-  let position = 0;
+  let position = 0, pending = false;
   for (const object of objects) {
-    if (position++ < offset) continue;
+    if (position < offset) { position++; continue; }
     if (options.signal?.aborted) throw new DOMException('Search cancelled', 'AbortError');
+    if (position > offset && performance.now() - started >= 180) { pending = true; break; }
     const result = matchQuery(ast, object, { signal: options.signal, budgetMs: 100 });
+    position++;
     if (result.matched) {
       const first = result.hits.find((hit) => hit.field === 'content'); const from = Math.max(0, (first?.from ?? 0) - 60);
       const snippet = capText(actor, (object.content ?? object.title ?? '').slice(from, from + 220));
@@ -237,5 +245,5 @@ export async function searchKnowledge(deps: CoreDeps, actor: ActorContext, query
     }
     if ((position + 1) % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
   }
-  return { revision, query, hits, ...(position < total ? { cursor: `${revision}:${fingerprint}:${position}` } : {}) };
+  return { revision, query, hits, pending: pending && position < total, scanned: position, ...(position < total ? { cursor: `${revision}:${fingerprint}:${position}` } : {}) };
 }

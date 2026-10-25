@@ -153,6 +153,23 @@ describe('one query AST for search and graph', () => {
     expect([...matchingCourseIds(compileQuery('alpha tag:blue'), objects)]).toEqual([]);
     expect([...matchingCourseIds(compileQuery('beta tag:blue'), objects)]).toEqual(['course']);
   });
+  it('defers AST and tags until cheaper predicates can no longer rule a candidate out', () => {
+    let parsed = 0;
+    const content = '## Heading\nalpha\n\nbeta\n\n#blue';
+    const object = { id: 'lazy', content, properties: { tags: ['blue'] }, tagText: content,
+      get metadata() { parsed++; return parseMarkdown(content); }, get tags() { parsed++; return ['blue']; } };
+    expect(matchQuery(compileQuery('tag:blue content:missing'), object).matched).toBe(false);
+    expect(matchQuery(compileQuery('section:missing'), object).matched).toBe(false);
+    expect(matchQuery(compileQuery('-section:missing'), object).matched).toBe(true);
+    expect(matchQuery(compileQuery('tag:missing'), object).matched).toBe(false);
+    expect(parsed).toBe(0);
+    expect(matchQuery(compileQuery('block:(alpha beta)'), object).matched).toBe(false);
+    expect(matchQuery(compileQuery('-block:(alpha beta)'), object).matched).toBe(true);
+    expect(matchQuery(compileQuery('section:(alpha beta)'), object).matched).toBe(true);
+    expect(matchQuery(compileQuery('block:/^alpha$/'), object).matched).toBe(true);
+    expect(matchQuery(compileQuery('tag:/^blue$/'), object).matched).toBe(true);
+    expect(matchQuery(compileQuery('tag:#blue'), { ...object, content: 'nothing', tagText: 'nothing\nblue' }).matched).toBe(true);
+  });
   it('finds first batch from 10,000 ready objects within 300 ms', () => {
     const objects = Array.from({ length: 10000 }, (_, index) => ({ id: String(index), content: `课文${index} 中文 alpha`, tags: ['编程'] })); const ast = compileQuery('中文 tag:编程'); const start = performance.now();
     const hits = []; for (const entry of objects) { if (matchQuery(ast, entry).matched) hits.push(entry.id); if (hits.length === 30) break; }

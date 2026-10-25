@@ -14,6 +14,8 @@ export type SearchQuery =
 export interface QueryObject {
   id: string; courseId?: string; kind?: string; title?: string; path?: string; file?: string;
   content?: string; tags?: string[]; properties?: Record<string, unknown>; metadata?: ParsedMarkdown;
+  /** Optional conservative superset; absence may reject a tag, presence never establishes a hit. */
+  tagText?: string;
 }
 export interface QueryHit extends Span { field: string }
 export interface QueryMatch { matched: boolean; hits: QueryHit[] }
@@ -117,15 +119,34 @@ export function matchQuery(query: SearchQuery, object: QueryObject, options: { s
   const deadline = performance.now() + (options.budgetMs ?? 100);
   const check = () => { if (options.signal?.aborted) throw new DOMException('Query cancelled', 'AbortError'); if (performance.now() > deadline) throw new QueryError('Query execution budget exceeded'); };
   const fields: Field[] = [{ name: 'title', text: object.title ?? '' }, { name: 'content', text: object.content ?? '' }];
-  let metadata = object.metadata;
-  const meta = () => metadata ??= parseMarkdown(object.content ?? '');
+  let metadata: ParsedMarkdown | undefined;
+  const meta = () => metadata ??= object.metadata ?? parseMarkdown(object.content ?? '');
+  const cost = (node: SearchQuery): number => node.type === 'scope' ? (['tag','block','section','task','task-todo','task-done'].includes(node.operator) ? 2 : cost(node.child)) : node.type === 'not' ? cost(node.child) : node.type === 'and' || node.type === 'or' ? Math.max(...node.children.map(cost)) : 0;
+  // A structural span is a subset of raw content: absence can reject it, presence cannot prove it.
+  const possibleInContent = (node: SearchQuery, content: string, sensitive: boolean): boolean | undefined => {
+    if (node.type === 'constant') return node.value;
+    if (node.type === 'property') return evaluate(node, sensitive).matched;
+    if (node.type === 'term') {
+      if (!node.value || node.regex) return undefined;
+      const found = (sensitive ? content : content.toLocaleLowerCase()).includes(sensitive ? node.value : node.value.toLocaleLowerCase());
+      return found ? undefined : false;
+    }
+    if (node.type === 'not') { const result = possibleInContent(node.child, content, sensitive); return result === undefined ? undefined : !result; }
+    if (node.type === 'and' || node.type === 'or') {
+      const children = node.children.map((child) => possibleInContent(child, content, sensitive));
+      return node.type === 'and' ? children.includes(false) ? false : children.every((result) => result === true) ? true : undefined : children.includes(true) ? true : children.every((result) => result === false) ? false : undefined;
+    }
+    if (node.operator === 'match-case' || node.operator === 'ignore-case') return possibleInContent(node.child, content, node.operator === 'match-case');
+    return undefined;
+  };
   const evaluate = (node: SearchQuery, sensitive = false, scoped?: Field[]): QueryMatch => {
     check();
     if (node.type === 'constant') return { matched: node.value, hits: [] };
     if (node.type === 'not') return { matched: !evaluate(node.child, sensitive, scoped).matched, hits: [] };
     if (node.type === 'and' || node.type === 'or') {
       let matched = node.type === 'and'; const hits: QueryHit[] = [];
-      for (const child of node.children) {
+      const children = node.type === 'and' ? [...node.children].sort((a, b) => cost(a) - cost(b)) : node.children;
+      for (const child of children) {
         const result = evaluate(child, sensitive, scoped);
         if (node.type === 'and' && !result.matched) return { matched: false, hits: [] };
         if (result.matched) { matched = true; hits.push(...result.hits); }
@@ -154,6 +175,8 @@ export function matchQuery(query: SearchQuery, object: QueryObject, options: { s
       if (op === 'path' || op === 'file') return evaluate(node.child, sensitive, [{ name: op, text: object[op] ?? '' }]);
       if (op === 'tag') {
         const child = node.child;
+        const candidate = child.type === 'term' && !child.regex ? { ...child, value: child.value.replace(/^#/, '') } : child;
+        if (object.tagText !== undefined && possibleInContent(candidate, object.tagText, sensitive) === false) return { matched: false, hits: [] };
         if (child.type === 'term' && !child.regex) {
           const wanted = (sensitive ? child.value : child.value.toLocaleLowerCase()).replace(/^#/, '');
           const tags = (object.tags ?? []).filter((tag) => { const value = sensitive ? tag : tag.toLocaleLowerCase(); return value === wanted || value.startsWith(`${wanted}/`); });
@@ -163,6 +186,7 @@ export function matchQuery(query: SearchQuery, object: QueryObject, options: { s
       }
       const content = object.content ?? '';
       if (op === 'content') return evaluate(node.child, sensitive, [{ name: 'content', text: content }]);
+      if (possibleInContent(node.child, content, sensitive) === false) return { matched: false, hits: [] };
       let parts: Span[];
       if (op === 'line') { let from = 0; parts = content.split('\n').map((line) => { const part = { from, to: from + line.length }; from += line.length + 1; return part; }); }
       else if (op === 'block') parts = meta().blocks;
