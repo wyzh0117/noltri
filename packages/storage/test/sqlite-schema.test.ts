@@ -563,3 +563,16 @@ describe('the storage package no longer decides where data goes by itself', () =
     expect(readFileSync(path.join(dir, 'noltri.sqlite')).byteLength).toBeGreaterThan(0);
   });
 });
+
+it('refuses newer profile schemas before any writable migration or journal change', () => {
+  const file = fileInTempDir('future.sqlite');
+  const db = new DatabaseSync(file);
+  db.exec(`create table future_data(value text); insert into future_data values ('preserve'); pragma user_version = ${SQLITE_SCHEMA_VERSION + 1}`);
+  db.close();
+  const before = readFileSync(file);
+  expect(() => openSqlite({ file })).toThrow(/newer than supported/);
+  expect(readFileSync(file)).toEqual(before);
+  const preserved = new DatabaseSync(file, { readOnly: true });
+  expect(preserved.prepare('select value from future_data').get()!.value).toBe('preserve');
+  preserved.close();
+});

@@ -636,6 +636,7 @@ export function probeFts5(db: DatabaseSync): { ok: boolean; error: string | null
 /** Applies every migration above the stored `user_version`. Idempotent. */
 export function migrateSqlite(db: DatabaseSync): number {
   const current = readNumber(db, 'pragma user_version');
+  if (current > SQLITE_SCHEMA_VERSION) throw new Error(`Database schema ${current} is newer than supported schema ${SQLITE_SCHEMA_VERSION}; preserve this profile and use a compatible importer`);
   for (const step of MIGRATIONS) {
     if (step.version <= current) continue;
     db.exec('begin immediate');
@@ -664,6 +665,12 @@ export function openSqlite(options: SqliteOpenOptions): SqliteConnection {
     enableForeignKeyConstraints: true,
     timeout: busyTimeoutMs,
   });
+
+  const existingVersion = readNumber(db, 'pragma user_version');
+  if (options.readOnly !== true && existingVersion > SQLITE_SCHEMA_VERSION) {
+    db.close();
+    throw new Error(`Database schema ${existingVersion} is newer than supported schema ${SQLITE_SCHEMA_VERSION}; preserve this profile and use a compatible importer`);
+  }
 
   // `journal_mode = wal` is a file-level setting that survives reopen; on `:memory:` SQLite reports
   // `memory` back and we keep whatever it answered rather than asserting a mode we did not get.
