@@ -1,112 +1,40 @@
 <div align="center">
   <h1>知序 Noltri</h1>
-  <p>把网页、Agent 与论文摘录，收进一棵自己的知识树。</p>
+  <p>从资料片段，到连续的课程知识。</p>
 </div>
 
 [English](README.en.md)
 
-## 项目介绍
+知序是一款本机运行的个人知识库。网页、Agent 回答与论文摘录保留原文和来源，再按学科与课程组织。资料默认保存在自己的电脑上。
 
-知序是一款本机运行的个人知识库。你可以从网页、Agent 对话和论文中收集片段，再按学科整理、搜索和对比。资料默认保存在自己的电脑上。
+## Noltri 2.0.0
 
-## 快速开始
+- 在同一个课程工作区连续阅读、编辑正文，切换实时预览、源码和阅读模式。
+- 使用标题、块引用、双链、嵌入、标签与结构属性连接知识。
+- 从学科导航、课程卡片、搜索或图谱进入相同的课程内容。
+- 大纲、反链、出链、标签和来源属性跟随当前选择；移动条目时保留来源。
+- 导入与导出 Markdown，管理附件，比较并恢复历史快照；保存失败时保留本机草稿。
+- 继续从浏览器扩展和 MCP 收集资料，并保留模型配置、整理与研究比较能力。
 
-知序 0.1.4 面向 Apple Silicon（arm64），要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
+## 安装
 
-0.1.4 发布说明与验收结果待本轮修复和验证完成后补齐，见[发布说明](docs/releases/0.1.4.md)。0.1.3 增加知识主题与章节的直接阅读编辑、按学科范围浏览关系图，并保留正文自动保存与本机草稿恢复。0.1.2 的 Provider 管理继续支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages，可拉取或手动添加模型；Apply 保存配置，“使用此模型”选择自动处理内容时使用的模型。0.1.3 发布采用 ad-hoc 签名，**尚未通过 Apple Developer ID 签名和公证**，macOS 仍可能拦截首次打开。请先对照 Releases 中的 `SHA256SUMS.txt` 校验下载文件，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)进入“系统设置”→“隐私与安全性”→“仍要打开”。
+[下载 macOS 版本](https://github.com/wyzh0117/noltri/releases/tag/v2.0.0)。当前安装包面向 Apple Silicon（arm64），要求 macOS 13.5 或更新版本。打开 DMG，把“知序”拖入 Applications。
 
-若系统仍显示“已损坏”，确认下载来源和校验值后，可仅为此应用解除下载隔离：
+本版本采用 ad-hoc 签名，尚未通过 Apple Developer ID 签名和公证。请对照 Release 的 `SHA256SUMS.txt` 校验文件；首次打开可能需要按 [Apple 官方说明](https://support.apple.com/en-us/102445)在“系统设置 → 隐私与安全性”中确认。
 
-```bash
-codesign --verify --deep --strict "/Applications/知序.app"
-xattr -dr com.apple.quarantine "/Applications/知序.app"
-open "/Applications/知序.app"
-```
+升级前请备份 `~/Library/Application Support/com.noltri.companion/`。2.0.0 会迁移旧版本课程与笔记，保留原始资料；迁移后的数据库不能直接交回旧版本使用，回退时应恢复整份备份。
 
-只有第一条验签成功后才执行后两条。正式免拦截分发仍需 Developer ID 证书和 Apple 公证，详见 [Tauri macOS 签名文档](https://v2.tauri.app/distribute/sign/macos/)。
+## 开始使用
 
-### 从源码运行
+在“快速收集”中保存文字、网页或论文摘录；离线时可先手动整理。配置服务商并选择活动模型后，可以使用自动分类。API 密钥保存在本机设置中。
 
-从源码运行需要 Node.js 20.19+ 或 22.12+、pnpm 11、Rust 工具链和 Xcode Command Line Tools。
+打开课程即可连续编辑。点击右下“来源属性”查看课程、章节或条目的来源；在课程菜单中导入、导出内容或查看历史快照。文件恢复会比较当前版本，遇到冲突会保留双方内容。
 
-```bash
-pnpm install
-cp .env.example .env.local
-pnpm dev
-```
+## 浏览器扩展与 Agent
 
-知序桌面窗口会自动打开。进入 Provider 管理后，可添加服务商配置，拉取候选模型或手动添加模型，再 Apply 保存。模型配置支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages；选择“使用此模型”可在处理资料前设定全局活动模型。API 密钥仅保存在本机设置中。模型管理可随时从知识库设置中打开。
+从同一 Release 下载 `noltri-extension.zip`，解压后在 Chrome 的扩展程序页面选择“加载已解压的扩展程序”。右键菜单可收集选中文字、网页和图片。
 
-安装版保存设置后会自动重启由应用管理的本机服务。使用外部服务或从源码开发时，页面会提示重启服务，需将相同设置写入 `.env.local`：
-
-```dotenv
-AI_PROVIDER=openai
-AI_API_KEY=填入你自己的密钥
-AI_BASE_URL=https://api.deepseek.com
-AI_CHAT_MODEL=deepseek-flash
-AI_EMBEDDINGS_ENABLED=false
-```
-
-Provider 配置保存在 macOS 的 `~/Library/Application Support/com.noltri.companion/settings.json`。自动知识体系分类需要选择活动模型；未配置或调用失败时保留原文，供稍后重试与人工整理。
-
-### 安装浏览器扩展
-
-从 [Releases](https://github.com/wyzh0117/noltri/releases/latest) 下载并解压 `noltri-extension.zip`。也可以从源码构建：
-
-```bash
-pnpm --filter @noltri/extension build
-```
-
-在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，选择「加载已解压的扩展程序」，再选解压后的文件夹（从源码构建时选择 `apps/extension/.output`）。浏览网页时右键选择“收集选中内容到知序”“收集此网页到知序”或“收集此图片到知序”，即可连同来源一并保存。
-
-### 连接 Codex 或其他 Agent
-
-打开知序桌面应用或运行 `pnpm dev` 后，在 Codex 的 MCP 设置中添加本地 Streamable HTTP 服务；也可以写入 `~/.codex/config.toml`：
-
-```toml
-[mcp_servers.zhixu]
-url = "http://127.0.0.1:8790/mcp"
-```
-
-保存后重启 Codex。其他 Agent 也可以使用知序设置页提供的入口地址。若客户端只支持 stdio，可从仓库根目录启动：
-
-```toml
-[mcp_servers.zhixu]
-command = "pnpm"
-args = ["--filter", "@noltri/mcp-server", "exec", "tsx", "src/stdio.ts"]
-cwd = "/你的知序仓库绝对路径"
-env = { KNOWLEDGE_API_URL = "http://127.0.0.1:8787" }
-```
-
-可参考 [Codex MCP 设置说明](https://developers.openai.com/codex/mcp)。
-
-## 工作方式
-
-每条资料都会保留原文和来源。配置模型后，AI 根据片段内容判断知识体系和分层学科路径，并生成摘要。你可以在资料详情中修改内容、标题、分类和研究点；手动指定的分类优先保留。调用失败时保留原文，不把摘录标题冒充 AI 分类。你还可以搜索资料，并把相关内容并排对读。
-
-## 可以做什么
-
-- 从网页选中文字，连同标题和链接一起收进资料库；
-- 收集时可输入“社会科学 / 经济学 / 因果推断”这样的路径，直接创建学科树并完成归类；
-- 让 Codex 等 Agent 通过 MCP 保存回答或研究线索；
-- 收集论文段落，记录引用和研究方向；
-- 按知识树浏览、搜索、整理和比较资料。
-
-## 示例
-
-读论文时收集两篇文章关于同一研究问题的段落。知序会保留各自的来源，放进相应学科下；之后打开并排比较，就能快速查看两种方法和结论的异同。
-
-## 验证与构建
-
-0.1.1 的真实 DeepSeek 分类验收覆盖 Python、TypeScript、Rust、Go、SQL 及物理、计量经济学、分子生物学、心理学论文短摘录；片段附原始出处。见[测试说明](docs/testing/README.md)及[结果](docs/testing/0.1.1-deepseek-results.json)。0.1.2 的自动检查、隔离协议与重启测试、构建后 UI mock bridge 流程记录在同一测试说明中。0.1.3 的 Graph v3.1 依据[开发指南](Noltri_大模型开发指南_20261020.md)实现；本轮 563 项自动测试与 Rust 12/12 通过，A01–A14 及 More 入口真实 UI 验收通过，A15/A16 原阶段能力仍未完成。检查及范围见[测试说明](docs/testing/README.md)、[验收记录](docs/testing/graph-v3.1/acceptance.md)和[发布说明](docs/releases/0.1.3.md)。本地测试资料不随安装包分发。
-
-```bash
-pnpm typecheck
-pnpm test
-pnpm --filter @noltri/desktop release:mac
-```
-
-构建脚本校验固定版本 Node 24 运行时的 SHA256，生成应用后检查资源封印、DMG 完整性、随包 SQLite 与 JIT。具备签名和公证凭据的正式分发还需通过 `pnpm --filter @noltri/desktop verify:mac --require-notarization`。
+知序设置页提供本机 MCP 入口。默认地址为 `http://127.0.0.1:8790/mcp`，可连接支持 Streamable HTTP 的 Agent。入口和凭据以设置页显示为准。
 
 ## License
 
