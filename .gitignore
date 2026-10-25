@@ -45,3 +45,18 @@ docs/*baseline-and-recovery.md
 docs/research-contract.md
 docs/*DECISION*.md
 docs/PATCH_*.md
+
+# All development records, specifications, reports and evidence stay local.
+.superpowers/
+docs/implementation/
+docs/testing/
+docs/reports/
+docs/releases/
+**/*[Rr]eport*.html
+**/*[Rr]eport*.json
+**/*[Rr]eport*.md
+**/*[Ss]pec*.md
+**/*[Ss]ketch*.html
+**/*开发*.md
+**/*验收*.md
+**/*实施*.md
