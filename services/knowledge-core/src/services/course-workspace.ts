@@ -269,11 +269,30 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
   }
   const rootHeadings = new Set((parsed.ast.children ?? []).filter((node) => node.type === 'heading' && node.depth === 2).map((node) => node.position?.start.offset));
   const headings = parsed.headings.filter((heading) => heading.depth === 2 && rootHeadings.has(heading.from) && !opaqueFrontmatter.some((range) => heading.from >= range.from && heading.to <= range.to));
+  const sectionKey = (title: string, body: string): string => JSON.stringify([title, body.replace(/^[\r\n]+|[\r\n]+$/g, '')]);
+  const oldSections = oldHeadings.map((range, index) => ({
+    range, chapter: old.chapters.find((chapter) => chapter.id === range.courseChapterId)!,
+    key: sectionKey(old.chapters.find((chapter) => chapter.id === range.courseChapterId)!.title, old.markdown.slice(range.to, oldHeadings[index + 1]?.from ?? old.markdown.length)),
+  }));
+  // Reserve complete surviving sections first: a replacement start is an edit anchor, not identity.
+  const exactSections = new Map<number, CourseChapter>();
+  const reservedChapters = new Set<string>();
+  for (const section of oldSections) {
+    const anchor = mapPosition(section.range.from, changes, changes.some((change) => change.from === section.range.from && change.to === section.range.from));
+    const index = headings.findIndex((heading, position) => !exactSections.has(position) && heading.from === anchor && sectionKey(heading.text, markdown.slice(heading.to, headings[position + 1]?.from ?? markdown.length)) === section.key);
+    if (index >= 0) { exactSections.set(index, section.chapter); reservedChapters.add(section.chapter.id); }
+  }
+  for (let index = 0; index < headings.length; index++) {
+    if (exactSections.has(index)) continue;
+    const key = sectionKey(headings[index].text, markdown.slice(headings[index].to, headings[index + 1]?.from ?? markdown.length));
+    const match = oldSections.find((section) => section.key === key && !reservedChapters.has(section.chapter.id));
+    if (match) { exactSections.set(index, match.chapter); reservedChapters.add(match.chapter.id); }
+  }
   const sections: { from: number; to: number; chapterId: string | null }[] = [{ from: title?.to ?? parsed.frontmatter?.to ?? 0, to: headings[0]?.from ?? markdown.length, chapterId: null }];
   for (let index = 0; index < headings.length; index++) {
     const heading = headings[index];
-    const mapped = oldHeadings.find((range) => !selectedChapters.has(range.courseChapterId!) && mapPosition(range.from, changes, changes.some((change) => change.from === range.from && change.to === range.from)) === heading.from);
-    let chapter = mapped ? state.chapters.find((value) => value.id === mapped.courseChapterId) : old.chapters.find((value) => !value.detached && !selectedChapters.has(value.id) && value.title === heading.text && oldHeadings.some((range) => range.courseChapterId === value.id && changes.some((change) => change.from <= range.from && change.to >= range.to)));
+    const mapped = oldHeadings.find((range) => !selectedChapters.has(range.courseChapterId!) && !reservedChapters.has(range.courseChapterId!) && mapPosition(range.from, changes, changes.some((change) => change.from === range.from && change.to === range.from)) === heading.from);
+    let chapter = exactSections.get(index) ?? (mapped ? state.chapters.find((value) => value.id === mapped.courseChapterId) : old.chapters.find((value) => !value.detached && !selectedChapters.has(value.id) && !reservedChapters.has(value.id) && value.title === heading.text && oldHeadings.some((range) => range.courseChapterId === value.id && changes.some((change) => change.from <= range.from && change.to >= range.to))));
     if (!chapter) {
       const conceptId = createId(); state.concepts.push({ id: conceptId, userId: actor.userId, title: heading.text, revision: 1 });
       chapter = { id: createId(), userId: actor.userId, courseId: request.courseId, conceptId, title: heading.text, order: index, revision: 1, properties: {}, detached: false };
@@ -304,8 +323,8 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
       while (to > from && /[\r\n]/.test(markdown[to - 1])) to--;
       if (from === to || markdown.slice(from, to).trim() === '') continue;
       const text = markdown.slice(from, to);
-      const exact = old.entries.find((entry) => oldVisibleIds.has(entry.id) && !used.has(entry.id) && entry.markdown === text);
-      const overlapping = oldRanges.filter((range) => range.from < to && range.to > from).map((range) => old.entries.find((entry) => entry.id === range.entryId)!);
+      const exact = old.entries.find((entry) => oldVisibleIds.has(entry.id) && !used.has(entry.id) && entry.markdown === text && entry.courseChapterId === section.chapterId) ?? old.entries.find((entry) => oldVisibleIds.has(entry.id) && !used.has(entry.id) && entry.markdown === text && !reservedChapters.has(entry.courseChapterId ?? ''));
+      const overlapping = oldRanges.filter((range) => range.from < to && range.to > from).map((range) => old.entries.find((entry) => entry.id === range.entryId)!).filter((entry) => !reservedChapters.has(entry.courseChapterId ?? '') || entry.courseChapterId === section.chapterId);
       const chosen = exact ?? overlapping.find((entry) => !used.has(entry.id));
       const entry: ContentEntry = chosen ? { ...structuredClone(chosen), courseChapterId: section.chapterId, markdown: text, order: replacement.length } : { id: createId(), userId: actor.userId, courseId: request.courseId, courseChapterId: section.chapterId, markdown: text, order: replacement.length, revision: 1, properties: {}, blocks: [] };
       if (chosen && (entry.markdown !== chosen.markdown || entry.courseChapterId !== chosen.courseChapterId || entry.order !== chosen.order)) entry.revision++;
@@ -346,11 +365,22 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
   for (const entry of old.entries) if (oldVisibleIds.has(entry.id) && !used.has(entry.id)) state.tombstones[`entry:${entry.id}`] = entry.revision + 1;
   for (const chapter of removedChapters) state.tombstones[`chapter:${chapter.id}`] = chapter.revision + 1;
   prepareImport?.(state, before);
+  const unchangedBindings = old.entries.flatMap((entry) => {
+    const current = state.entries.find((value) => value.id === entry.id);
+    const binding = state.resolvedReferences[`entry:${entry.id}`];
+    return current?.markdown === entry.markdown && binding?.content === entry.markdown ? [[`entry:${entry.id}`, { ...binding, revision: current.revision }] as const] : [];
+  });
   rebaseWorkspaceReferenceBindings(state, old, projectCourse(state, request.courseId), changes);
+  for (const [key, binding] of unchangedBindings) state.resolvedReferences[key] = binding;
   const referenceCourses = rewriteRenamedReferences(state, before, headingRenames);
   for (const other of state.courses) if (referenceCourses.has(other.id) && other.id !== request.courseId) { other.documentRevision++; other.updatedAt = nowIso(); }
   const deletion = changes.some((change) => change.to > change.from && change.insert.length < change.to - change.from);
-  const snapshotId = takeSnapshot(state, before, actor, deletion ? 'delete' : 'edit', deletion);
+  const oldOrder = oldHeadings.map((range) => range.courseChapterId).filter((id) => selectedChapters.has(id!));
+  const newOrder = sections.map((section) => section.chapterId).filter((id) => oldOrder.includes(id));
+  const headingOrder = (values: typeof parsed.headings): string[] => values.map((heading) => JSON.stringify([heading.depth, heading.path]));
+  const oldHeadingOrder = headingOrder(parseWorkspaceMarkdown(old.markdown).headings); const newHeadingOrder = headingOrder(parsed.headings);
+  const reordered = JSON.stringify(oldOrder) !== JSON.stringify(newOrder) || JSON.stringify(oldHeadingOrder) !== JSON.stringify(newHeadingOrder) && JSON.stringify([...oldHeadingOrder].sort()) === JSON.stringify([...newHeadingOrder].sort());
+  const snapshotId = takeSnapshot(state, before, actor, reordered ? 'reorder' : deletion ? 'delete' : 'edit', deletion || reordered);
   return finishMutation(deps, actor, state, [request.courseId, ...referenceCourses], snapshotId, request.requestId, request);
 }
 

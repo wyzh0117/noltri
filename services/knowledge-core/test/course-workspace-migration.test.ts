@@ -5,7 +5,7 @@ import { createOfflineProvider } from '@noltri/ai-provider';
 import { silentLogger } from '@noltri/shared';
 import type { CoreDeps } from '../src/types';
 import { testConfig } from './fakes';
-import { getCourseDocument, applyCourseDocumentPatch, loadWorkspace, getLegacyCourseNote, saveLegacyCourseNote } from '../src/services/course-workspace';
+import { getCourseDocument, applyCourseDocumentPatch, loadWorkspace, getLegacyCourseNote, saveLegacyCourseNote, syncBlocks } from '../src/services/course-workspace';
 
 import { workspaceFixture } from './workspace-fixture';
 
@@ -198,4 +198,70 @@ it('rewrites valid body links while preserving malformed legacy frontmatter on a
   const entry = result.documents.find((doc) => doc.courseId === a.id)!.entries[0];
   expect(entry.markdown).toBe(frontmatter + `Original [[${b.id}]] body`);
   expect((await getCourseDocument(deps, actor, a.id)).entries[0].markdown).toBe(entry.markdown);
+});
+
+describe.each(['memory', 'sqlite'] as const)('%s complete chapter reorder identity', (driver) => {
+  it('reserves whole sections before edit anchors, retaining duplicate-body provenance, blocks, bindings and undo', async () => {
+    const { repository, deps, actor, a, b, shared } = await workspaceFixture(driver);
+    const { getMetadataIndex, closeMetadata } = await import('../src/services/metadata');
+    try {
+      const other = await repository.createNode({ userId: actor.userId, title: 'Other', nodeType: 'chapter', parentId: a.id });
+      const sourceA = await repository.createRawSource({ userId: actor.userId, rawText: 'source A', sourceType: 'manual', capturedAt: 'now' });
+      const sourceB = await repository.createRawSource({ userId: actor.userId, rawText: 'source B', sourceType: 'manual', capturedAt: 'now' });
+      const state = await loadWorkspace(deps, actor);
+      const chapterA = state.chapters.find((chapter) => chapter.courseId === a.id && chapter.conceptId === shared.id)!;
+      const chapterB = state.chapters.find((chapter) => chapter.courseId === a.id && chapter.conceptId === other.id)!;
+      chapterA.order = 0; chapterB.order = 1;
+      const entries: import('@noltri/schema').ContentEntry[] = [
+        { id: 'chapter-a-block', userId: actor.userId, courseId: a.id, courseChapterId: chapterA.id, markdown: 'alpha ^alpha\n\n[[Java]]', order: 0, revision: 1, properties: {}, blocks: [] },
+        { id: 'chapter-a-duplicate', userId: actor.userId, courseId: a.id, courseChapterId: chapterA.id, markdown: 'same body', order: 1, revision: 1, properties: {}, blocks: [] },
+        { id: 'chapter-b-block', userId: actor.userId, courseId: a.id, courseChapterId: chapterB.id, markdown: 'beta ^beta', order: 2, revision: 1, properties: {}, blocks: [] },
+        { id: 'chapter-b-duplicate', userId: actor.userId, courseId: a.id, courseChapterId: chapterB.id, markdown: 'same body', order: 3, revision: 1, properties: {}, blocks: [] },
+      ];
+      entries.forEach((entry) => syncBlocks(entry)); state.entries.push(...entries);
+      state.sourceLinks.push(...entries.map((entry) => ({ entryId: entry.id, sourceId: entry.courseChapterId === chapterA.id ? sourceA.id : sourceB.id, locations: [{ entry: entry.id }] })));
+      await repository.commitWorkspaceState(actor.userId, state.revision, state);
+      await getMetadataIndex(deps, actor);
+      await repository.createNode({ userId: actor.userId, title: 'Java', nodeType: 'topic' });
+      let document = await getCourseDocument(deps, actor, a.id);
+      const titleAt = document.markdown.indexOf('Python');
+      document = (await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: document.documentRevision, entryRevisions: {}, changes: [{ from: titleAt, to: titleAt + 6, insert: 'Python course' }], requestId: 'recent-edit-before-reorder' })).documents[0];
+      await getMetadataIndex(deps, actor);
+      const headings = document.projection.filter((range) => range.kind === 'chapter');
+      const first = document.markdown.slice(headings[0].from, headings[1].from);
+      const second = document.markdown.slice(headings[1].from);
+      const result = await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: document.documentRevision, entryRevisions: Object.fromEntries(document.entries.map((entry) => [entry.id, entry.revision])), changes: [{ from: headings[0].from, to: document.markdown.length, insert: second + first }], requestId: 'reorder-complete-sections' });
+      const reordered = result.documents.find((doc) => doc.courseId === a.id)!;
+      expect(reordered.chapters.map((chapter) => chapter.id)).toEqual([chapterB.id, chapterA.id]);
+      expect(reordered.entries.map((entry) => entry.id)).toEqual(['chapter-b-block', 'chapter-b-duplicate', 'chapter-a-block', 'chapter-a-duplicate']);
+      for (const original of entries) {
+        const current = reordered.entries.find((entry) => entry.id === original.id)!;
+        expect(current.courseChapterId).toBe(original.courseChapterId); expect(current.markdown).toBe(original.markdown); expect(current.blocks).toEqual(original.blocks);
+        expect(reordered.sourceLinks.find((link) => link.entryId === current.id)!.sourceId).toBe(original.courseChapterId === chapterA.id ? sourceA.id : sourceB.id);
+      }
+      const after = await loadWorkspace(deps, actor);
+      expect(after.snapshots.find((snapshot) => snapshot.id === result.snapshotId)?.reason).toBe('reorder');
+      const link = (await getMetadataIndex(deps, actor)).links.find((value) => value.entryId === 'chapter-a-block' && value.reference.target === 'Java')!;
+      expect(link.resolution).toEqual({ status: 'resolved', target: { kind: 'course', courseId: b.id } });
+    } finally { await closeMetadata(deps, actor.userId); }
+  });
+});
+
+it('keeps the original section identity when an identical complete H2 is pasted before it', async () => {
+  const { repository, deps, actor, a, shared } = await workspaceFixture();
+  await repository.saveKnowledgeNote({ userId: actor.userId, topicId: a.id, chapterId: shared.id, content: 'same complete body' });
+  const document = await getCourseDocument(deps, actor, a.id);
+  const chapter = document.chapters[0]; const entry = document.entries[0];
+  const source = await repository.createRawSource({ userId: actor.userId, rawText: 'original source', sourceType: 'manual', capturedAt: 'now' });
+  const state = await loadWorkspace(deps, actor);
+  state.sourceLinks.push({ entryId: entry.id, sourceId: source.id, locations: [] });
+  await repository.commitWorkspaceState(actor.userId, state.revision, state);
+  const heading = document.projection.find((range) => range.kind === 'chapter')!;
+  const complete = document.markdown.slice(heading.from);
+  const result = await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: document.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from: heading.from, to: heading.from, insert: complete }], requestId: 'paste-identical-complete-section' });
+  const after = result.documents[0];
+  expect(after.chapters).toHaveLength(2); expect(after.chapters[1].id).toBe(chapter.id); expect(after.chapters[0].conceptId).not.toBe(shared.id);
+  expect(after.entries[1].id).toBe(entry.id); expect(after.entries[1].courseChapterId).toBe(chapter.id);
+  expect(after.entries[0].id).not.toBe(entry.id);
+  expect(after.sourceLinks).toEqual([{ entryId: entry.id, sourceId: source.id, locations: [] }]);
 });
