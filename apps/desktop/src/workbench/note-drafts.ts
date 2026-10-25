@@ -73,3 +73,9 @@ export function clearNoteDraft(identity: NoteIdentity, savedContent: string): bo
     return false;
   }
 }
+
+export interface CourseDraft { courseId:string; baseRevision:number; baseMarkdown:string; markdown:string; updatedAt:string }
+const COURSE_PREFIX='noltri:course-draft:v1:';
+export function readCourseDraft(courseId:string):CourseDraft|null {try{const d:unknown=JSON.parse(window.localStorage.getItem(COURSE_PREFIX+courseId)??'null');if(d&&typeof d==='object'&&'courseId' in d&&d.courseId===courseId&&'markdown' in d&&typeof d.markdown==='string'&&'baseMarkdown' in d&&typeof d.baseMarkdown==='string'&&'baseRevision' in d&&Number.isInteger(d.baseRevision))return d as CourseDraft;}catch{}return null;}
+export function writeCourseDraft(draft:CourseDraft):boolean {try{window.localStorage.setItem(COURSE_PREFIX+draft.courseId,JSON.stringify(draft));return true;}catch{return false;}}
+export function clearCourseDraft(courseId:string,markdown:string):void {try{if(readCourseDraft(courseId)?.markdown===markdown)window.localStorage.removeItem(COURSE_PREFIX+courseId);}catch{}}

@@ -1,9 +1,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { GraphNode, GraphNoteIndexEntry, NodeDetail, TreeNode } from '@noltri/schema';
-import { ChapterChoicePanel, GraphNotebook } from './GraphNotebook';
-import type { GraphNotebookProps } from './GraphNotebook';
+import type { GraphNode, GraphNoteIndexEntry, TreeNode } from '@noltri/schema';
+import { GraphNotebook } from './GraphNotebook';
 import { commitLatestNavigation, contentIdentity, disciplineScopesForTopics, graphChapterAttachment, graphChapterTitle, NavigationIntentClock, searchGraphNodes, selectionForTreeNode, shouldReuseActiveNote } from './graph-navigation';
 
 function treeNode(id: string, nodeType: string, children: TreeNode[] = []): TreeNode {
@@ -67,52 +66,13 @@ describe('graph navigation mapping', () => {
     expect(contentIdentity({ kind: 'chapter', topicId: 't1', chapterId: 'c1' })).toBe('note:["t1","c1"]');
   });
 
-  it('renders shared-chapter candidates in the intermediate choice panel', () => {
-    const html = renderToStaticMarkup(createElement(ChapterChoicePanel, {
-      chapterTitle: '变量',
-      candidates: [{ id: 'python', title: 'Python' }, { id: 'cpp', title: 'C++' }],
-      action: 'open',
-      onChoose: () => {},
-    }));
-    const moreHtml = renderToStaticMarkup(createElement(ChapterChoicePanel, {
-      chapterTitle: '变量', candidates: [{ id: 'python', title: 'Python' }], action: 'more', onChoose: () => {},
-    }));
-
-    expect(html).toContain('选择章节正文所属主题');
-    expect(html).toContain('Python');
-    expect(html).toContain('C++');
-    expect(html).not.toContain('Graph 面板');
-    expect(moreHtml).toContain('选择一个关联主题以查看更多信息');
-    expect(moreHtml).toContain('查看「Python」更多信息');
-  });
-
-  it('keeps the More pane visible in the cards view without replacing its content', () => {
-    const scope = { kind: 'discipline', disciplineId: 'cs' } as const;
-    const detail: NodeDetail = {
-      node: {
-        id: 'python', userId: 'test', title: 'Python', summary: '主题摘要', nodeType: 'topic', parentId: 'programming',
-        status: 'active', confidence: null, embeddingModel: null, masteryLevel: 'collected', createdAt: '', updatedAt: '',
-      },
-      path: [], items: [], children: [], relatedNodes: [], stats: { itemCount: 4, sourceCount: 2, childCount: 1 },
-    };
-    const props: GraphNotebookProps = {
-      content: { kind: 'cards', scope, selectedNodeId: 'cs' }, scope,
-      nodes: [{ id: 'python', title: 'Python', nodeType: 'topic', parentId: 'programming', summary: '主题摘要' }], edges: [],
-      pathLabel: '计算机科学', loading: false, error: null, note: null, notes: [], connectableTopics: [],
-      historyAvailable: false, choice: null, moreOpen: true, moreDetail: detail, scrollRef: { current: null },
-      search: '', searchError: null, searchLoading: false, searchHits: [], classificationOptions: [],
-      onSearch: () => {}, renderTopicCard: (node) => createElement('article', { key: node.id }, node.title),
-      onOpenTopic: () => {}, onOpenChapter: () => {}, onOpenOrphan: () => {}, onChooseTopic: () => {}, onBack: () => {},
-      onChangeNote: () => {}, onRetrySave: () => {}, onMore: () => {}, onCloseMore: () => {}, onMoveTopic: () => {},
-      onCreateChapter: () => {}, onChapterTitleChange: () => {}, newChapterOpen: false, newChapterTitle: '', actionBusy: false,
-      onToggleNewChapter: () => {}, onDetachChapter: () => {}, onConnectChapter: () => {}, onOpenSearchHit: () => {},
-      onOpenSearchItem: () => {}, onCollect: () => {}, onToggleTheme: () => {}, theme: 'dark',
-    };
-    const html = renderToStaticMarkup(createElement(GraphNotebook, props));
-
-    expect(html).toContain('class="topic-more-pane"');
-    expect(html).toContain('主题摘要');
-    expect(html).toContain('选择一张主题卡片');
+  it('renders one continuous course without an independent chapter directory', () => {
+    const html=renderToStaticMarkup(createElement(GraphNotebook,{markdown:'# Python\n\n## 变量\n\n课程正文\n\n### 动态类型\n\n独立内容',mode:'reading',onChange:()=>{},onSelect:()=>{},onComposition:()=>{},onLink:()=>{},completions:[],offset:0}));
+    expect(html).toContain('<h1>Python</h1>');
+    expect(html).toContain('<h2>变量</h2>');
+    expect(html).toContain('<h3>动态类型</h3>');
+    expect(html).not.toContain('chapter-directory');
+    expect(html).not.toContain('note-writing-area');
   });
 
   it('does not reload a note with the same identity unless an explicit retry asks for it', () => {

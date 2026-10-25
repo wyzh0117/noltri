@@ -1,0 +1,18 @@
+import {useEffect,useRef,useState} from 'react';
+import type {ReactElement} from 'react';
+import type {ContentLocation,CourseDocument} from '@noltri/schema';
+import type {WorkbenchApi} from '../../api';
+import {describeError} from '../../api';
+import {CourseReader} from '../CourseReader';
+import {linkedMarkdown} from '../editor/linked-content';
+export function ObjectPreview({api,target,onLink}:{api:WorkbenchApi;target:ContentLocation;onLink:(raw:string)=>void}):ReactElement{
+ const [content,setContent]=useState(''),[error,setError]=useState('');useEffect(()=>{let valid=true;setContent('');if(!('courseId'in target)){setError('选择具体课程查看正文。');return;}void api.getCourseDocument(target.courseId).then(document=>{if(valid)setContent(linkedMarkdown(document,target));}).catch(e=>{if(valid)setError(describeError(e));});return()=>{valid=false;};},[api,JSON.stringify(target)]);
+ return error?<p className="cw-muted">{error}</p>:content?<CourseReader markdown={content} onSelect={()=>{}} onLink={onLink}/>:<p className="cw-muted">正在读取预览…</p>;
+}
+export function LinkPreview({api,document,reading,onLink}:{api:WorkbenchApi;document:CourseDocument|null;reading:boolean;onLink:(raw:string)=>void}):ReactElement|null{
+ const [preview,setPreview]=useState<{raw:string;x:number;y:number;target:ContentLocation}|null>(null),timer=useRef<ReturnType<typeof setTimeout>|null>(null),generation=useRef(0),element=useRef<HTMLDivElement>(null);
+ useEffect(()=>{function clear(){generation.current++;if(timer.current)clearTimeout(timer.current);}
+ const over=(event:PointerEvent)=>{const anchor=(event.target as HTMLElement).closest<HTMLAnchorElement>('a[href^="#knowledge:"]');if(!anchor||!document||element.current?.contains(anchor)||!reading&&!(event.metaKey||event.ctrlKey))return;clear();const raw=decodeURIComponent(anchor.getAttribute('href')!.slice(11)),rect=anchor.getBoundingClientRect(),id=generation.current;timer.current=setTimeout(()=>{void api.resolveKnowledgeLink({courseId:document.courseId},'[['+raw+']]').then(result=>{if(id!==generation.current||result.status!=='resolved')return;const target=result.target.kind==='entry'&&result.target.entryId?{...result.target,kind:'entry' as const,entryId:result.target.entryId,courseChapterId:result.target.courseChapterId??null}:result.target.kind==='chapter'&&result.target.courseChapterId?{kind:'chapter' as const,courseId:result.target.courseId,courseChapterId:result.target.courseChapterId}:{kind:'course' as const,courseId:result.target.courseId};setPreview({raw,target,x:Math.max(12,Math.min(window.innerWidth-432,rect.left)),y:rect.bottom+368>window.innerHeight?Math.max(12,rect.top-368):rect.bottom+8});});},event.metaKey||event.ctrlKey?0:300);};
+ const out=(event:PointerEvent)=>{const next=event.relatedTarget as Node|null;if(next&&(element.current?.contains(next)||(next as HTMLElement).closest?.('a[href^="#knowledge:"]')))return;clear();timer.current=setTimeout(()=>setPreview(null),250);};window.addEventListener('pointerover',over);window.addEventListener('pointerout',out);return()=>{clear();window.removeEventListener('pointerover',over);window.removeEventListener('pointerout',out);};},[api,document?.courseId,reading]);
+ if(!preview)return null;return <div ref={element} className="cw-link-preview" role="dialog" aria-label="链接预览" style={{left:preview.x,top:preview.y}} onPointerEnter={()=>{if(timer.current)clearTimeout(timer.current);}} onPointerLeave={()=>{timer.current=setTimeout(()=>setPreview(null),250);}}><header><strong>{preview.raw}</strong><button type="button" onClick={()=>{onLink(preview.raw);setPreview(null);}}>打开</button></header><ObjectPreview api={api} target={preview.target} onLink={onLink}/></div>;
+}
