@@ -8,4 +8,5 @@ export * from './config';
 export * from './library';
 export * from './course-workspace';
 export * from './workspace-graph';
+export * from './workspace-tools';
 export * from './workspace-resources';

@@ -15,6 +15,8 @@ import type {
 } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
 import { capText, type ActorContext, type CoreDeps } from '../types';
+import { getCourseDocument,applyCourseDocumentPatch } from './course-workspace';
+import {createId} from '@noltri/shared';
 
 /** Shape of `relatedNodeSchema`; the contract exports the schema but not an alias for it. */
 export type RelatedNodeView = NodeDetail['relatedNodes'][number];
@@ -104,6 +106,11 @@ export async function patchNode(
   const renamed = nextTitle !== existing.title;
   const statusChanged = patch.status !== undefined && patch.status !== existing.status;
 
+  if(renamed && existing.nodeType==='topic') {
+    const document=await getCourseDocument(deps,actor,nodeId);
+    const titleRange=document.projection.find(range=>range.kind==='title');
+    if(titleRange) await applyCourseDocumentPatch(deps,actor,{courseId:nodeId,baseDocumentRevision:document.documentRevision,entryRevisions:{},changes:[{from:titleRange.from,to:titleRange.to,insert:`# ${nextTitle}`}],requestId:createId()});
+  }
   const updated = await deps.repository.updateNode({
     id: nodeId,
     userId: actor.userId,

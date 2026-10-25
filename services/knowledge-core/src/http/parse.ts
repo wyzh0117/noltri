@@ -13,8 +13,9 @@ export function parseWith<Output>(schema: z.ZodType<Output>, body: unknown, labe
   return parsed.data;
 }
 
-export async function readJsonBody(request: Request): Promise<unknown> {
+export async function readJsonBody(request: Request, maxBytes = 256_000): Promise<unknown> {
   const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > maxBytes) throw knowledgeError('invalid_request', `请求正文超过 ${maxBytes} 字节；请缩小本次修改，草稿需要保留`);
   if (text.trim().length === 0) {
     throw knowledgeError('invalid_request', '请求体必须是 JSON 对象 / an empty body is not accepted');
   }

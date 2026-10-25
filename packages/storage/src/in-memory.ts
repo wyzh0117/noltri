@@ -370,16 +370,19 @@ export class InMemoryRepository implements KnowledgeRepository {
       }
     }
 
-    if (node.parentId !== null && node.parentId !== input.targetParentId) {
+    const fromParentId = input.fromParentId ?? node.parentId;
+    if (input.fromParentId !== undefined && node.parentId !== input.fromParentId && ![...this.edges.values()].some(edge=>edge.userId===input.userId&&edge.fromNodeId===node.id&&edge.toNodeId===input.fromParentId&&edge.relationType==='part_of')) throw knowledgeError('conflict','Course membership changed');
+    const primary = input.fromParentId === undefined || input.fromParentId === node.parentId;
+    if (fromParentId !== null && fromParentId !== input.targetParentId) {
       for (const [edgeId, edge] of this.edges) {
-        if (edge.userId === input.userId && edge.fromNodeId === node.id && edge.toNodeId === node.parentId && edge.relationType === 'part_of' && edge.source === 'tree_structure') {
+        if (edge.userId === input.userId && edge.fromNodeId === node.id && edge.toNodeId === fromParentId && edge.relationType === 'part_of' && (input.fromParentId !== undefined || edge.source === 'tree_structure')) {
           this.edges.delete(edgeId);
         }
       }
     }
 
     const before: JsonValue = { parentId: node.parentId };
-    const updated: KnowledgeNode = { ...node, parentId: input.targetParentId, updatedAt: nowIso() };
+    const updated: KnowledgeNode = { ...node, parentId: primary ? input.targetParentId : node.parentId, updatedAt: nowIso() };
     this.nodes.set(node.id, updated);
     const after: JsonValue = { parentId: updated.parentId };
 
@@ -390,7 +393,7 @@ export class InMemoryRepository implements KnowledgeRepository {
         toNodeId: input.targetParentId,
         relationType: input.relationType ?? 'part_of',
         confidence: 1,
-        source: 'tree_structure',
+        source: primary ? 'tree_structure' : 'course_membership',
       });
     }
 

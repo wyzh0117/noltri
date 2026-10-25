@@ -82,6 +82,20 @@ import {
   type TreeQuery,
   type TreeResponse,
 } from '@noltri/schema';
+import {
+  renameAttachmentSchema,type RenameAttachmentRequest,type AttachmentCleanupResult,
+  workspaceAttachmentSchema,uploadAttachmentSchema,importMarkdownSchema,importMarkdownResultSchema,courseMarkdownExportSchema,
+  type WorkspaceAttachment,type UploadAttachmentRequest,type AttachmentUploadResult,type ImportMarkdownRequest,type ImportMarkdownResult,type CourseMarkdownExport,
+  patchWorkspacePropertiesSchema, type PatchWorkspacePropertiesRequest,
+  courseDocumentSchema, applyCourseDocumentPatchSchema, moveSourceAssignmentsSchema, workspaceMutationResultSchema,
+  workspaceGraphRequestSchema, workspaceGraphSchema, workspaceMetadataSchema, workspaceSearchResponseSchema,
+  workspaceBacklinksSchema, linkResolutionSchema, resolveWorkspaceLinkRequestSchema, workspaceSnapshotSchema,
+  workspaceSettingsSchema, WORKSPACE_REQUEST_MAX_BYTES,
+  type CourseDocument, type ApplyCourseDocumentPatchRequest, type MoveSourceAssignmentsRequest,
+  type WorkspaceMutationResult, type ContentLocation, type WorkspaceGraphRequest, type WorkspaceGraph,
+  type WorkspaceMetadata, type WorkspaceSearchResponse, type WorkspaceBacklinks, type WorkspaceLinkResolution,
+  type WorkspaceSnapshot, type WorkspaceSettings,
+} from '@noltri/schema';
 import { createId, nowIso } from '@noltri/shared';
 
 /** The grant payload and response types, re-exported so a UI can build one without the schema package. */
@@ -480,11 +494,88 @@ export class ApiClient {
     return (await this.request('POST', apiRoutes.grantRevoke(id), revokeGrantResponseSchema)).grant;
   }
 
+  getCourseDocument(courseId: string): Promise<CourseDocument> {
+    return this.request('GET', `/api/workspace/courses/${encodeURIComponent(courseId)}/document`, courseDocumentSchema);
+  }
+
+  applyCourseDocumentPatch(input: ApplyCourseDocumentPatchRequest): Promise<WorkspaceMutationResult> {
+    return this.workspaceWrite('PATCH', `/api/workspace/courses/${encodeURIComponent(input.courseId)}/document`, validatedRequest(applyCourseDocumentPatchSchema,input,'course document patch'));
+  }
+
+  moveSourceAssignments(input: MoveSourceAssignmentsRequest): Promise<WorkspaceMutationResult> {
+    return this.workspaceWrite('POST','/api/workspace/source-assignments/move',validatedRequest(moveSourceAssignmentsSchema,input,'source assignment'));
+  }
+
+  selectWorkspaceGraph(input: WorkspaceGraphRequest): Promise<WorkspaceGraph> {
+    return this.request('POST','/api/workspace/graph',workspaceGraphSchema,{body:validatedRequest(workspaceGraphRequestSchema,input,'workspace graph')});
+  }
+
+  workspaceMetadata(): Promise<WorkspaceMetadata> { return this.request('GET','/api/workspace/metadata',workspaceMetadataSchema); }
+
+  searchKnowledge(query: string, cursor?: string, options: { signal?: AbortSignal; limit?: number } = {}): Promise<WorkspaceSearchResponse> {
+    return this.request('POST','/api/workspace/search',workspaceSearchResponseSchema,{body:{query,cursor,limit:options.limit},signal:options.signal});
+  }
+
+  resolveKnowledgeLink(context: {courseId:string;courseChapterId?:string|null;entryId?:string;referenceFrom?:number;sourcePath?:string}, rawLink: string): Promise<WorkspaceLinkResolution> {
+    return this.request('POST','/api/workspace/links/resolve',linkResolutionSchema,{body:validatedRequest(resolveWorkspaceLinkRequestSchema,{context,rawLink},'knowledge link')});
+  }
+
+  getBacklinks(target: ContentLocation): Promise<WorkspaceBacklinks> {
+    return this.request('POST','/api/workspace/backlinks',workspaceBacklinksSchema,{body:{target}});
+  }
+
+  listWorkspaceSnapshots(): Promise<WorkspaceSnapshot[]> { return this.request('GET','/api/workspace/snapshots',z.array(workspaceSnapshotSchema)); }
+
+  restoreWorkspaceSnapshot(id: string, expectedRevisions: Record<string,number>): Promise<WorkspaceMutationResult> {
+    return this.workspaceWrite('POST',`/api/workspace/snapshots/${encodeURIComponent(id)}/restore`,{expectedRevisions});
+  }
+
+  setWorkspaceProperties(input: PatchWorkspacePropertiesRequest): Promise<WorkspaceMutationResult> {
+    return this.workspaceWrite('POST','/api/workspace/properties',validatedRequest(patchWorkspacePropertiesSchema,input,'workspace properties'));
+  }
+
+  uploadAttachment(input: UploadAttachmentRequest): Promise<AttachmentUploadResult> {
+    const body=validatedRequest(uploadAttachmentSchema,input,'attachment upload');
+    if(new TextEncoder().encode(JSON.stringify(body)).byteLength>WORKSPACE_REQUEST_MAX_BYTES)throw new ApiClientError(413,'invalid_request','附件请求超过2MiB；请分片上传');
+    return this.request('POST','/api/workspace/attachments',z.union([workspaceAttachmentSchema,z.object({complete:z.literal(false),uploadId:z.string(),receivedChunks:z.number(),totalChunks:z.number()})]),{body});
+  }
+  listAttachments(courseId?: string): Promise<WorkspaceAttachment[]> { return this.request('GET',`/api/workspace/attachments${courseId?'?courseId='+encodeURIComponent(courseId):''}`,z.array(workspaceAttachmentSchema)); }
+  renameAttachment(input:RenameAttachmentRequest):Promise<WorkspaceMutationResult & {attachment:WorkspaceAttachment}> {
+    return this.request('POST',`/api/workspace/attachments/${encodeURIComponent(input.attachmentId)}/rename`,workspaceMutationResultSchema.extend({attachment:workspaceAttachmentSchema}),{body:validatedRequest(renameAttachmentSchema,input,'rename attachment')});
+  }
+  cleanupAttachments(input:{confirmed?:boolean;attachmentIds?:string[];expectedRevisions?:Record<string,number>}={}):Promise<AttachmentCleanupResult> {
+    return this.request('POST','/api/workspace/attachments/cleanup',z.object({policy:z.enum(['never','ask','always']),confirmationRequired:z.boolean(),candidateIds:z.array(z.string()),candidateRevisions:z.record(z.string(),z.number().int().nonnegative()),deletedIds:z.array(z.string())}),{body:input});
+  }
+  async deleteAttachment(id:string,expectedRevision:number): Promise<void> { await this.request('DELETE',`/api/workspace/attachments/${encodeURIComponent(id)}`,z.object({ok:z.literal(true)}),{body:{expectedRevision}}); }
+  importMarkdown(input: ImportMarkdownRequest): Promise<ImportMarkdownResult> {
+    const body=validatedRequest(importMarkdownSchema,input,'Markdown import');
+    if(new TextEncoder().encode(JSON.stringify(body)).byteLength>WORKSPACE_REQUEST_MAX_BYTES)throw new ApiClientError(413,'invalid_request','导入请求超过2MiB；原文件未改变');
+    return this.request('POST','/api/workspace/import',importMarkdownResultSchema,{body});
+  }
+  exportCourseMarkdown(courseId:string): Promise<CourseMarkdownExport> { return this.request('GET',`/api/workspace/courses/${encodeURIComponent(courseId)}/export`,courseMarkdownExportSchema); }
+  async getAttachmentContent(id:string): Promise<Blob> {
+    const headers:Record<string,string>={};if(this.token)headers.authorization=`Bearer ${this.token}`;if(this.clientHint)headers['x-noltri-client']=this.clientHint;
+    const response=await this.fetchImpl(`${this.baseUrl}/api/workspace/attachments/${encodeURIComponent(id)}/content`,{headers,signal:AbortSignal.timeout(this.timeoutMs)});
+    if(!response.ok){const payload=await readJson(response),parsed=apiErrorSchema.safeParse(payload);throw new ApiClientError(response.status,parsed.success?parsed.data.error.code:'internal_error',parsed.success?parsed.data.error.message:'附件读取失败');}
+    return response.blob();
+  }
+
+  getWorkspaceSettings(): Promise<WorkspaceSettings> { return this.request('GET','/api/workspace/settings',workspaceSettingsSchema); }
+  updateWorkspaceSettings(input: Partial<WorkspaceSettings>): Promise<WorkspaceSettings> {
+    return this.request('PATCH','/api/workspace/settings',workspaceSettingsSchema,{body:input});
+  }
+
+  private workspaceWrite(method: string,path: string,body: unknown): Promise<WorkspaceMutationResult> {
+    if(new TextEncoder().encode(JSON.stringify(body)).byteLength>WORKSPACE_REQUEST_MAX_BYTES)
+      throw new ApiClientError(413,'invalid_request',`请求超过 ${WORKSPACE_REQUEST_MAX_BYTES} 字节；草稿已保留，请缩小本次修改`);
+    return this.request(method,path,workspaceMutationResultSchema,{body});
+  }
+
   private async request<Output>(
     method: string,
     path: string,
     responseSchema: z.ZodType<Output>,
-    init: { body?: unknown; timeoutMs?: number } = {},
+    init: { body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<Output> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (init.body !== undefined) headers['content-type'] = 'application/json';
@@ -493,6 +584,9 @@ export class ApiClient {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? this.timeoutMs);
+    const abort = (): void => controller.abort();
+    if (init.signal?.aborted) controller.abort();
+    init.signal?.addEventListener('abort', abort, { once: true });
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -505,6 +599,7 @@ export class ApiClient {
       throw new ApiClientError(0, 'internal_error', describeNetworkError(error));
     } finally {
       clearTimeout(timer);
+      init.signal?.removeEventListener('abort', abort);
     }
 
     const payload: unknown = await readJson(response);

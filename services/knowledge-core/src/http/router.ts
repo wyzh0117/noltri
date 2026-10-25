@@ -41,6 +41,7 @@ import { requireNodeAccess, requireScope, type GrantStore } from '../authorizati
 import type { KnowledgeCore } from '../core';
 import type { ActorContext } from '../types';
 import { handleAdminGrants } from './admin';
+import { WORKSPACE_ROUTES, handleWorkspace } from './workspace';
 import { parseWith, readJsonBody } from './parse';
 import {
   archiveLibraryItem,
@@ -75,6 +76,7 @@ interface Route {
 
 /** `:param` positions are matched by shape, not by a route library. */
 const ROUTES: Route[] = [
+  ...WORKSPACE_ROUTES,
   { method: 'GET', segments: ['api', 'health'] },
   { method: 'POST', segments: ['api', 'capture'] },
   { method: 'GET', segments: ['api', 'items'] },
@@ -264,6 +266,12 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
     );
   }
 
+  if (path.startsWith('api/workspace/')) {
+    const result=await handleWorkspace({path,method,segments,request,core,actor,grant});
+    if(result instanceof Response){const headers=new Headers(result.headers);for(const [name,value]of Object.entries(cors))headers.set(name,value);return new Response(result.body,{status:result.status,headers});}
+    return json(200,result,cors);
+  }
+
   switch (path) {
     case 'api/items': {
       if (method === 'GET') {
@@ -418,6 +426,7 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
       const body = parseWith(moveNodeRequestSchema, await readJsonBody(request), 'move node');
       requireNodeAccess(grant, id, '被移动的节点');
+      if (body.fromParentId) requireNodeAccess(grant, body.fromParentId, '原课程归属');
       // Both ends of a move have to be inside the grant: reparenting out of an authorised project is a
       // write to the project it lands in.
       requireNodeAccess(grant, body.targetParentId, '移动目标项目');

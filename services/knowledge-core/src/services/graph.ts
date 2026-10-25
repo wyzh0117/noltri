@@ -17,6 +17,7 @@ import type {
 import { isKnowledgeError, knowledgeError } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
 import { taxonomyNodeType } from '../node-taxonomy';
+import { getLegacyCourseNote, saveLegacyCourseNote, loadWorkspace } from './course-workspace';
 
 function graphNode(node: KnowledgeNode): GraphNode {
   if (node.nodeType !== 'topic' && node.nodeType !== 'chapter') {
@@ -281,7 +282,7 @@ export async function getGraphNote(
     const chapter = await deps.repository.findNode(chapterId, actor.userId);
     if (chapter === null || chapter.nodeType !== 'chapter') throw knowledgeError('not_found', `章节 ${chapterId} 不存在`);
   }
-  return noteView(topicId, chapterId, await deps.repository.getKnowledgeNote(actor.userId, topicId, chapterId));
+  return getLegacyCourseNote(deps, actor, topicId, chapterId);
 }
 
 export async function listGraphNotes(
@@ -291,8 +292,10 @@ export async function listGraphNotes(
 ): Promise<GraphNoteIndex> {
   const topic = await deps.repository.findNode(topicId, actor.userId);
   if (topic === null || topic.nodeType !== 'topic') throw knowledgeError('not_found', `主题 ${topicId} 不存在`);
-  const [notes, nodes, storedEdges] = await Promise.all([
-    deps.repository.listKnowledgeNotes(actor.userId, topicId),
+  const state = await loadWorkspace(deps, actor);
+  const notes: {topicId:string;chapterId:string|null;updatedAt:string}[] = state.chapters.filter(c=>c.courseId===topicId&&state.entries.some(e=>e.courseChapterId===c.id)).map(c=>({topicId,chapterId:c.conceptId,updatedAt:state.courses.find(value=>value.id===topicId)!.updatedAt}));
+  if(state.entries.some(e=>e.courseId===topicId&&e.courseChapterId===null))notes.unshift({topicId,chapterId:null,updatedAt:state.courses.find(value=>value.id===topicId)!.updatedAt});
+  const [nodes, storedEdges] = await Promise.all([
     deps.repository.listNodes(actor.userId, { includeArchived: true }),
     deps.repository.listEdges(actor.userId),
   ]);
@@ -331,13 +334,7 @@ export async function saveGraphNote(
       throw knowledgeError('not_found', `章节 ${request.chapterId} 不存在`);
     }
   }
-  const saved = await deps.repository.saveKnowledgeNote({
-    userId: actor.userId,
-    topicId,
-    chapterId: request.chapterId,
-    content: request.content,
-  });
-  return noteView(topicId, request.chapterId, saved);
+  return saveLegacyCourseNote(deps, actor, topicId, request.chapterId, request.content);
 }
 
 export async function createChapter(

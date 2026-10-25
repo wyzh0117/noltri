@@ -12,13 +12,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config as loadDotenv } from 'dotenv';
 import { createLogger } from '@noltri/shared';
+import { WORKSPACE_REQUEST_MAX_BYTES } from '@noltri/schema';
 import { loadCoreConfig } from './config';
 import { buildHandler, type CoreBundle } from './http/index';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MAX_HTTP_BODY_BYTES = 256_000;
 
-class BodyTooLargeError extends Error {}
+class BodyTooLargeError extends Error { constructor(readonly limit: number) { super(`请求正文超过 ${limit} 字节`); } }
 
 /** Loads local credentials without assuming cwd; process env always has priority over dotenv files. */
 export function loadRootEnv(startFrom: string = here): string | null {
@@ -50,12 +51,13 @@ export function loadRootEnv(startFrom: string = here): string | null {
 }
 
 async function readBody(request: IncomingMessage): Promise<Buffer | undefined> {
+  const limit = (request.url ?? '').split('?')[0].startsWith('/api/workspace/') ? WORKSPACE_REQUEST_MAX_BYTES : MAX_HTTP_BODY_BYTES;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
     size += buffer.length;
-    if (size > MAX_HTTP_BODY_BYTES) throw new BodyTooLargeError();
+    if (size > limit) throw new BodyTooLargeError(limit);
     chunks.push(buffer);
   }
   const body = Buffer.concat(chunks);
@@ -144,7 +146,7 @@ export async function startServer(options: { port?: number } = {}): Promise<Runn
         }
         response.end(
           JSON.stringify({ error: error instanceof BodyTooLargeError
-            ? { code: 'invalid_request', message: `请求正文超过 ${MAX_HTTP_BODY_BYTES} 字节` }
+            ? { code: 'invalid_request', message: error.message }
             : { code: 'internal_error', message: 'Knowledge Core 未能完成该请求' } }),
         );
       }

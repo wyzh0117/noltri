@@ -1,3 +1,5 @@
+import {startMarkdownDirectoryWatcher} from '../services/workspace-resources';
+import {closeMetadata} from '../services/metadata';
 /** Shared HTTP wiring for the local Core server and MCP stdio client. */
 import type { AIProvider } from '@noltri/ai-provider';
 import { createProvider } from '@noltri/ai-provider';
@@ -48,9 +50,16 @@ export async function buildHandler(
     logger.info('local client authorization enabled', { active: (await listGrants(grants)).filter((grant) => grant.revokedAt === null).length });
   }
 
+  let resourceWatcher: {close():void}|undefined;
+  if(config.importWatchDir&&config.importWatchCourseId){
+    try{resourceWatcher=await startMarkdownDirectoryWatcher(core.deps,{userId:config.devUser,actor:'directory-import'},{directory:config.importWatchDir,courseId:config.importWatchCourseId});}
+    catch(error){logger.warn('Configured Markdown watcher unavailable',{reason:error instanceof Error?error.message:String(error)});}
+  }
   return {
     handle: createRequestHandler(deps), core, repository, provider, config, logger, grants,
     close: async () => {
+      resourceWatcher?.close();
+      await closeMetadata(core.deps, config.devUser);
       const closable = repository as { close?: () => Promise<void> };
       if (typeof closable.close === 'function') await closable.close();
     },

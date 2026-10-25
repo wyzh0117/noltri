@@ -118,6 +118,7 @@ export interface SaveKnowledgeNoteInput {
 export type KnowledgeNoteIndexEntry = Pick<KnowledgeNote, 'topicId' | 'chapterId' | 'updatedAt'>;
 
 export interface MoveNodeRecordInput {
+  fromParentId?: string;
   userId: string;
   nodeId: string;
   /** null moves the node to the root of the tree. */

@@ -38,6 +38,15 @@ export async function getTree(deps: CoreDeps, actor: ActorContext, query: TreeQu
     bucket.push(node);
     childMap.set(parentId, bucket);
   }
+  const memberships = await deps.repository.listEdges(actor.userId);
+  for(const edge of memberships) {
+    if(edge.relationType !== 'part_of' || edge.source === 'tree_structure') continue;
+    const child=byId.get(edge.fromNodeId),parent=byId.get(edge.toNodeId);
+    if(!child||!parent||child.parentId===parent.id)continue;
+    const ck=taxonomyNodeType(child,byId),pk=taxonomyNodeType(parent,byId);
+    if(!((ck==='topic'&&pk==='subdiscipline')||(ck==='subdiscipline'&&pk==='discipline')))continue;
+    const bucket=childMap.get(parent.id)??[];if(!bucket.some(n=>n.id===child.id))bucket.push(child);childMap.set(parent.id,bucket);
+  }
   for (const bucket of childMap.values()) bucket.sort(compareStable);
 
   const visited = new Set<string>();

@@ -29,7 +29,7 @@ export const CORE_PACKAGE_NAME = '@noltri/knowledge-core';
 
 /** Fallbacks for knobs that belong to Core itself (not to the frozen Thresholds contract). */
 export const CORE_DEFAULTS = {
-  version: '0.1.4',
+  version: '2.0.0',
   port: 8787,
   corsOrigin: '*',
   devUser: 'local-dev-user',
@@ -82,6 +82,8 @@ export function resolveGrantFile(env: EnvSource = currentEnv()): string {
 }
 
 export interface CoreConfig {
+  readonly importWatchDir?: string;
+  readonly importWatchCourseId?: string;
   /** Storage selection handed to `createRepository`. */
   readonly storage: RepositoryOptions;
   /** AI provider selection handed to `createProvider`. */
@@ -137,6 +139,8 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
   };
 
   return {
+    importWatchDir: envString(env, 'NOLTRI_IMPORT_WATCH_DIR'),
+    importWatchCourseId: envString(env, 'NOLTRI_IMPORT_WATCH_COURSE_ID'),
     storage,
     ai,
     thresholds: loadThresholds(env),

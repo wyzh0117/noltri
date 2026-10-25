@@ -880,17 +880,20 @@ export class SqliteRepository implements KnowledgeRepository {
         }
       }
 
+      const fromParentId = input.fromParentId ?? node.parentId;
+      if(input.fromParentId !== undefined && node.parentId !== input.fromParentId && !this.one("select id from knowledge_edges where user_id=? and from_node_id=? and to_node_id=? and relation_type='part_of'",[input.userId,node.id,input.fromParentId])) throw knowledgeError('conflict','Course membership changed');
+      const primary = input.fromParentId === undefined || input.fromParentId === node.parentId;
       const timestamp = nowIso();
-      if (node.parentId !== null && node.parentId !== input.targetParentId) {
+      if (fromParentId !== null && fromParentId !== input.targetParentId) {
         this.run(
           `delete from knowledge_edges
             where user_id = ? and from_node_id = ? and to_node_id = ?
-              and relation_type = 'part_of' and source = 'tree_structure'`,
-          [input.userId, node.id, node.parentId],
+              and relation_type = 'part_of'${input.fromParentId === undefined ? " and source = 'tree_structure'" : ''}`,
+          [input.userId, node.id, fromParentId],
         );
       }
       this.run('update knowledge_nodes set parent_id = ?, updated_at = ? where id = ? and user_id = ?', [
-        input.targetParentId,
+        primary ? input.targetParentId : node.parentId,
         timestamp,
         input.nodeId,
         input.userId,
@@ -902,7 +905,7 @@ export class SqliteRepository implements KnowledgeRepository {
           toNodeId: input.targetParentId,
           relationType: input.relationType ?? 'part_of',
           confidence: 1,
-          source: 'tree_structure',
+          source: primary ? 'tree_structure' : 'course_membership',
         });
       }
       const record = this.createVersionRecordSync({

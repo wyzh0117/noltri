@@ -192,6 +192,7 @@ export type PatchNodeRequest = z.infer<typeof patchNodeRequestSchema>;
 
 // --- POST /api/nodes/:id/move ---------------------------------------------
 export const moveNodeRequestSchema = z.object({
+  fromParentId: z.string().min(1).optional(),
   targetParentId: z.string().nullable(),
   relationType: edgeRelationSchema.optional(),
   actor: z.string().max(120).optional(),
