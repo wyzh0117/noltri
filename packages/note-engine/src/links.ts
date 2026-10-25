@@ -104,7 +104,7 @@ export function applyTextChanges(text: string, changes: (Span & { insert: string
 
 /** AST coordinates for body references, YAML path+scalar editing for properties. */
 export function rewriteReferences(text: string, edits: readonly ReferenceRewrite[]): string {
-  const metadata = parseMarkdown(text);
+  const metadata = parseMarkdown(text, { tolerateInvalidFrontmatter: true });
   const body: (Span & { insert: string })[] = [];
   const properties = edits.filter((edit) => edit.reference.kind === 'property');
   const add = (change: Span & { insert: string }) => { if (!body.some((existing) => existing.from === change.from && existing.to === change.to && existing.insert === change.insert)) body.push(change); };
@@ -115,7 +115,7 @@ export function rewriteReferences(text: string, edits: readonly ReferenceRewrite
     if (reference.kind === 'wiki' && edit.oldDefaultLabel !== undefined && reference.label === edit.oldDefaultLabel) add({ from: reference.targetTo + 1, to: reference.to - 2, insert: edit.newDefaultLabel ?? edit.target.split('#')[0] });
   }
   if (properties.length) {
-    if (!metadata.frontmatter) throw new Error('Property reference has no frontmatter');
+    if (!metadata.frontmatter || metadata.frontmatterError) throw new Error('Property reference has no valid frontmatter');
     const { valueFrom, valueTo } = metadata.frontmatter;
     const doc = parseDocument(text.slice(valueFrom, valueTo), { keepSourceTokens: true });
     const byPath = new Map<string, ReferenceRewrite[]>();

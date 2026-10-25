@@ -187,3 +187,15 @@ it('isolates malformed legacy YAML, preserves its exact text and keeps every cou
   doc = (await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from: range.to, to: range.to, insert: ' edited' }], requestId: 'edit-invalid-yaml' })).documents[0];
   expect(doc.entries[0].markdown).toBe(invalid + ' edited');
 });
+
+it('rewrites valid body links while preserving malformed legacy frontmatter on another course rename', async () => {
+  const { repository, deps, actor, a, b } = await workspaceFixture();
+  const frontmatter = '---\ninvalid: [unterminated\n---\n';
+  await repository.saveKnowledgeNote({ userId: actor.userId, topicId: a.id, chapterId: null, content: frontmatter + 'Original [[Java]] body' });
+  const document = await getCourseDocument(deps, actor, b.id);
+  const at = document.markdown.indexOf('Java');
+  const result = await applyCourseDocumentPatch(deps, actor, { courseId: b.id, baseDocumentRevision: document.documentRevision, entryRevisions: {}, changes: [{ from: at, to: at + 4, insert: 'New Java' }], requestId: 'rename-under-invalid-yaml' });
+  const entry = result.documents.find((doc) => doc.courseId === a.id)!.entries[0];
+  expect(entry.markdown).toBe(frontmatter + `Original [[${b.id}]] body`);
+  expect((await getCourseDocument(deps, actor, a.id)).entries[0].markdown).toBe(entry.markdown);
+});
