@@ -1,3 +1,4 @@
+import {snapshotComparisonSchema,moveDetachedEntriesSchema,type MoveDetachedEntriesRequest,type SnapshotComparison} from '@noltri/schema';
 import { z } from 'zod';
 import {
   apiErrorSchema,
@@ -526,9 +527,13 @@ export class ApiClient {
 
   listWorkspaceSnapshots(): Promise<WorkspaceSnapshot[]> { return this.request('GET','/api/workspace/snapshots',z.array(workspaceSnapshotSchema)); }
 
-  restoreWorkspaceSnapshot(id: string, expectedRevisions: Record<string,number>): Promise<WorkspaceMutationResult> {
-    return this.workspaceWrite('POST',`/api/workspace/snapshots/${encodeURIComponent(id)}/restore`,{expectedRevisions});
+  compareWorkspaceSnapshot(id:string):Promise<SnapshotComparison>{return this.request('GET',`/api/workspace/snapshots/${encodeURIComponent(id)}/compare`,snapshotComparisonSchema);}
+
+  restoreWorkspaceSnapshot(id: string, expectedRevisions: Record<string,number>, resolveConflicts = false): Promise<WorkspaceMutationResult> {
+    return this.workspaceWrite('POST',`/api/workspace/snapshots/${encodeURIComponent(id)}/restore`,{expectedRevisions,resolveConflicts});
   }
+
+  moveDetachedEntries(input:MoveDetachedEntriesRequest):Promise<WorkspaceMutationResult>{return this.workspaceWrite('POST','/api/workspace/detached-entries/move',validatedRequest(moveDetachedEntriesSchema,input,'move retained entries'));}
 
   setWorkspaceProperties(input: PatchWorkspacePropertiesRequest): Promise<WorkspaceMutationResult> {
     return this.workspaceWrite('POST','/api/workspace/properties',validatedRequest(patchWorkspacePropertiesSchema,input,'workspace properties'));

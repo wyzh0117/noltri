@@ -6,14 +6,21 @@ import { loadWorkspace, workspaceContent, objectRevisions, takeSnapshot, finishM
 export async function listSnapshots(deps: CoreDeps, actor: ActorContext): Promise<WorkspaceSnapshot[]> {
   return (await loadWorkspace(deps, actor)).snapshots.slice().reverse().map((snapshot) => workspaceSnapshotSchema.parse(snapshot));
 }
-export async function restoreSnapshot(deps: CoreDeps, actor: ActorContext, snapshotId: string, expectedRevisions: Record<string, number>): Promise<WorkspaceMutationResult> {
+export async function compareSnapshot(deps: CoreDeps, actor: ActorContext, snapshotId: string) {
+  const state = await loadWorkspace(deps, actor), snapshot = state.snapshots.find(item => item.id === snapshotId);
+  if (!snapshot) throw knowledgeError('not_found', 'Snapshot not found');
+  const revisions = objectRevisions(state);
+  return { current: workspaceContent(state), revisions, conflicts: snapshot.objectKeys.filter(key => revisions[key] !== snapshot.afterRevisions[key]) };
+}
+export async function restoreSnapshot(deps: CoreDeps, actor: ActorContext, snapshotId: string, expectedRevisions: Record<string, number>, resolveConflicts = false): Promise<WorkspaceMutationResult> {
   const state = await loadWorkspace(deps, actor);
   const snapshot = state.snapshots.find((item) => item.id === snapshotId && item.userId === actor.userId);
   if (!snapshot) throw knowledgeError('not_found', 'Snapshot not found');
   const currentRevisions = objectRevisions(state);
-  const conflicts = snapshot.objectKeys.flatMap((key) => {
+  const checkedKeys = resolveConflicts ? [...new Set([...Object.keys(currentRevisions), ...Object.keys(expectedRevisions)])] : snapshot.objectKeys;
+  const conflicts = checkedKeys.flatMap((key) => {
     const actual = currentRevisions[key]; const expected = expectedRevisions[key]; const saved = snapshot.afterRevisions[key];
-    return expected === undefined || actual !== expected || actual !== saved ? [{ objectKey: key, expected, actual, snapshotRevision: saved }] : [];
+    return expected === undefined || actual !== expected || (!resolveConflicts && actual !== saved) ? [{ objectKey: key, expected, actual, snapshotRevision: saved }] : [];
   });
   if (conflicts.length) throw knowledgeError('conflict', '快照涉及的对象已变更，尚未恢复任何内容', { conflicts, current: workspaceContent(state), snapshot: snapshot.before });
   const before = workspaceContent(state);
@@ -47,6 +54,7 @@ export async function restoreSnapshot(deps: CoreDeps, actor: ActorContext, snaps
       return [key, { ...structuredClone(binding), revision: objectRevisions(state)[owner] ?? binding.revision }];
     }),
   ]);
+  for (const course of state.courses) if (affectedCourses.has(course.id) && !keys.has(`course:${course.id}`)) { course.documentRevision++; course.updatedAt = nowIso(); }
   const protection = takeSnapshot(state, before, actor, 'before-restore');
   affectedCourses.delete('');
   return finishMutation(deps, actor, state, [...affectedCourses].filter((id) => state.courses.some((course) => course.id === id)), protection);

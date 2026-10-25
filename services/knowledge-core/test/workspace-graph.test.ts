@@ -32,3 +32,13 @@ describe('course workspace graph projection',()=>{
     request.filter='tag:x alpha';expect((await selectWorkspaceGraph(h.core.deps,h.actor,request)).nodes.map(n=>n.id)).toContain(c.id);
   });
 });
+it('requires a course for advanced focus rather than silently expanding a category globally',async()=>{
+ const h=makeHarness(),userId=h.actor.userId;
+ const d=await h.repository.createNode({userId,title:'D',nodeType:'discipline'}),s=await h.repository.createNode({userId,title:'S',nodeType:'subdiscipline',parentId:d.id});
+ const c=await h.repository.createNode({userId,title:'Inside',nodeType:'topic',parentId:s.id});await h.repository.createNode({userId,title:'Outside',nodeType:'topic'});
+ for(const focus of [{kind:'discipline',disciplineId:d.id},{kind:'subdiscipline',disciplineId:d.id,subdisciplineId:s.id}]){
+  const request=workspaceGraphRequestSchema.parse({focus,view:'advanced',advancedScope:'focus'});
+  await expect(selectWorkspaceGraph(h.core.deps,h.actor,request)).rejects.toMatchObject({code:'invalid_request'});
+  const graph=await selectWorkspaceGraph(h.core.deps,h.actor,{...request,advancedScope:'discipline'});expect(graph.nodes.filter(n=>n.kind==='course').map(n=>n.id)).toEqual([c.id]);
+ }
+});

@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createSqliteRepository } from '../../../packages/storage/src/sqlite';
 import { createOfflineProvider } from '@noltri/ai-provider';
@@ -22,6 +22,7 @@ it('bounds full replay bodies through repeated 5000-line SQLite saves and never 
     const first = { courseId: course.id, baseDocumentRevision: document.documentRevision, entryRevisions: Object.fromEntries(document.entries.map(e => [e.id, e.revision])), changes: [{ from: document.markdown.indexOf('A line'), to: document.markdown.indexOf('A line'), insert: '0' }], requestId: '0' };
     let plateauBytes = 0;
     const heaps: number[] = [];
+    const samples: Record<string,number>[] = [];
     for (let i = 0; i < saves; i++) {
       const request = i === 0 ? first : { ...first, requestId: String(i), baseDocumentRevision: document.documentRevision, entryRevisions: Object.fromEntries(document.entries.map(e => [e.id, e.revision])), changes: [{ from: document.markdown.indexOf('A line'), to: document.markdown.indexOf('A line'), insert: String(i % 10) }] };
       if(i % 20 === 0) console.info('replay progress', i);
@@ -34,7 +35,8 @@ it('bounds full replay bodies through repeated 5000-line SQLite saves and never 
         expect(Object.values(state.requests).filter(r => r.result).length).toBeLessThanOrEqual(8);
         const replayBytes = Buffer.byteLength(JSON.stringify(Object.values(state.requests).flatMap(r => r.result ? [r.result] : [])));
         expect(replayBytes).toBeLessThan(2 * 1024 * 1024);
-        const bytes = Buffer.byteLength(JSON.stringify(state));
+        const bytes = Buffer.byteLength(JSON.stringify({...state,snapshots:[]}));
+        samples.push({ saves:i+1, replayBytes, nonSnapshotStateBytes:bytes, stateBytes:Buffer.byteLength(JSON.stringify(state)), heapUsed:process.memoryUsage().heapUsed, snapshots:state.snapshots.length });
         if (i === 11) plateauBytes = bytes;
         else expect(bytes - plateauBytes).toBeLessThan(100_000);
       }
@@ -43,6 +45,7 @@ it('bounds full replay bodies through repeated 5000-line SQLite saves and never 
     await expect(applyCourseDocumentPatch(deps, actor, first)).rejects.toMatchObject({ code: 'conflict', details: { replayExpired: true } });
     await expect(applyCourseDocumentPatch(deps, actor, { ...first, changes: [{ from: 0, to: 0, insert: 'tampered' }] })).rejects.toMatchObject({ code: 'conflict' });
     expect(await getCourseDocument(deps, actor, course.id)).toEqual(before);
+    await writeFile(path.join(base, `replay-metrics-${saves}.json`), JSON.stringify({saves,samples,expiredReplayRejected:true},null,2));
     console.info('SQLite 5000-line replay plateau', { plateauBytes, finalBytes: Buffer.byteLength(JSON.stringify(await repository.getWorkspaceState(actor.userId))), heaps });
   } finally { await closeMetadata(deps, actor.userId); await repository.close(); await rm(directory, { recursive: true, force: true }); }
 }, saves * 3000);

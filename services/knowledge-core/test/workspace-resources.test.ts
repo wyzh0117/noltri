@@ -166,3 +166,38 @@ describe('controlled workspace resources', () => {
     } finally { watcher?.close(); await f.close(); }
   });
 });
+
+it('protects ./ and encoded attachment references through rename, cleanup and recovery', async () => {
+  const f = await fixture('sqlite');
+  try {
+    const resource = await uploadAttachment(f.deps, f.actor, { path: '图.png', mimeType: 'image/png', contentBase64: Buffer.from('protected bytes').toString('base64'), requestId: 'relative-resource' });
+    if (!('id' in resource)) throw new Error('Expected uploaded resource');
+    let document = await getCourseDocument(f.deps, f.actor, f.a.id);
+    document = (await applyCourseDocumentPatch(f.deps, f.actor, { courseId: f.a.id, baseDocumentRevision: document.documentRevision, entryRevisions: {}, changes: [{ from: document.markdown.length, to: document.markdown.length, insert: `![kept](./${resource.path.replace('图', '%E5%9B%BE')}#page=2)` }], requestId: 'relative-body' })).documents[0];
+    expect((await listAttachments(f.deps, f.actor, f.a.id))[0].referenceCount).toBe(1);
+    const preview = await cleanupAttachments(f.deps, f.actor); expect(preview.candidateIds).not.toContain(resource.id);
+    const cleaned = await cleanupAttachments(f.deps, f.actor, { confirmed: true, attachmentIds: preview.candidateIds, expectedRevisions: preview.candidateRevisions });
+    expect(cleaned.deletedIds).not.toContain(resource.id);
+    expect(Buffer.from((await readAttachment(f.deps, f.actor, resource.id)).bytes).toString()).toBe('protected bytes');
+    const renamed = await renameAttachment(f.deps, f.actor, { attachmentId: resource.id, path: 'renamed.png', expectedRevision: resource.revision, expectedDocumentRevisions: { [f.a.id]: document.documentRevision }, expectedEntryRevisions: Object.fromEntries(document.entries.map(e => [e.id, e.revision])), requestId: 'rename-relative' });
+    expect(renamed.documents[0].markdown).toContain(`${renamed.attachment.path}#page=2`);
+    expect(renamed.attachment.referenceCount).toBe(1);
+    const snapshot = (await loadWorkspace(f.deps, f.actor)).snapshots.find(s => s.id === renamed.snapshotId)!;
+    await restoreSnapshot(f.deps, f.actor, snapshot.id, snapshot.afterRevisions);
+    expect((await cleanupAttachments(f.deps, f.actor)).candidateIds).not.toContain(resource.id);
+    expect(Buffer.from((await readAttachment(f.deps, f.actor, resource.id)).bytes).toString()).toBe('protected bytes');
+  } finally { await f.close(); }
+});
+it('rejects duplicate-import adoption into a different course or chapter', async () => {
+  const f = await fixture();
+  try {
+    const document = await getCourseDocument(f.deps, f.actor, f.a.id), other = await getCourseDocument(f.deps, f.actor, f.b.id);
+    const request = { courseId: f.a.id, courseChapterId: null, path: 'same.md', markdown: 'Imported body.', requestId: 'first-destination', expectedDocumentRevision: document.documentRevision, replaceExisting: false };
+    const imported = await importMarkdown(f.deps, f.actor, request);
+    expect((await importMarkdown(f.deps, f.actor, request)).document.courseId).toBe(f.a.id);
+    for (const target of [{ courseId: f.b.id, courseChapterId: null, expectedDocumentRevision: other.documentRevision }, { courseId: f.a.id, courseChapterId: document.chapters[0].id, expectedDocumentRevision: imported.document.documentRevision }]) {
+      await expect(importMarkdown(f.deps, f.actor, { ...request, ...target, requestId: 'other-destination' })).rejects.toMatchObject({ code: 'conflict' });
+    }
+    expect((await getCourseDocument(f.deps, f.actor, f.b.id)).markdown).toBe(other.markdown);
+  } finally { await f.close(); }
+});

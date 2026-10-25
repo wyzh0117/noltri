@@ -14,13 +14,15 @@ describe('workspace HTTP and validating client',()=>{
     const response=await handler(new Request(`http://localhost/api/workspace/courses/wrong/document`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(request)}));expect(response.status).toBe(400);
     await expect(api.applyCourseDocumentPatch({...request,requestId:'stale'})).rejects.toMatchObject({status:409});
     const snapshots=await api.listWorkspaceSnapshots();expect(snapshots.length).toBeGreaterThan(0);
-    const snapshot=snapshots[0];const restored=await api.restoreWorkspaceSnapshot(snapshot.id,snapshot.afterRevisions);expect(restored.documents[0].markdown).not.toContain(text);
+    const snapshot=snapshots[0];const comparison=await api.compareWorkspaceSnapshot(snapshot.id);expect(comparison.revisions[`course:${node.id}`]).toBe(result.documents[0].documentRevision);expect(comparison.conflicts).toEqual([]);const restored=await api.restoreWorkspaceSnapshot(snapshot.id,snapshot.afterRevisions);expect(restored.documents[0].markdown).not.toContain(text);
   });
   it('fails closed for scoped indexes and snippet-only editable documents',async()=>{
     const h=makeHarness(),node=await h.repository.createNode({userId:h.actor.userId,title:'restricted',nodeType:'topic'});
     const grant={id:'g',label:'limited',client:'test',scopes:['read'] as const,nodeIds:[node.id],snippetChars:null,secretHash:'ignored',createdAt:new Date().toISOString(),revokedAt:null};
     const handler=createRequestHandler({core:h.core,config:h.config,identityResolver:async()=>({userId:h.actor.userId,actor:'test',via:'grant',grant})});
     const response=await handler(new Request('http://localhost/api/workspace/metadata'));expect(response.status).toBe(401);
+    expect((await handler(new Request('http://localhost/api/workspace/snapshots/unknown/compare'))).status).toBe(401);
+    expect((await handler(new Request('http://localhost/api/workspace/detached-entries/move',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}))).status).toBe(401);
     const capped=createRequestHandler({core:h.core,config:h.config,identityResolver:async()=>({userId:h.actor.userId,actor:'test',via:'grant',grant:{...grant,nodeIds:null,snippetChars:20}})});
     expect((await capped(new Request(`http://localhost/api/workspace/courses/${node.id}/document`))).status).toBe(401);
   });

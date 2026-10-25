@@ -9,7 +9,7 @@ import {
   type ImportMarkdownRequest, type ImportMarkdownResult, type CourseMarkdownExport,
   type WorkspaceState, type WorkspaceContent, type WorkspaceMutationResult, type RenameAttachmentRequest, type AttachmentCleanupResult,
 } from '@noltri/schema';
-import { parseMarkdown, setFrontmatterProperties, rewriteReferences, rebaseReferenceRanges } from '@noltri/note-engine';
+import { parseMarkdown, setFrontmatterProperties, rewriteReferences, rebaseReferenceRanges, attachmentReference } from '@noltri/note-engine';
 import { createId, knowledgeError, nowIso } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
 import { runCapture } from '../pipeline/capture';
@@ -36,7 +36,7 @@ function referenceCourses(content: WorkspaceContent, attachment: { path: string 
     ...content.entries.flatMap((object) => [{ courseId: object.courseId, markdown: object.markdown }, { courseId: object.courseId, markdown: setFrontmatterProperties('', object.properties) }]),
   ];
   return owners.flatMap((owner) => parseMarkdown(owner.markdown, { tolerateInvalidFrontmatter: true }).links.filter((link) => {
-    try { return normalizeResourcePath(link.target) === attachment.path; } catch { return false; }
+    return attachmentReference(link.target)?.path === attachment.path;
   }).map(() => owner.courseId));
 }
 function attachmentView(state: WorkspaceState, value: WorkspaceState['attachments'][number]): WorkspaceAttachment {
@@ -143,6 +143,7 @@ export async function importMarkdown(deps: CoreDeps, actor: ActorContext, input:
   if (previous && previous.path !== importedPath) throw knowledgeError('conflict', 'Import path differs only by case or Unicode normalization');
   const contentHash = digest(request.markdown);
   const capture = await runCapture(deps, actor, { requestId: digest(`${importedPath}\0${contentHash}`), text: request.markdown, source: { type: 'manual', title: importedPath }, capture: { client: 'desktop', deviceId: 'markdown-import', capturedAt: nowIso() } }, { importOriginal: true });
+  if (previous && (previous.courseId !== request.courseId || (previous.courseChapterId ?? null) !== request.courseChapterId)) throw knowledgeError('conflict', '此导入路径已归属其他课程或章节，请使用不同路径导入；原件已保留', { rawSourceId: capture.rawSourceId });
   if (previous?.contentHash === contentHash) return { rawSourceId: previous.sourceId, document: await getCourseDocument(deps, actor, previous.courseId), duplicate: true };
   if (previous && (!request.replaceExisting || previous.courseId !== request.courseId)) throw knowledgeError('conflict', 'Import already exists; original preserved, explicit replacement required', { rawSourceId: capture.rawSourceId });
   const document = await getCourseDocument(deps, actor, request.courseId);
@@ -182,7 +183,7 @@ export async function importMarkdown(deps: CoreDeps, actor: ActorContext, input:
     if (imported[0] && !parsedOriginal.frontmatterError) imported[0].properties = { ...imported[0].properties, ...parsedOriginal.properties };
     if (!imported.length) throw knowledgeError('invalid_request', 'Markdown import has no body content');
     for (const entry of imported) if (!next.sourceLinks.some((link) => link.entryId === entry.id && link.sourceId === capture.rawSourceId)) next.sourceLinks.push({ entryId: entry.id, sourceId: capture.rawSourceId, locations: [{ path: importedPath }] });
-    next.imports[key] = { path: importedPath, sourceId: capture.rawSourceId, courseId: request.courseId, entryIds: imported.map((entry) => entry.id), chapterIds: next.chapters.filter((chapter) => chapter.courseId === request.courseId && (!before.chapters.some((value) => value.id === chapter.id) || previous?.chapterIds.includes(chapter.id))).map((chapter) => chapter.id), revisions: Object.fromEntries(imported.map((entry) => [entry.id, entry.revision])), contentHash };
+    next.imports[key] = { path: importedPath, sourceId: capture.rawSourceId, courseId: request.courseId, courseChapterId: request.courseChapterId, entryIds: imported.map((entry) => entry.id), chapterIds: next.chapters.filter((chapter) => chapter.courseId === request.courseId && (!before.chapters.some((value) => value.id === chapter.id) || previous?.chapterIds.includes(chapter.id))).map((chapter) => chapter.id), revisions: Object.fromEntries(imported.map((entry) => [entry.id, entry.revision])), contentHash };
   });
   return { rawSourceId: capture.rawSourceId, document: result.documents.find((value) => value.courseId === request.courseId)!, duplicate: false };
 }
@@ -271,7 +272,7 @@ export async function renameAttachment(deps: CoreDeps, actor: ActorContext, inpu
     courses.add(courseId);
   };
   const rewrite = (text: string): { text: string; changes: { from: number; to: number; insert: string }[] } => {
-    const edits = parseMarkdown(text, { tolerateInvalidFrontmatter: true }).links.filter((reference) => reference.target === oldPath).map((reference) => ({ reference, target: nextPath }));
+    const edits = parseMarkdown(text, { tolerateInvalidFrontmatter: true }).links.filter((reference) => attachmentReference(reference.target)?.path === oldPath).map((reference) => ({ reference, target: nextPath + (attachmentReference(reference.target)?.fragment ?? '') }));
     return { text: edits.length ? rewriteReferences(text, edits) : text, changes: edits.map(({ reference, target }) => ({ from: reference.targetFrom, to: reference.targetTo, insert: target })) };
   };
   if (oldPath !== nextPath) {

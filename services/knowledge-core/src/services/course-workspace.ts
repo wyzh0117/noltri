@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
-  applyCourseDocumentPatchSchema, moveSourceAssignmentsSchema, courseDocumentSchema,
+  applyCourseDocumentPatchSchema, moveSourceAssignmentsSchema, moveDetachedEntriesSchema, courseDocumentSchema,
   workspaceMutationResultSchema, WORKSPACE_REQUEST_MAX_BYTES,
-  type ApplyCourseDocumentPatchRequest, type MoveSourceAssignmentsRequest,
+  type ApplyCourseDocumentPatchRequest, type MoveSourceAssignmentsRequest, type MoveDetachedEntriesRequest,
   type CourseDocument, type ContentEntry, type CourseChapter, type ContentBlock,
   type WorkspaceState, type WorkspaceContent, type WorkspaceMutationResult, type ContentLocation,
   type DocumentChange, type KnowledgeNode,
@@ -472,17 +472,23 @@ function rewriteRenamedReferences(state: WorkspaceState, before: WorkspaceConten
 
 export async function moveSourceAssignments(deps: CoreDeps, actor: ActorContext, input: MoveSourceAssignmentsRequest): Promise<WorkspaceMutationResult> {
   validateRequestSize(input);
-  const request = moveSourceAssignmentsSchema.parse(input);
+  return moveEntries(deps, actor, moveSourceAssignmentsSchema.parse(input));
+}
+export async function moveDetachedEntries(deps: CoreDeps, actor: ActorContext, input: MoveDetachedEntriesRequest): Promise<WorkspaceMutationResult> {
+  validateRequestSize(input);
+  return moveEntries(deps, actor, { ...moveDetachedEntriesSchema.parse(input), sourceId: null });
+}
+async function moveEntries(deps: CoreDeps, actor: ActorContext, request: MoveDetachedEntriesRequest & { sourceId: string | null }): Promise<WorkspaceMutationResult> {
   const state = await loadWorkspace(deps, actor);
   const replay = checkReplay(state, request.requestId, request); if (replay) return replay;
-  if (!await deps.repository.findRawSource(request.sourceId, actor.userId)) throw knowledgeError('not_found', 'Source not found');
+  if (request.sourceId !== null && !await deps.repository.findRawSource(request.sourceId, actor.userId)) throw knowledgeError('not_found', 'Source not found');
   if (!state.courses.some((course) => course.id === request.toCourseId)) throw knowledgeError('not_found', 'Destination course not found');
-  if (request.toCourseChapterId !== null && !state.chapters.some((chapter) => chapter.id === request.toCourseChapterId && chapter.courseId === request.toCourseId)) throw knowledgeError('invalid_request', 'Destination chapter belongs to another course');
+  if (request.toCourseChapterId !== null && !state.chapters.some((chapter) => chapter.id === request.toCourseChapterId && chapter.courseId === request.toCourseId && !chapter.detached)) throw knowledgeError('invalid_request', 'Destination chapter belongs to another course');
   const ids = new Set(request.entryIds);
   if (ids.size !== request.entryIds.length) throw knowledgeError('invalid_request', 'Duplicate entry IDs');
   const moving = request.entryIds.map((id) => {
     const entry = state.entries.find((value) => value.id === id);
-    if (!entry || !state.sourceLinks.some((link) => link.entryId === id && link.sourceId === request.sourceId)) throw knowledgeError('invalid_request', 'Selected entry is not assigned to this source');
+    if (!entry || (request.sourceId === null ? !state.chapters.some(chapter => chapter.id === entry.courseChapterId && chapter.detached) : !state.sourceLinks.some((link) => link.entryId === id && link.sourceId === request.sourceId))) throw knowledgeError('invalid_request', 'Selected entry is not retained or assigned to this source');
     checkRevision(`entry:${id}`, entry.revision, request.expectedEntryRevisions[id]); return entry;
   });
   const affectedCourses = new Set([request.toCourseId, ...moving.map((entry) => entry.courseId)]);

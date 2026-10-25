@@ -12,10 +12,13 @@ export function courseCatalog(nodes:readonly TreeNode[]):CourseSummary[] {
 }
 export function coursePath(course:CourseSummary,location?:ContentLocation|null,lastParent?:string):TreeNode[]{
   const parent=location&&'viaParentId' in location?location.viaParentId:undefined;
-  return course.paths.find(path=>path.at(-2)?.id===(parent??lastParent)) ?? course.paths[0];
+  const discipline=location&&'disciplineId'in location?location.disciplineId:undefined;
+  const scoped=discipline?course.paths.filter(path=>path[0]?.id===discipline):course.paths;
+  const paths=scoped.length?scoped:course.paths;
+  return paths.find(path=>path.at(-2)?.id===parent)??paths.find(path=>path.at(-2)?.id===lastParent)??paths[0];
 }
 export function courseLocation(course:CourseSummary,path=course.paths[0]):ContentLocation {return {kind:'course',courseId:course.id,disciplineId:path[0]?.id,viaParentId:path.at(-2)?.id};}
-export function locationOffset(document:{projection:{kind:string;from:number;entryId:string|null;courseChapterId:string|null}[];entries:{id:string;markdown:string;blocks:{id:string;from:number}[]}[]},location:ContentLocation):number {
-  if(location.kind==='entry'){const range=document.projection.find(r=>r.entryId===location.entryId);const block=location.blockId?document.entries.find(e=>e.id===location.entryId)?.blocks.find(b=>b.id===location.blockId):null; const heading=location.headingPath?parseMarkdown(document.entries.find(e=>e.id===location.entryId)?.markdown??'').headings.find(h=>location.headingPath!.every((part,i)=>h.path[h.path.length-location.headingPath!.length+i]===part)):null; return (range?.from??0)+(block?.from??heading?.from??0);}
-  return location.kind==='chapter'?document.projection.find(r=>r.kind==='chapter'&&r.courseChapterId===location.courseChapterId)?.from??0:0;
+export function locationOffset(document:{projection:{kind:string;from:number;entryId:string|null;courseChapterId:string|null}[];entries:{id:string;markdown:string;blocks:{id:string;from:number}[]}[]},location:ContentLocation):number|null {
+  if(location.kind==='entry'){const range=document.projection.find(r=>r.entryId===location.entryId);if(!range)return null;const block=location.blockId?document.entries.find(e=>e.id===location.entryId)?.blocks.find(b=>b.id===location.blockId):null; const heading=location.headingPath?parseMarkdown(document.entries.find(e=>e.id===location.entryId)?.markdown??'').headings.find(h=>location.headingPath!.every((part,i)=>h.path[h.path.length-location.headingPath!.length+i]===part)):null; return (range?.from??0)+(block?.from??heading?.from??0);}
+  return location.kind==='chapter'?document.projection.find(r=>r.kind==='chapter'&&r.courseChapterId===location.courseChapterId)?.from??null:0;
 }

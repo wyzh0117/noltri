@@ -1,3 +1,4 @@
+import { attachmentReference as normalizeAttachmentReference } from '@noltri/note-engine';
 import type { ContentLocation, CourseDocument, KnowledgeNode, WorkspaceGraph, WorkspaceGraphEdge, WorkspaceGraphNode, WorkspaceGraphRequest } from '@noltri/schema';
 import { workspaceGraphSchema } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
@@ -99,6 +100,7 @@ export async function selectWorkspaceGraph(deps:CoreDeps,actor:ActorContext,requ
   for(const group of groups)for(const object of index.objects)if(!colors.has(object.courseId)&&matchQuery(group.ast,object).matched)colors.set(object.courseId,group.color);
   const focus=request.focus,focusCourse='courseId'in focus?focus.courseId:undefined;
   const discipline=request.disciplineId??('disciplineId'in focus?focus.disciplineId:undefined);
+  if(request.advancedScope==='focus'&&!focusCourse)throw knowledgeError('invalid_request','当前课程范围需要先选择课程；分类页请使用本学科范围');
   const courses=nodes.filter(n=>n.kind==='course');
   const allowed=new Set(courses.filter(n=>request.advancedScope==='all'||request.advancedScope==='focus'||n.targets.some(t=>'disciplineId'in t&&t.disciplineId===discipline)).map(n=>n.id));
   const networkEdges=edges.filter(e=>(e.kind==='link'||e.kind==='embed')&&byId.get(e.to)?.kind==='course'&&allowed.has(e.from)&&allowed.has(e.to));
@@ -121,7 +123,7 @@ export async function selectWorkspaceGraph(deps:CoreDeps,actor:ActorContext,requ
   }
   const attachments=await listAttachments(deps,actor);
   const attachmentByPath=new Map(attachments.map(a=>[a.path,a]));
-  const attachmentReference=(raw:string)=>{try{return attachmentByPath.get(decodeURIComponent(raw.split('#')[0]));}catch{return undefined;}};
+  const attachmentReference=(raw:string)=>{return attachmentByPath.get(normalizeAttachmentReference(raw)?.path??'');};
   if(request.showAttachments){
     const assets=new Map<string,WorkspaceGraphNode>();
     for(const link of index.links){

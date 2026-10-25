@@ -202,3 +202,14 @@ export function rebaseWorkspaceReferenceBindings<T extends Span & { raw: string 
     state.resolvedReferences[`entry:${entryId}`] = { content: entry.markdown, revision: entry.revision, references };
   }
 }
+
+/** Decode one supported local spelling without accepting traversal or URL protocols. */
+export function attachmentReference(raw: string): { path: string; fragment: string } | null {
+  const hash = raw.indexOf('#'), fragment = hash < 0 ? '' : raw.slice(hash);
+  try {
+    const path = decodeURIComponent(hash < 0 ? raw : raw.slice(0, hash)).replace(/^\.\//, '');
+    if (!path.startsWith('attachments/') || path !== path.normalize('NFC') || /[\\\u0000-\u001f\u007f:%?#<>"|*]/.test(path) || /[\u0000-\u001f\u007f]/.test(fragment)) return null;
+    if (path.split('/').some(part => !part || part === '.' || part === '..' || part.trim() !== part)) return null;
+    return { path, fragment };
+  } catch { return null; }
+}
