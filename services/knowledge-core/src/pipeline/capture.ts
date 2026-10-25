@@ -1,3 +1,4 @@
+import { z } from 'zod';
 /**
  * The capture pipeline — V1_DEVELOPMENT §9, in this exact order:
  *
@@ -21,7 +22,7 @@ import type {
   ProcessingStatus,
   RawSource,
 } from '@noltri/schema';
-import { libraryMetadataSchema, tierForConfidence } from '@noltri/schema';
+import { captureRequestSchema, WORKSPACE_REQUEST_MAX_BYTES, libraryMetadataSchema, tierForConfidence } from '@noltri/schema';
 import { knowledgeError, truncate } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
 import { clamp01, ERROR_REASON_MAX_CHARS, roundConfidence } from '../types';
@@ -109,14 +110,19 @@ async function markFailed(deps: CoreDeps, userId: string, rawSourceId: string, r
   }
 }
 
-export async function runCapture(deps: CoreDeps, actor: ActorContext, input: CaptureRequest): Promise<CaptureResult> {
+export async function runCapture(deps: CoreDeps, actor: ActorContext, input: CaptureRequest, options: { importOriginal?: boolean } = {}): Promise<CaptureResult> {
   // Step 1: validate. Step 2: save the RawSource FIRST — before any AI call exists in this function.
-  const request = validateCaptureRequest(input);
+  const request = options.importOriginal ? captureRequestSchema.extend({ text: z.string().min(1).refine((text) => Buffer.byteLength(text, 'utf8') <= WORKSPACE_REQUEST_MAX_BYTES) }).parse(input) : validateCaptureRequest(input);
   const requestId = request.requestId;
   const clientId = clientIdOf(request);
 
   const stored = await deps.repository.findRawSourceByIdempotencyKey(actor.userId, clientId, requestId);
-  if (stored !== null) return replaySource(deps, actor, stored);
+  const imported = async (source: RawSource, duplicate: boolean): Promise<CaptureResult> => {
+    if (source.rawText !== request.text) throw knowledgeError('conflict', 'Import requestId was already used with different original text');
+    const saved = await deps.repository.updateRawSourceProcessing(source.id, actor.userId, 'done');
+    return captureResult({ source: saved, stage: 'completed', processingStatus: 'done', duplicate });
+  };
+  if (stored !== null) return options.importOriginal ? imported(stored, true) : replaySource(deps, actor, stored);
 
   let source: RawSource;
   try {
@@ -135,7 +141,7 @@ export async function runCapture(deps: CoreDeps, actor: ActorContext, input: Cap
       metadata: {
         client: request.capture.client,
         deviceId: request.capture.deviceId ?? null,
-        entryPoint: 'knowledge-core',
+        entryPoint: options.importOriginal ? 'markdown-import' : 'knowledge-core',
         ...(request.library ? { library: request.library } : {}),
       },
     });
@@ -144,10 +150,10 @@ export async function runCapture(deps: CoreDeps, actor: ActorContext, input: Cap
     const raced = await deps.repository.findRawSourceByIdempotencyKey(actor.userId, clientId, requestId);
     if (raced === null) throw error;
     deps.logger.warn('capture key raced onto an existing source, replaying it', { rawSourceId: raced.id, clientId });
-    return replaySource(deps, actor, raced);
+    return options.importOriginal ? imported(raced, true) : replaySource(deps, actor, raced);
   }
 
-  return processSource(deps, actor, source, false);
+  return options.importOriginal ? imported(source, false) : processSource(deps, actor, source, false);
 }
 
 export async function retryCapture(deps: CoreDeps, actor: ActorContext, rawSourceId: string): Promise<CaptureResult> {

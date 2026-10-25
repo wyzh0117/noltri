@@ -2,7 +2,7 @@ import { workspaceStateSchema, type WorkspaceState } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
 
 export function emptyWorkspaceState(): WorkspaceState {
-  return { revision: 0, courses: [], concepts: [], chapters: [], entries: [], sourceLinks: [], snapshots: [], requests: {}, tombstones: {}, settings: { snapshotIntervalSeconds: 60, snapshotRetentionDays: 30 }, migration: { version: 0, mappings: {}, unconfirmed: [] } };
+  return { revision: 0, courses: [], concepts: [], chapters: [], entries: [], sourceLinks: [], snapshots: [], requests: {}, tombstones: {}, resolvedReferences: {}, attachments: [], imports: {}, settings: { snapshotIntervalSeconds: 60, snapshotRetentionDays: 30 }, migration: { version: 0, mappings: {}, unconfirmed: [] } };
 }
 
 /** Validate the aggregate before the CAS, identically for both drivers. */
@@ -40,6 +40,10 @@ export function validateWorkspaceState(userId: string, state: WorkspaceState): W
     if (!entries.has(link.entryId) || sourceLinks.has(key)) throw knowledgeError('invalid_request', 'Invalid or duplicate source association');
     sourceLinks.add(key);
   }
+  for (const binding of Object.values(parsed.resolvedReferences)) for (const reference of binding.references) {
+    if (reference.to < reference.from || reference.to > binding.content.length || binding.content.slice(reference.from, reference.to) !== reference.raw || !('courseId' in reference.target)) throw knowledgeError('invalid_request', 'Invalid persisted reference identity');
+  }
+  for (const resource of parsed.attachments) if (resource.userId !== userId) throw knowledgeError('invalid_request', 'Invalid attachment owner');
   for (const snapshot of parsed.snapshots) if (snapshot.userId !== userId) throw knowledgeError('invalid_request', 'Invalid snapshot owner');
   return parsed;
 }

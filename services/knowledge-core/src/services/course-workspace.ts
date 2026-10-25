@@ -7,7 +7,7 @@ import {
   type WorkspaceState, type WorkspaceContent, type WorkspaceMutationResult, type ContentLocation,
   type DocumentChange, type KnowledgeNode,
 } from '@noltri/schema';
-import { parseMarkdown, resolveKnowledgeLink, rewriteReferences, formatLinkTarget, setFrontmatterProperties, type LinkTarget, type EngineLocation } from '@noltri/note-engine';
+import { parseMarkdown, resolveKnowledgeLink, rewriteReferences, formatLinkTarget, setFrontmatterProperties, rebaseWorkspaceReferenceBindings, type LinkTarget, type EngineLocation } from '@noltri/note-engine';
 import { createId, knowledgeError, nowIso } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
 
@@ -230,7 +230,7 @@ function applyChanges(markdown: string, changes: DocumentChange[]): string {
   return markdown;
 }
 
-export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorContext, input: ApplyCourseDocumentPatchRequest): Promise<WorkspaceMutationResult> {
+export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorContext, input: ApplyCourseDocumentPatchRequest, prepareImport?: (state: WorkspaceState, before: WorkspaceContent) => void): Promise<WorkspaceMutationResult> {
   validateRequestSize(input);
   const request = applyCourseDocumentPatchSchema.parse(input);
   const state = await loadWorkspace(deps, actor);
@@ -260,6 +260,11 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
     const frontmatter = parseWorkspaceMarkdown(entry.markdown).frontmatter;
     return frontmatter ? [{ from: mapPosition(range.from + frontmatter.from, changes), to: mapPosition(range.from + frontmatter.to, changes, true) }] : [];
   });
+  for (const change of changes) {
+    const trimmed = change.insert.replace(/^[\r\n]+/, '');
+    const frontmatter = parseWorkspaceMarkdown(trimmed).frontmatter;
+    if (frontmatter) { const from = mapPosition(change.from, changes) + change.insert.length - trimmed.length; opaqueFrontmatter.push({ from: from + frontmatter.from, to: from + frontmatter.to }); }
+  }
   const rootHeadings = new Set((parsed.ast.children ?? []).filter((node) => node.type === 'heading' && node.depth === 2).map((node) => node.position?.start.offset));
   const headings = parsed.headings.filter((heading) => heading.depth === 2 && rootHeadings.has(heading.from) && !opaqueFrontmatter.some((range) => heading.from >= range.from && heading.to <= range.to));
   const sections: { from: number; to: number; chapterId: string | null }[] = [{ from: title?.to ?? parsed.frontmatter?.to ?? 0, to: headings[0]?.from ?? markdown.length, chapterId: null }];
@@ -338,6 +343,8 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
   course.documentRevision++; course.updatedAt = nowIso();
   for (const entry of old.entries) if (oldVisibleIds.has(entry.id) && !used.has(entry.id)) state.tombstones[`entry:${entry.id}`] = entry.revision + 1;
   for (const chapter of removedChapters) state.tombstones[`chapter:${chapter.id}`] = chapter.revision + 1;
+  prepareImport?.(state, before);
+  rebaseWorkspaceReferenceBindings(state, old, projectCourse(state, request.courseId), changes);
   const referenceCourses = rewriteRenamedReferences(state, before, headingRenames);
   for (const other of state.courses) if (referenceCourses.has(other.id) && other.id !== request.courseId) { other.documentRevision++; other.updatedAt = nowIso(); }
   const deletion = changes.some((change) => change.to > change.from && change.insert.length < change.to - change.from);

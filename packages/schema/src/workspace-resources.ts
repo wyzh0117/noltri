@@ -1,0 +1,18 @@
+import { z } from 'zod';
+import { courseDocumentSchema } from './course-workspace';
+import { rawSourceSchema } from './knowledge';
+const id = z.string().min(1);
+export const workspaceAttachmentSchema = z.object({ id, userId: id, path: id, originalPath: id.optional(), mimeType: id, size: z.number().int().nonnegative(), sha256: id, createdAt: z.string(), revision: z.number().int().positive(), referenceCount: z.number().int().nonnegative() });
+export type WorkspaceAttachment = z.infer<typeof workspaceAttachmentSchema>;
+export const uploadAttachmentSchema = z.object({ path: id.max(1024), mimeType: id.max(200), contentBase64: z.string(), requestId: id.max(200), uploadId: id.optional(), chunkIndex: z.number().int().min(0).max(7).optional(), chunkCount: z.number().int().min(1).max(8).optional(), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() });
+export type UploadAttachmentRequest = z.infer<typeof uploadAttachmentSchema>;
+export const importMarkdownSchema = z.object({ courseId: id, courseChapterId: id.nullable(), markdown: z.string().min(1), path: id.max(1024), requestId: id.max(200), expectedDocumentRevision: z.number().int().nonnegative(), replaceExisting: z.boolean().default(false) });
+export type ImportMarkdownRequest = z.infer<typeof importMarkdownSchema>;
+export const importMarkdownResultSchema = z.object({ rawSourceId: id, document: courseDocumentSchema, duplicate: z.boolean() });
+export type ImportMarkdownResult = z.infer<typeof importMarkdownResultSchema>;
+export const courseMarkdownExportSchema = z.object({ filename: id, markdown: z.string(), manifest: z.object({ sources: z.array(rawSourceSchema), attachments: z.array(workspaceAttachmentSchema), owners: z.array(z.object({ kind: z.enum(['course', 'chapter', 'entry']), id, properties: z.record(z.string(), z.unknown()) })) }) });
+export type CourseMarkdownExport = z.infer<typeof courseMarkdownExportSchema>;
+export const WORKSPACE_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+export const WORKSPACE_ATTACHMENT_CHUNK_MAX_BYTES = 1024 * 1024;
+export const WORKSPACE_ATTACHMENT_JSON_MAX_BYTES = 2 * 1024 * 1024;
+export type AttachmentUploadResult = WorkspaceAttachment | { complete: false; uploadId: string; receivedChunks: number; totalChunks: number };
