@@ -11,6 +11,7 @@ import { parseMarkdown, resolveKnowledgeLink, rewriteReferences, formatLinkTarge
 import { createId, knowledgeError, nowIso } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
 
+const parseWorkspaceMarkdown = (content: string) => parseMarkdown(content, { tolerateInvalidFrontmatter: true });
 const stableId = (...parts: string[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 32);
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sorted = <T extends { order: number; id: string }>(values: T[]): T[] => [...values].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
@@ -65,18 +66,23 @@ function ensureChapter(state: WorkspaceState, userId: string, courseId: string, 
 }
 /** YAML is an import adapter; structured properties are the one editable record. */
 export function extractEntryFrontmatter(entry: ContentEntry): void {
-  const parsed = parseMarkdown(entry.markdown);
-  if (!parsed.frontmatter) return;
+  const parsed = parseWorkspaceMarkdown(entry.markdown);
+  if (!parsed.frontmatter || parsed.frontmatterError) return;
   entry.properties = { ...entry.properties, ...parsed.properties };
   entry.markdown = entry.markdown.slice(parsed.frontmatter.to).replace(/^\r?\n/, '');
 }
-export function syncBlocks(entry: ContentEntry, previous: ContentBlock[] = entry.blocks): void {
-  const parsed = parseMarkdown(entry.markdown).blocks.filter((block) => block.alias !== undefined);
-  const used = new Set<string>();
-  entry.blocks = parsed.map((block, index) => {
-    const old = previous.find((value) => !used.has(value.id) && value.alias === block.alias) ?? previous.find((value, position) => position === index && !used.has(value.id));
-    const id = old?.id ?? createId(); used.add(id);
-    return { id, alias: block.alias!, from: block.from, to: block.to };
+export function syncBlocks(entry: ContentEntry, previous: ContentBlock[] = entry.blocks, renamedAliases: Map<string, string> = new Map()): void {
+  const parsed = parseWorkspaceMarkdown(entry.markdown).blocks.filter((block) => block.alias !== undefined);
+  // Reserve exact aliases before considering a proven alias edit; insertion/reordering never steals IDs.
+  const exact = new Map(parsed.flatMap((block) => {
+    const old = previous.find((value) => value.alias === block.alias);
+    return old ? [[block.alias!, old] as const] : [];
+  }));
+  const reserved = new Set([...exact.values()].map((block) => block.id));
+  entry.blocks = parsed.map((block) => {
+    const old = exact.get(block.alias!) ?? previous.find((value) => !reserved.has(value.id) && renamedAliases.get(value.id) === block.alias);
+    if (old) reserved.add(old.id);
+    return { id: old?.id ?? createId(), alias: block.alias!, from: block.from, to: block.to };
   });
 }
 
@@ -110,7 +116,8 @@ export async function loadWorkspace(deps: CoreDeps, actor: ActorContext): Promis
       if (note.chapterId && !node) { state.migration.unconfirmed.push(key); continue; }
       const chapter = node ? ensureChapter(state, actor.userId, course.id, node, !memberships.get(node.id)?.has(course.id)) : null;
       const id = stableId(actor.userId, key);
-      const entry: ContentEntry = { id, userId: actor.userId, courseId: course.id, courseChapterId: chapter?.id ?? null, markdown: note.content, order: state.entries.filter((item) => item.courseId === course.id).length, revision: 1, properties: parseMarkdown(note.content).properties, blocks: [] };
+      const entry: ContentEntry = { id, userId: actor.userId, courseId: course.id, courseChapterId: chapter?.id ?? null, markdown: note.content, order: state.entries.filter((item) => item.courseId === course.id).length, revision: 1, properties: parseWorkspaceMarkdown(note.content).properties, blocks: [] };
+      if (parseWorkspaceMarkdown(note.content).frontmatterError) state.migration.unconfirmed.push(`${key}:invalid-frontmatter`);
       extractEntryFrontmatter(entry); syncBlocks(entry); state.entries.push(entry); state.migration.mappings[key] = id;
     }
   }
@@ -240,19 +247,25 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
     checkRevision(`entry:${entryId}`, entry.revision, expected);
   }
   const markdown = applyChanges(old.markdown, changes);
-  const parsed = parseMarkdown(markdown);
+  const parsed = parseWorkspaceMarkdown(markdown);
   const before = workspaceContent(state);
   const course = state.courses.find((value) => value.id === request.courseId)!;
-  if (parsed.frontmatter) course.properties = { ...course.properties, ...parsed.properties };
+  if (parsed.frontmatter && !parsed.frontmatterError) course.properties = { ...course.properties, ...parsed.properties };
   const title = parsed.headings.find((heading) => heading.depth === 1 && markdown.slice(parsed.frontmatter?.to ?? 0, heading.from).trim() === '');
   if (title) course.title = title.text;
   const oldHeadings = old.projection.filter((range) => range.kind === 'chapter');
   const selectedChapters = new Set<string>();
-  const headings = parsed.headings.filter((heading) => heading.depth === 2);
+  const opaqueFrontmatter = old.projection.filter((range) => range.entryId).flatMap((range) => {
+    const entry = old.entries.find((value) => value.id === range.entryId)!;
+    const frontmatter = parseWorkspaceMarkdown(entry.markdown).frontmatter;
+    return frontmatter ? [{ from: mapPosition(range.from + frontmatter.from, changes), to: mapPosition(range.from + frontmatter.to, changes, true) }] : [];
+  });
+  const rootHeadings = new Set((parsed.ast.children ?? []).filter((node) => node.type === 'heading' && node.depth === 2).map((node) => node.position?.start.offset));
+  const headings = parsed.headings.filter((heading) => heading.depth === 2 && rootHeadings.has(heading.from) && !opaqueFrontmatter.some((range) => heading.from >= range.from && heading.to <= range.to));
   const sections: { from: number; to: number; chapterId: string | null }[] = [{ from: title?.to ?? parsed.frontmatter?.to ?? 0, to: headings[0]?.from ?? markdown.length, chapterId: null }];
   for (let index = 0; index < headings.length; index++) {
     const heading = headings[index];
-    const mapped = oldHeadings.find((range) => !selectedChapters.has(range.courseChapterId!) && mapPosition(range.from, changes) === heading.from);
+    const mapped = oldHeadings.find((range) => !selectedChapters.has(range.courseChapterId!) && mapPosition(range.from, changes, changes.some((change) => change.from === range.from && change.to === range.from)) === heading.from);
     let chapter = mapped ? state.chapters.find((value) => value.id === mapped.courseChapterId) : old.chapters.find((value) => !value.detached && !selectedChapters.has(value.id) && value.title === heading.text && oldHeadings.some((range) => range.courseChapterId === value.id && changes.some((change) => change.from <= range.from && change.to >= range.to)));
     if (!chapter) {
       const conceptId = createId(); state.concepts.push({ id: conceptId, userId: actor.userId, title: heading.text, revision: 1 });
@@ -266,6 +279,7 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
   const oldRanges = old.projection.filter((range) => range.kind === 'entry').map((range) => ({ ...range, from: mapPosition(range.from, changes), to: mapPosition(range.to, changes, true) }));
   const oldVisibleIds = new Set(oldRanges.map((range) => range.entryId));
   const used = new Set<string>();
+  const headingRenames = new Map<string, { entryId: string; path: string[] }>();
   const replacement: ContentEntry[] = [];
   const replacementLinks: WorkspaceState['sourceLinks'] = [];
   for (const section of sections) {
@@ -289,8 +303,26 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
       const entry: ContentEntry = chosen ? { ...structuredClone(chosen), courseChapterId: section.chapterId, markdown: text, order: replacement.length } : { id: createId(), userId: actor.userId, courseId: request.courseId, courseChapterId: section.chapterId, markdown: text, order: replacement.length, revision: 1, properties: {}, blocks: [] };
       if (chosen && (entry.markdown !== chosen.markdown || entry.courseChapterId !== chosen.courseChapterId || entry.order !== chosen.order)) entry.revision++;
       const provenance = exact ? [exact] : overlapping;
+      const renamedAliases = new Map<string, string>();
+      const nextParsed = parseWorkspaceMarkdown(text);
+      for (const previous of provenance) {
+        const range = old.projection.find((value) => value.entryId === previous.id);
+        if (!range) continue;
+        for (const block of previous.blocks) {
+          const at = previous.markdown.lastIndexOf(`^${block.alias}`, block.to) + 1;
+          const aliasFrom = mapPosition(range.from + at, changes);
+          const aliasTo = mapPosition(range.from + at + block.alias.length, changes, true);
+          const renamed = nextParsed.blocks.find((value) => value.alias && from + text.lastIndexOf(`^${value.alias}`, value.to) + 1 === aliasFrom && aliasFrom + value.alias.length === aliasTo);
+          if (renamed?.alias) renamedAliases.set(block.id, renamed.alias);
+        }
+        for (const heading of parseWorkspaceMarkdown(previous.markdown).headings) {
+          const mapped = mapPosition(range.from + heading.from, changes, changes.some((change) => change.from === range.from + heading.from && change.to === change.from));
+          const renamed = nextParsed.headings.find((value) => from + value.from === mapped && value.depth === heading.depth);
+          if (renamed && (!parseWorkspaceMarkdown(previous.markdown).headings.some((other) => other.path.join('\0') === renamed.path.join('\0')) || heading.path.join('\0') === renamed.path.join('\0'))) headingRenames.set(`${previous.id}:${heading.path.join('\0')}`, { entryId: entry.id, path: renamed.path });
+        }
+      }
       extractEntryFrontmatter(entry);
-      syncBlocks(entry, provenance.flatMap((value) => value.blocks));
+      syncBlocks(entry, provenance.flatMap((value) => value.blocks), renamedAliases);
       for (const source of state.sourceLinks.filter((link) => provenance.some((value) => value.id === link.entryId))) {
         const existing = replacementLinks.find((link) => link.entryId === entry.id && link.sourceId === source.sourceId);
         if (existing) existing.locations = [...new Map([...existing.locations, ...source.locations].map((value) => [JSON.stringify(value), value])).values()];
@@ -306,7 +338,7 @@ export async function applyCourseDocumentPatch(deps: CoreDeps, actor: ActorConte
   course.documentRevision++; course.updatedAt = nowIso();
   for (const entry of old.entries) if (oldVisibleIds.has(entry.id) && !used.has(entry.id)) state.tombstones[`entry:${entry.id}`] = entry.revision + 1;
   for (const chapter of removedChapters) state.tombstones[`chapter:${chapter.id}`] = chapter.revision + 1;
-  const referenceCourses = rewriteRenamedReferences(state, before);
+  const referenceCourses = rewriteRenamedReferences(state, before, headingRenames);
   for (const other of state.courses) if (referenceCourses.has(other.id) && other.id !== request.courseId) { other.documentRevision++; other.updatedAt = nowIso(); }
   const deletion = changes.some((change) => change.to > change.from && change.insert.length < change.to - change.from);
   const snapshotId = takeSnapshot(state, before, actor, deletion ? 'delete' : 'edit', deletion);
@@ -321,50 +353,53 @@ export function workspaceLinkTargets(state: WorkspaceState): LinkTarget[] {
       aliases: [course.title, ...(Array.isArray(course.properties.aliases) ? course.properties.aliases.filter((item): item is string => typeof item === 'string') : [])],
       headings: [
         ...document.chapters.filter((chapter) => !chapter.detached).map((chapter) => ({ depth: 2, text: chapter.title, from: 0, to: 0, contentFrom: 0, contentTo: 0, path: [chapter.title], courseChapterId: chapter.id })),
-        ...document.entries.flatMap((entry) => parseMarkdown(entry.markdown).headings.map((heading) => ({ ...heading, path: [...(document.chapters.find((chapter) => chapter.id === entry.courseChapterId) ? [document.chapters.find((chapter) => chapter.id === entry.courseChapterId)!.title] : []), ...heading.path], courseChapterId: entry.courseChapterId, entryId: entry.id }))),
+        ...document.entries.flatMap((entry) => parseWorkspaceMarkdown(entry.markdown).headings.map((heading) => ({ ...heading, path: [...(document.chapters.find((chapter) => chapter.id === entry.courseChapterId) ? [document.chapters.find((chapter) => chapter.id === entry.courseChapterId)!.title] : []), ...heading.path], courseChapterId: entry.courseChapterId, entryId: entry.id }))),
       ],
       blocks: document.entries.flatMap((entry) => entry.blocks.map((block) => ({ ...block, type: 'paragraph', text: entry.markdown.slice(block.from, block.to), entryId: entry.id, courseChapterId: entry.courseChapterId }))),
     };
   });
 }
 
-function currentTarget(target: EngineLocation, before: WorkspaceState, after: WorkspaceState, newTargets: LinkTarget[]): EngineLocation | null {
+function currentTarget(target: EngineLocation, before: WorkspaceState, after: WorkspaceState, newTargets: LinkTarget[], headingRenames: Map<string, { entryId: string; path: string[] }>): EngineLocation | null {
   if (target.blockId) {
     const entry = after.entries.find((value) => value.blocks.some((block) => block.id === target.blockId));
     return entry ? { ...target, courseId: entry.courseId, courseChapterId: entry.courseChapterId, entryId: entry.id } : null;
   }
   if (target.entryId) {
-    const entry = after.entries.find((value) => value.id === target.entryId);
+    const oldEntry = before.entries.find((value) => value.id === target.entryId);
+    const oldHeading = target.headingPath ? parseWorkspaceMarkdown(oldEntry?.markdown ?? '').headings.find((heading) => heading.path.every((part, index) => target.headingPath![target.headingPath!.length - heading.path.length + index] === part)) : undefined;
+    const exactHeading = oldHeading ? newTargets.flatMap((value) => value.headings ?? []).find((heading) => heading.entryId === target.entryId && oldHeading.path.every((part, index) => heading.path[heading.path.length - oldHeading.path.length + index] === part)) : undefined;
+    const renamed = oldHeading && !exactHeading ? headingRenames.get(`${target.entryId}:${oldHeading.path.join('\0')}`) : undefined;
+    const entry = after.entries.find((value) => value.id === (renamed?.entryId ?? target.entryId));
     if (!entry) return null;
     let headingPath = target.headingPath;
     if (headingPath) {
-      const oldEntry = before.entries.find((value) => value.id === target.entryId);
-      const oldHeadings = parseMarkdown(oldEntry?.markdown ?? '').headings;
-      const newHeadings = parseMarkdown(entry.markdown).headings;
-      const index = oldHeadings.findIndex((heading) => heading.path.at(-1) === headingPath!.at(-1));
-      const heading = oldHeadings.length === newHeadings.length ? newHeadings[index] : newHeadings.find((value) => value.path.at(-1) === headingPath!.at(-1));
+      const local = renamed?.path ?? oldHeading?.path;
+      const heading = newTargets.find((value) => value.courseId === entry.courseId)?.headings?.find((value) => value.entryId === entry.id && local?.every((part, index) => value.path[value.path.length - local.length + index] === part));
       if (!heading) return null;
-      headingPath = newTargets.find((value) => value.courseId === entry.courseId)?.headings?.find((value) => value.entryId === entry.id && value.path.at(-1) === heading.path.at(-1))?.path;
+      headingPath = heading.path;
     }
-    return { ...target, courseId: entry.courseId, courseChapterId: entry.courseChapterId, headingPath };
+    return { ...target, courseId: entry.courseId, entryId: entry.id, courseChapterId: entry.courseChapterId, headingPath };
   }
   if (target.courseChapterId && !after.chapters.some((value) => value.id === target.courseChapterId)) return null;
   return target;
 }
 
 /** Rewrite only references that previously resolved to an identity which still exists. */
-function rewriteRenamedReferences(state: WorkspaceState, before: WorkspaceContent): Set<string> {
+function rewriteRenamedReferences(state: WorkspaceState, before: WorkspaceContent, headingRenames: Map<string, { entryId: string; path: string[] }> = new Map()): Set<string> {
   const oldState = { ...state, ...before };
   const oldTargets = workspaceLinkTargets(oldState); const newTargets = workspaceLinkTargets(state);
   const affected = new Set<string>();
   const rewrite = (markdown: string, courseId: string, entryId?: string, courseChapterId?: string | null, contextMoved = false): string => {
-    const edits = parseMarkdown(markdown).links.flatMap((reference) => {
+    const edits = parseWorkspaceMarkdown(markdown).links.flatMap((reference) => {
       const resolved = resolveKnowledgeLink({ courseId, entryId, courseChapterId }, reference.target, oldTargets);
       if (resolved.status !== 'resolved') return [];
-      const target = currentTarget(resolved.target, oldState, state, newTargets); if (!target) return [];
+      const target = currentTarget(resolved.target, oldState, state, newTargets, headingRenames); if (!target) return [];
       const oldCanonical = formatLinkTarget(resolved.target, oldTargets); const canonical = formatLinkTarget(target, newTargets);
       const renamedCourse = oldState.courses.find((value) => value.id === target.courseId)?.title !== state.courses.find((value) => value.id === target.courseId)?.title;
-      return oldCanonical !== canonical || renamedCourse || contextMoved ? [{ reference, target: canonical }] : [];
+      const oldTitle = oldState.courses.find((value) => value.id === resolved.target.courseId)?.title;
+      const newTitle = state.courses.find((value) => value.id === target.courseId)?.title;
+      return oldCanonical !== canonical || renamedCourse || contextMoved ? [{ reference, target: canonical, ...(renamedCourse && oldTitle && newTitle ? { oldDefaultLabel: oldTitle, newDefaultLabel: newTitle } : {}) }] : [];
     });
     return edits.length ? rewriteReferences(markdown, edits) : markdown;
   };
@@ -379,7 +414,7 @@ function rewriteRenamedReferences(state: WorkspaceState, before: WorkspaceConten
     const oldEntry = 'markdown' in object ? before.entries.find((value) => value.id === object.id) : undefined;
     const rewritten = rewrite(text, oldEntry?.courseId ?? courseId, 'markdown' in object ? object.id : undefined, 'conceptId' in object ? object.id : 'courseChapterId' in object ? object.courseChapterId : null, oldEntry !== undefined && oldEntry.courseId !== courseId);
     if (rewritten !== text) {
-      object.properties = parseMarkdown(rewritten).properties;
+      object.properties = parseWorkspaceMarkdown(rewritten).properties;
       if ('revision' in object) object.revision++;
       affected.add(courseId);
     }
@@ -429,7 +464,7 @@ export async function moveSourceAssignments(deps: CoreDeps, actor: ActorContext,
   for (const entry of state.entries) {
     const previous = before.entries.find((value) => value.id === entry.id)!;
     const oldContext = oldLocations.get(entry.id) ?? { courseId: previous.courseId, courseChapterId: previous.courseChapterId };
-    const parsed = parseMarkdown(previous.markdown);
+    const parsed = parseWorkspaceMarkdown(previous.markdown);
     const rewrites = parsed.links.flatMap((reference) => {
       const resolution = resolveKnowledgeLink({ ...oldContext, entryId: entry.id }, reference.target, oldTargets);
       if (resolution.status !== 'resolved') return [];
@@ -451,7 +486,7 @@ export async function moveSourceAssignments(deps: CoreDeps, actor: ActorContext,
     if (ids.has(entry.id)) for (const block of entry.blocks) {
       const oldBlock = previous.blocks.find((value) => value.id === block.id);
       if (oldBlock && oldBlock.alias !== block.alias) {
-        const parsedBlock = parseMarkdown(rewritten).blocks.find((value) => value.alias === oldBlock.alias);
+        const parsedBlock = parseWorkspaceMarkdown(rewritten).blocks.find((value) => value.alias === oldBlock.alias);
         if (!parsedBlock) throw knowledgeError('conflict', 'Block alias reference rewrite failed');
         const at = rewritten.lastIndexOf(`^${oldBlock.alias}`, parsedBlock.to);
         rewritten = rewritten.slice(0, at + 1) + block.alias + rewritten.slice(at + 1 + oldBlock.alias.length);

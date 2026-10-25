@@ -130,3 +130,60 @@ it('atomically rewrites resolved course/heading/block/property references on ren
   expect(incoming.properties.citation).toContain(`${a.id}#^new|property alias`);
   expect((await repository.findNode(a.id, 'u'))!.title).toBe('Py');
 });
+
+it('reserves existing block aliases when inserting a new alias before them', async () => {
+  const { repository, deps, actor, a, b } = await workspaceFixture();
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: a.id, chapterId: null, content: 'old body ^old' });
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: b.id, chapterId: null, content: `[[${a.id}#^old]]` });
+  let doc = await getCourseDocument(deps, actor, a.id);
+  const blockId = doc.entries[0].blocks[0].id; const entry = doc.entries[0]; const from = doc.projection.find((range) => range.entryId === entry.id)!.from;
+  await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from, to: from, insert: 'new body ^new\n\n' }], requestId: 'insert-new-block' });
+  doc = await getCourseDocument(deps, actor, a.id);
+  expect(doc.entries.flatMap((value) => value.blocks).find((block) => block.alias === 'old')!.id).toBe(blockId);
+  expect(doc.entries.flatMap((value) => value.blocks).find((block) => block.alias === 'new')!.id).not.toBe(blockId);
+  expect((await getCourseDocument(deps, actor, b.id)).entries[0].markdown).toContain('#^old');
+});
+
+it('preserves H3 link targets when headings reorder within one entry', async () => {
+  const { repository, deps, actor, a, b } = await workspaceFixture();
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: a.id, chapterId: null, content: '### Alpha\n\na\n\n### Beta\n\nb' });
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: b.id, chapterId: null, content: `[[${a.id}#Beta]]` });
+  const doc = await getCourseDocument(deps, actor, a.id); const entry = doc.entries[0]; const span = doc.projection.find((range) => range.entryId === entry.id)!;
+  await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from: span.from, to: span.to, insert: '### Beta\n\nb\n\n### Alpha\n\na' }], requestId: 'reorder-h3' });
+  expect((await getCourseDocument(deps, actor, b.id)).entries[0].markdown).toContain('#Beta');
+});
+
+it('keeps quoted/list H2 headings inside the same entry and leaves course structure unchanged', async () => {
+  const { repository, deps, actor, a } = await workspaceFixture();
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: a.id, chapterId: null, content: 'body' });
+  const doc = await getCourseDocument(deps, actor, a.id); const entry = doc.entries[0]; const span = doc.projection.find((range) => range.entryId === entry.id)!;
+  const text = '> ## Quote heading\n> quoted body\n\n- ## List heading\n  list body';
+  const result = await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from: span.from, to: span.to, insert: text }], requestId: 'nested-h2' });
+  expect(result.documents[0].chapters).toHaveLength(doc.chapters.length);
+  expect(result.documents[0].entries[0].markdown).toBe(text);
+});
+
+it('retains old H2 instance when a new H2 is inserted at exactly its start', async () => {
+  const { repository, deps, actor, a, b, shared } = await workspaceFixture();
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: a.id, chapterId: shared.id, content: 'old chapter body' });
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: b.id, chapterId: null, content: `[[${a.id}#Variables]]` });
+  const doc = await getCourseDocument(deps, actor, a.id); const chapter = doc.chapters[0]; const at = doc.projection.find((range) => range.kind === 'chapter')!.from;
+  const result = await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: {}, changes: [{ from: at, to: at, insert: '## New\n\n' }], requestId: 'insert-new-h2' });
+  expect(result.documents[0].chapters.find((value) => value.title === 'Variables')!.id).toBe(chapter.id);
+  expect(result.documents[0].chapters.find((value) => value.title === 'New')!.id).not.toBe(chapter.id);
+  expect((await getCourseDocument(deps, actor, b.id)).entries[0].markdown).toContain('#Variables');
+});
+
+it('isolates malformed legacy YAML, preserves its exact text and keeps every course editable', async () => {
+  const { repository, deps, actor, a, b } = await workspaceFixture();
+  const invalid = '---\ninvalid: [unterminated\n---\nOriginal body';
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: a.id, chapterId: null, content: invalid });
+  await repository.saveKnowledgeNote({ userId: 'u', topicId: b.id, chapterId: null, content: 'valid body' });
+  expect((await getCourseDocument(deps, actor, b.id)).entries[0].markdown).toBe('valid body');
+  let doc = await getCourseDocument(deps, actor, a.id);
+  expect(doc.entries[0].markdown).toBe(invalid);
+  expect((await loadWorkspace(deps, actor)).migration.unconfirmed.some((value) => value.includes('invalid-frontmatter'))).toBe(true);
+  const entry = doc.entries[0]; const range = doc.projection.find((value) => value.entryId === entry.id)!;
+  doc = (await applyCourseDocumentPatch(deps, actor, { courseId: a.id, baseDocumentRevision: doc.documentRevision, entryRevisions: { [entry.id]: entry.revision }, changes: [{ from: range.to, to: range.to, insert: ' edited' }], requestId: 'edit-invalid-yaml' })).documents[0];
+  expect(doc.entries[0].markdown).toBe(invalid + ' edited');
+});
