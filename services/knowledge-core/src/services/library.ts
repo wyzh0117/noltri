@@ -67,13 +67,14 @@ async function toLibraryItem(
   repository: KnowledgeRepository,
   source: RawSource,
   userId: string,
+  vault?: KnowledgeCore['deps']['vault'],
 ): Promise<LibraryItem> {
   const metadata = metadataFor(source);
   const points = await repository.listKnowledgeItemsForSource(source.id, userId);
   const summary = points.find((item) => item.summary)?.summary ?? null;
   return {
     id: source.id,
-    content: source.rawText,
+    content: await vault?.sourceBody(source.id) ?? source.rawText,
     summary,
     kind: metadata.kind ?? (source.sourceUrl !== null && source.sourceType === 'web' ? 'web_page' : 'knowledge'),
     source: {
@@ -172,7 +173,7 @@ export async function listLibraryItems(
       let item: LibraryItem | undefined;
       if (needle !== undefined) {
         // ponytail: full scan keeps the existing schema and repository API; add indexed search only if collection size makes this slow.
-        item = await toLibraryItem(core.deps.repository, source, actor.userId);
+        item = await toLibraryItem(core.deps.repository, source, actor.userId, core.deps.vault);
         if (!searchText(item).includes(needle)) continue;
       }
       matched.push({ source, ...(item === undefined ? {} : { item }) });
@@ -183,14 +184,14 @@ export async function listLibraryItems(
   }
 
   const selected = matched.slice(offset, offset + limit);
-  const items = await Promise.all(selected.map(({ source, item }) => item ?? toLibraryItem(core.deps.repository, source, actor.userId)));
+  const items = await Promise.all(selected.map(({ source, item }) => item ?? toLibraryItem(core.deps.repository, source, actor.userId, core.deps.vault)));
   return { items, limit, offset };
 }
 
 export async function readLibraryItem(core: KnowledgeCore, actor: ActorContext, id: string): Promise<LibraryItem> {
   const source = await core.deps.repository.findRawSource(id, actor.userId);
   if (!source || isArchived(source)) throw knowledgeError('not_found', `收集条目 ${id} 不存在`);
-  return toLibraryItem(core.deps.repository, source, actor.userId);
+  return toLibraryItem(core.deps.repository, source, actor.userId, core.deps.vault);
 }
 
 export async function createLibraryItem(
@@ -233,6 +234,9 @@ export async function createLibraryItem(
   }
   if (input.subjectPath && input.subjectPath.length > 0) {
     await setSubjectPath(core.deps.repository, result.rawSourceId, actor, input.subjectPath);
+  }
+  if (result.duplicate || (input.subjectPath?.length ?? 0) > 0) {
+    await core.deps.vault?.syncSource(result.rawSourceId, actor.userId);
   }
   return { item: await readLibraryItem(core, actor, result.rawSourceId) };
 }
@@ -279,6 +283,8 @@ export async function patchLibraryItem(
     }
   }
   if (patch.subjectPath !== undefined) await setSubjectPath(repository, id, actor, patch.subjectPath);
+  await core.deps.vault?.syncSource(id, actor.userId);
+  if (patch.content !== undefined) await core.deps.vault?.replaceLibraryContent(id, patch.content, actor.userId);
   return { item: await readLibraryItem(core, actor, id) };
 }
 
@@ -365,7 +371,7 @@ export async function archiveLibraryItem(core: KnowledgeCore, actor: ActorContex
   const repository = core.deps.repository;
   const source = await repository.findRawSource(id, actor.userId);
   if (!source) throw knowledgeError('not_found', `收集条目 ${id} 不存在`);
-  if (isArchived(source)) return { item: await toLibraryItem(repository, source, actor.userId) };
+  if (isArchived(source)) return { item: await toLibraryItem(repository, source, actor.userId, core.deps.vault) };
   const metadata = metadataFor(source);
   const points = await repository.listKnowledgeItemsForSource(id, actor.userId);
   const archivedLinks = [];
@@ -384,7 +390,8 @@ export async function archiveLibraryItem(core: KnowledgeCore, actor: ActorContex
     metadata: { ...source.metadata, library: { ...metadata, subjectPath, archivedLinks, archivedAt: nowIso() } },
   });
   for (const point of points) await repository.unlinkItemFromNodes(point.id, actor.userId);
-  return { item: await toLibraryItem(core.deps.repository, updated, actor.userId) };
+  await core.deps.vault?.syncSource(id, actor.userId);
+  return { item: await toLibraryItem(core.deps.repository, updated, actor.userId, core.deps.vault) };
 }
 
 export async function restoreLibraryItem(core: KnowledgeCore, actor: ActorContext, id: string): Promise<{ item: LibraryItem }> {
@@ -407,7 +414,8 @@ export async function restoreLibraryItem(core: KnowledgeCore, actor: ActorContex
       confidence: link.confidence,
     });
   }
-  return { item: await toLibraryItem(core.deps.repository, updated, actor.userId) };
+  await core.deps.vault?.syncSource(id, actor.userId);
+  return { item: await toLibraryItem(core.deps.repository, updated, actor.userId, core.deps.vault) };
 }
 
 async function requireActiveSource(core: KnowledgeCore, actor: ActorContext, id: string): Promise<RawSource> {

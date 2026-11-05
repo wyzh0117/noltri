@@ -8,6 +8,7 @@ export const vaultEntrySchema = z.object({
   ctime: z.number().optional(),
   mtime: z.number().optional(),
   size: z.number().optional(),
+  frontmatter: z.record(z.string(), z.unknown()).optional(),
 });
 export type VaultEntry = z.infer<typeof vaultEntrySchema>;
 
@@ -19,7 +20,10 @@ export const vaultSnapshotSchema = z.object({
 export type VaultSnapshot = z.infer<typeof vaultSnapshotSchema>;
 
 export const vaultLinkFormatSchema = z.enum(['absolute', 'relative', 'shortest']);
-export const vaultSettingsSchema = z.object({ newLinkFormat: vaultLinkFormatSchema });
+export const vaultPropertyTypeSchema = z.enum(['text', 'number', 'boolean', 'list', 'yaml']);
+export const vaultPropertyTypesSchema = z.record(z.string(), vaultPropertyTypeSchema);
+export type VaultPropertyTypes = z.infer<typeof vaultPropertyTypesSchema>;
+export const vaultSettingsSchema = z.object({ newLinkFormat: vaultLinkFormatSchema, propertyTypes: vaultPropertyTypesSchema.optional() });
 export type VaultSettings = z.infer<typeof vaultSettingsSchema>;
 export const updateVaultSettingsRequestSchema = vaultSettingsSchema;
 export type UpdateVaultSettingsRequest = z.infer<typeof updateVaultSettingsRequestSchema>;
@@ -121,7 +125,7 @@ export const noteLinksResponseSchema = z.object({
   unresolvedLinks: z.record(z.string(), z.record(z.string(), z.number().int())),
 });
 export type NoteLinksResponse = z.infer<typeof noteLinksResponseSchema>;
-export const noteBacklinksResponseSchema = z.object({ backlinks: z.array(z.object({ sourcePath: z.string(), count: z.number().int(), positions: z.array(notePositionSchema) })) });
+export const noteBacklinksResponseSchema = z.object({ revision: z.number().int(), backlinks: z.array(z.object({ sourcePath: z.string(), count: z.number().int(), positions: z.array(notePositionSchema) })) });
 export type NoteBacklinksResponse = z.infer<typeof noteBacklinksResponseSchema>;
 
 export const vaultGraphNodeSchema = z.object({

@@ -12,6 +12,21 @@ export interface GraphViewport {
   height: number;
 }
 
+const CAMERA_RETENTION_PER_FRAME = 0.85;
+const REFERENCE_FRAME_MS = 1000 / 60;
+
+export function interpolateGraphCamera(current: GraphCamera, target: GraphCamera, elapsedMs: number): GraphCamera {
+  const amount = 1 - CAMERA_RETENTION_PER_FRAME ** (Math.max(0, elapsedMs) / REFERENCE_FRAME_MS);
+  const next = {
+    x: current.x + (target.x - current.x) * amount,
+    y: current.y + (target.y - current.y) * amount,
+    scale: current.scale + (target.scale - current.scale) * amount,
+  };
+  return Math.abs(target.x - next.x) < 0.01 && Math.abs(target.y - next.y) < 0.01 && Math.abs(target.scale - next.scale) < 0.0001
+    ? target
+    : next;
+}
+
 export type GraphLabelMode = 'auto' | 'show' | 'hide';
 
 export function graphPointToScreen(point: GraphPoint, camera: GraphCamera, viewport: GraphViewport): GraphPoint {
@@ -35,16 +50,22 @@ export function graphSegmentCoordinatesVisibleInViewport(x0: number, y0: number,
   const dy = y1 - y0;
   let first = 0;
   let last = 1;
-  for (const [p, q] of [[-dx, x0 - left], [dx, right - x0], [-dy, y0 - top], [dy, bottom - y0]]) {
-    if (p === 0) {
-      if (q < 0) return false;
-      continue;
-    }
-    const ratio = q / p;
-    if (p < 0) first = Math.max(first, ratio);
-    else last = Math.min(last, ratio);
-    if (first > last) return false;
-  }
+  let p = -dx;
+  let q = x0 - left;
+  if (p === 0) { if (q < 0) return false; }
+  else { const ratio = q / p; if (p < 0) first = Math.max(first, ratio); else last = Math.min(last, ratio); if (first > last) return false; }
+  p = dx;
+  q = right - x0;
+  if (p === 0) { if (q < 0) return false; }
+  else { const ratio = q / p; if (p < 0) first = Math.max(first, ratio); else last = Math.min(last, ratio); if (first > last) return false; }
+  p = -dy;
+  q = y0 - top;
+  if (p === 0) { if (q < 0) return false; }
+  else { const ratio = q / p; if (p < 0) first = Math.max(first, ratio); else last = Math.min(last, ratio); if (first > last) return false; }
+  p = dy;
+  q = bottom - y0;
+  if (p === 0) { if (q < 0) return false; }
+  else { const ratio = q / p; if (p < 0) first = Math.max(first, ratio); else last = Math.min(last, ratio); if (first > last) return false; }
   return true;
 }
 
@@ -61,8 +82,42 @@ export function cameraForFit(nodes: readonly GraphViewNode[], positions: Readonl
   const bottom = Math.max(...points.map((point) => point.y));
   const width = Math.max(1, right - left);
   const height = Math.max(1, bottom - top);
-  const scale = Math.min(8, Math.max(1 / 128, (Math.min(viewport.width, viewport.height) - 72) / Math.max(width, height)));
-  return { x: -((left + right) / 2) * scale, y: -((top + bottom) / 2) * scale, scale };
+  let scale = Math.min(8, (Math.min(viewport.width, viewport.height) - 72) / Math.max(width, height));
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const radius = Math.max(2, ...nodes.map((node) => node.size * Math.sqrt(Math.max(1 / 128, scale)) / 2));
+    const labelWidth = Math.max(0, ...nodes.map((node) => Math.min(320, node.title.length * 12)));
+    const horizontalPadding = radius * 2 + labelWidth + 7;
+    const verticalPadding = radius * 2;
+    scale = Math.min(
+      8,
+      (viewport.width - 72 - horizontalPadding) / width,
+      (viewport.height - 72 - verticalPadding) / height,
+    );
+  }
+  scale = Math.max(1 / 128, scale);
+  const radius = Math.max(2, ...nodes.map((node) => node.size * Math.sqrt(Math.max(1 / 128, scale)) / 2));
+  const labelWidth = Math.max(0, ...nodes.map((node) => Math.min(320, node.title.length * 12)));
+  const leftPadding = radius;
+  const rightPadding = radius + 7 + labelWidth;
+  return {
+    x: -((left + right) / 2) * scale + (leftPadding - rightPadding) / 2,
+    y: -((top + bottom) / 2) * scale,
+    scale,
+  };
+}
+
+export function cameraForInitialGraphFit(
+  nodes: readonly GraphViewNode[],
+  positions: Readonly<Record<string, GraphPoint>>,
+  viewport: GraphViewport,
+  layoutSettled: boolean,
+): GraphCamera | null {
+  if (!layoutSettled || nodes.length === 0 || viewport.width <= 0 || viewport.height <= 0) return null;
+  if (nodes.some((node) => {
+    const point = positions[node.id];
+    return point === undefined || !Number.isFinite(point.x) || !Number.isFinite(point.y);
+  })) return null;
+  return cameraForFit(nodes, positions, viewport);
 }
 
 export function zoomCameraAt(
@@ -84,14 +139,6 @@ export function graphNodeScreenRadius(node: GraphViewNode, scale: number): numbe
   return Math.max(2, node.size * Math.sqrt(Math.max(1 / 128, scale)) / 2);
 }
 
-function cellKeys(left: number, top: number, right: number, bottom: number, cellSize: number): string[] {
-  const keys: string[] = [];
-  for (let y = Math.floor(top / cellSize); y <= Math.floor(bottom / cellSize); y += 1) {
-    for (let x = Math.floor(left / cellSize); x <= Math.floor(right / cellSize); x += 1) keys.push(`${x},${y}`);
-  }
-  return keys;
-}
-
 export function resolveGraphLabelIds(
   nodes: readonly GraphViewNode[],
   positions: Readonly<Record<string, GraphPoint>>,
@@ -100,35 +147,56 @@ export function resolveGraphLabelIds(
   mode: GraphLabelMode,
   pinnedIds: ReadonlySet<string>,
   measureText: (text: string) => number,
+  alreadySorted = false,
 ): Set<string> {
-  const available = nodes.filter((node) => positions[node.id] !== undefined);
-  if (mode === 'hide') return new Set(available.filter((node) => pinnedIds.has(node.id)).map((node) => node.id));
-  const candidates = [...available].sort((left, right) => {
-    if (pinnedIds.has(left.id) && !pinnedIds.has(right.id)) return -1;
-    if (pinnedIds.has(right.id) && !pinnedIds.has(left.id)) return 1;
-    return right.degree - left.degree || left.id.localeCompare(right.id);
-  });
-  const budget = mode === 'show' ? candidates.length : Math.max(pinnedIds.size, Math.floor(viewport.width * viewport.height / 5000));
+  const available = alreadySorted ? nodes : nodes.filter((node) => positions[node.id] !== undefined).sort((left, right) => right.degree - left.degree || left.id.localeCompare(right.id));
+  if (mode === 'hide') return new Set(available.filter((node) => positions[node.id] !== undefined && pinnedIds.has(node.id)).map((node) => node.id));
+  if (mode === 'show') return new Set(available.filter((node) => positions[node.id] !== undefined).map((node) => node.id));
+  const budget = Math.max(pinnedIds.size, Math.floor(viewport.width * viewport.height / 5000));
   const occupied = new Map<string, Array<{ left: number; right: number; top: number; bottom: number }>>();
   const result = new Set<string>();
   const cellSize = 80;
 
-  for (const node of candidates) {
-    if (result.size >= budget && !pinnedIds.has(node.id)) break;
-    const point = graphPointToScreen(positions[node.id]!, camera, viewport);
-    const left = point.x + graphNodeScreenRadius(node, camera.scale) + 7;
-    const top = point.y - 9;
+  const place = (node: GraphViewNode, force: boolean): void => {
+    const point = positions[node.id];
+    if (point === undefined) return;
+    const left = viewport.width / 2 + camera.x + point.x * camera.scale + graphNodeScreenRadius(node, camera.scale) + 7;
+    const top = viewport.height / 2 + camera.y + point.y * camera.scale - 9;
     const box = { left, right: left + Math.max(8, Math.min(280, measureText(node.title))) + 4, top, bottom: top + 18 };
-    const keys = cellKeys(box.left - 5, box.top - 3, box.right + 5, box.bottom + 3, cellSize);
-    const overlaps = keys.some((key) => (occupied.get(key) ?? []).some((other) =>
-      box.left < other.right + 5 && box.right + 5 > other.left && box.top < other.bottom + 3 && box.bottom + 3 > other.top));
-    if (overlaps && mode === 'auto' && !pinnedIds.has(node.id)) continue;
-    result.add(node.id);
-    for (const key of keys) {
-      const bucket = occupied.get(key);
-      if (bucket === undefined) occupied.set(key, [box]);
-      else bucket.push(box);
+    const firstCellX = Math.floor((box.left - 5) / cellSize);
+    const lastCellX = Math.floor((box.right + 5) / cellSize);
+    const firstCellY = Math.floor((box.top - 3) / cellSize);
+    const lastCellY = Math.floor((box.bottom + 3) / cellSize);
+    let overlaps = false;
+    for (let y = firstCellY; y <= lastCellY && !overlaps; y += 1) {
+      for (let x = firstCellX; x <= lastCellX && !overlaps; x += 1) {
+        const bucket = occupied.get(`${x},${y}`);
+        if (bucket === undefined) continue;
+        for (const other of bucket) {
+          if (box.left < other.right + 5 && box.right + 5 > other.left && box.top < other.bottom + 3 && box.bottom + 3 > other.top) {
+            overlaps = true;
+            break;
+          }
+        }
+      }
     }
+    if (overlaps && !force) return;
+    result.add(node.id);
+    for (let y = firstCellY; y <= lastCellY; y += 1) {
+      for (let x = firstCellX; x <= lastCellX; x += 1) {
+        const key = `${x},${y}`;
+        const bucket = occupied.get(key);
+        if (bucket === undefined) occupied.set(key, [box]);
+        else bucket.push(box);
+      }
+    }
+  };
+
+  for (const node of available) if (pinnedIds.has(node.id)) place(node, true);
+  for (const node of available) {
+    if (pinnedIds.has(node.id)) continue;
+    if (result.size >= budget) break;
+    place(node, false);
   }
   return result;
 }

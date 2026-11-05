@@ -13,6 +13,8 @@ import { extractSubpath, parseWikiLink, rangeIntersectsToken, safeNoteHref } fro
 import type { TextRange } from './notes-model';
 import 'katex/dist/katex.min.css';
 
+export interface SourceJumpRequest { requestId: number; sourceOffset: number }
+
 export interface NotesEditorProps {
   value: string;
   mode: 'live' | 'source';
@@ -31,6 +33,7 @@ export interface NotesEditorProps {
   onHoverLink?: (target: string, anchor: DOMRect, sourcePath?: string, kind?: LinkKind) => void;
   onLeaveLink?: () => void;
   onCursorChange?: (offset: number) => void;
+  jumpToSource?: SourceJumpRequest | null;
 }
 
 export type LinkKind = 'wikilink' | 'markdown';
@@ -932,7 +935,7 @@ function contextKeyForResolution(key: string | number): string | number {
 
 export function NotesEditor({
   value, mode, readOnly = false, searchRanges = [], sourcePath = '', trustedHtml = false, trustMermaid = false, linkResolutionKey = '', onTrustMermaid, onChange, onOpenLink, onResolveLink, onLoadNote, onLoadAsset,
-  onHoverLink, onLeaveLink, onCursorChange,
+  onHoverLink, onLeaveLink, onCursorChange, jumpToSource,
 }: NotesEditorProps): ReactElement {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -942,6 +945,9 @@ export function NotesEditor({
   const lineSeparatorRef = useRef(lineSeparatorForSource(value));
   const sourcePathRef = useRef(sourcePath);
   const lineSeparatorCompartment = useRef(new Compartment()).current;
+  const markdownCompartment = useRef(new Compartment()).current;
+  // ponytail: large live-preview notes keep custom decorations and skip the full-paragraph Lezer pass; source mode restores full Markdown syntax support.
+  const useMarkdownSyntax = mode === 'source' || value.length < 64 * 1024;
   const callbacksRef = useRef({ onChange, onOpenLink, onResolveLink, onLoadNote, onLoadAsset, onHoverLink, onLeaveLink, onCursorChange, onTrustMermaid, sourcePath, readOnly, linkResolutionKey });
   callbacksRef.current = { onChange, onOpenLink, onResolveLink, onLoadNote, onLoadAsset, onHoverLink, onLeaveLink, onCursorChange, onTrustMermaid, sourcePath, readOnly, linkResolutionKey };
   const widgetPropsRef = useRef<Omit<WidgetProps, 'token'> | null>(null);
@@ -975,7 +981,7 @@ export function NotesEditor({
       doc: normalizeEditorDocument(value, lineSeparatorRef.current),
       extensions: [
         lineSeparatorCompartment.of(EditorState.lineSeparator.of(lineSeparatorRef.current)),
-        markdown(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), notesSearchRangesField,
+        markdownCompartment.of(useMarkdownSyntax ? markdown() : []), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), notesSearchRangesField,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const source = serializeEditorDocument(update.state);
@@ -1049,6 +1055,10 @@ export function NotesEditor({
   }, [value, sourcePath, lineSeparatorCompartment]);
 
   useEffect(() => {
+    viewRef.current?.dispatch({ effects: markdownCompartment.reconfigure(useMarkdownSyntax ? markdown() : []) });
+  }, [useMarkdownSyntax, markdownCompartment]);
+
+  useEffect(() => {
     viewRef.current?.dispatch({ effects: setNotesSearchRanges.of(sourceRangesToEditorRanges(valueRef.current, searchRanges)) });
   }, [searchRanges]);
 
@@ -1069,6 +1079,15 @@ export function NotesEditor({
       EditorView.contentAttributes.of({ 'aria-readonly': String(readOnly) }),
     ]) });
   }, [readOnly, readOnlyCompartment]);
+
+  useEffect(() => {
+    if (jumpToSource === null || jumpToSource === undefined) return;
+    const view = viewRef.current;
+    if (view === null) return;
+    const position = Math.max(0, Math.min(view.state.doc.length, sourceOffsetToEditorOffset(valueRef.current, jumpToSource.sourceOffset)));
+    view.dispatch({ selection: { anchor: position }, effects: EditorView.scrollIntoView(position, { y: 'center' }) });
+    view.focus();
+  }, [jumpToSource?.requestId, sourcePath]);
 
   return <div className="vault-live-editor" ref={mountRef} data-mode={mode} />;
 }

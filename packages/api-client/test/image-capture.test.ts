@@ -1,0 +1,8 @@
+import { describe, expect, it } from 'vitest';
+import { ApiClient, ApiClientError } from '../src/client';
+function fixture() { const calls: { url: string; method: string; body: unknown }[] = []; const client = new ApiClient({ baseUrl: 'http://core.local', fetchImpl: (async (url, init) => { calls.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null }); return new Response(JSON.stringify({ batchId: 'b', sessionId: 's', items: [], createdAt: '2026', updatedAt: '2026' }), { status: 200 }); }) as typeof fetch }); return { client, calls }; }
+describe('image processing client', () => {
+ it('encodes historical batch ID and sends an optional bounded item selection', async () => { const { client, calls } = fixture(); await client.processCaptureBatch('batch /1', { requestIds: ['image-request'] }); expect(calls).toEqual([{ url: 'http://core.local/api/capture/batches/batch%20%2F1/process', method: 'POST', body: { requestIds: ['image-request'] } }]); });
+ it('rejects duplicate or empty selected IDs before a request', () => { const { client, calls } = fixture(); expect(() => client.processCaptureBatch('b', { requestIds: [] })).toThrow(ApiClientError); expect(() => client.processCaptureBatch('b', { requestIds: ['image-request', 'image-request'] })).toThrow(ApiClientError); expect(calls).toEqual([]); });
+ it('requests the separately labelled recognition DTO without changing rawSource', async () => { const { client, calls } = fixture(); await expect(client.captureRecognition('source /1')).rejects.toThrow(ApiClientError); expect(calls[0]).toEqual({ url: 'http://core.local/api/inbox/source%20%2F1/recognition', method: 'GET', body: null }); });
+});

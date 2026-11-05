@@ -1,4 +1,5 @@
-import { cosineSimilarity, deriveTitle, normalizeKnowledgeText, splitSentences, truncate, uniqueTokens } from '@noltri/shared';
+import { knowledgeError, cosineSimilarity, deriveTitle, normalizeKnowledgeText, splitSentences, truncate, uniqueTokens } from '@noltri/shared';
+import { validateProcessingInstructions } from './prompts';
 import type {
   AIProvider,
   ChatInput,
@@ -43,6 +44,9 @@ export class OfflineDeterministicProvider implements AIProvider {
   }
 
   async extractKnowledge(input: ExtractInput): Promise<ExtractResult> {
+    if (validateProcessingInstructions(input.instructions) !== undefined) {
+      throw knowledgeError('invalid_request', 'Processing instructions are unsupported by the offline provider');
+    }
     const maxItems = input.maxItems ?? 6;
     const sentences = splitSentences(normalizeKnowledgeText(input.text));
     const items = sentences.slice(0, maxItems).map((sentence) => {
@@ -64,6 +68,9 @@ export class OfflineDeterministicProvider implements AIProvider {
   }
 
   async classifyKnowledge(input: ClassifyInput): Promise<ClassifyResult> {
+    if (validateProcessingInstructions(input.instructions) !== undefined) {
+      throw knowledgeError('invalid_request', 'Processing instructions are unsupported by the offline provider');
+    }
     const scored = input.candidates
       .map((candidate) => {
         const haystack = [candidate.title, candidate.summary ?? '', candidate.path.join(' ')].join(' ');

@@ -1,21 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent, PointerEvent as ReactPointerEvent, ReactElement, ReactNode, SyntheticEvent } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { MAX_GRAPH_NOTE_CHARS } from '@noltri/schema';
-import type { CreateLibraryItemInput, GraphEdge, GraphNode, GraphNoteIndexEntry, GraphScope, HealthResponse, ItemRelation, LibraryItem, NodeDetail, SearchHit, TreeNode } from '@noltri/schema';
-import type { VaultGraph } from '@noltri/schema';
+import type { GraphEdge, GraphNode, GraphNoteIndexEntry, GraphScope, HealthResponse, ItemRelation, LibraryItem, NodeDetail, SearchHit, TreeNode } from '@noltri/schema';
+import { commands, createIntakeNativeAdapters, INTAKE_ACTIVATION_EVENT, SHORTCUTS_CHANGED_EVENT, recordCaptureStage } from '../lib/tauri';
+import type { IntakeShortcutStatus } from '../lib/tauri';
 import { describeError } from './api';
 import type { WorkbenchApi } from './api';
+import { IntakeWindow } from './IntakeWindow';
+import { validShortcutBindings } from './shortcut-bindings';
+import { NativeUpdatePanel } from './NativeUpdatePanel';
+import { createApplicationUpdateGuard } from './application-update-guard';
+import { createWorkbenchApiActivity } from './api-activity';
 import { clearNoteDraft, listNoteDrafts, readNoteDraft, writeNoteDraft } from './note-drafts';
 import type { NoteDraft, NoteIdentity } from './note-drafts';
 import { scheduleLibraryItemsLoad } from './library-items-query';
-import { commitLatestNavigation, contentIdentity, disciplineScopesForTopics, findTreePath, graphChapterAttachment, graphChapterTitle, graphScopeIdentity, NavigationIntentClock, searchGraphNodes, selectionForTreeNode, shouldReuseActiveNote } from './graph-navigation';
+import { commitLatestNavigation, contextualChapterPath, contextualChapterSelectionId, contentIdentity, disciplineScopesForTopics, findTreePath, graphChapterAttachment, graphChapterTitle, graphScopeIdentity, NavigationIntentClock, searchGraphNodes, selectionForTreeNode, shouldReuseActiveNote } from './graph-navigation';
 import type { WorkbenchContent } from './graph-navigation';
-import { ChapterChoicePanel, GraphNotebook } from './GraphNotebook';
+import { ChapterChoicePanel } from './GraphNotebook';
 import { WorkbenchGraph } from './WorkbenchGraph';
+import type { GraphOpenIntent } from './WorkbenchGraph';
 import { WorkbenchNotes } from './WorkbenchNotes';
+import { WorkbenchInbox } from './WorkbenchInbox';
+import type { RelatedSourceDocument } from './WorkbenchNotes';
+import type { IntakeActivation } from './screenshot-entry';
 
 const PAGE_SIZE = 200;
-const EMPTY_VAULT_GRAPH: VaultGraph = { nodes: [], edges: [], revision: 0 };
 const KIND_LABELS: Record<LibraryItem['kind'], string> = {
   knowledge: '知识卡片',
   paper_excerpt: '论文摘录',
@@ -42,23 +52,17 @@ interface CategoryPath {
   title: string;
 }
 
-type GraphPanelMode = 'entry' | 'mini' | 'expanded';
+type GraphPanelMode = 'mini' | 'expanded';
 type NoteSaveStatus = 'loading' | 'saved' | 'saving' | 'error';
 type ColorTheme = 'dark' | 'light';
-type WorkspaceMode = 'vault-notes' | 'library';
 
 interface ActiveGraphNote {
   identity: NoteIdentity;
-  /** Vault that supplied this note; mutations must stay bound to this captured root. */
-  vaultRoot: string;
   title: string;
   content: string;
-  etag: string | null;
   status: NoteSaveStatus;
   error?: string;
   loadFailed?: boolean;
-  rootMismatch?: boolean;
-  rootMismatchSaved?: boolean;
   draftRecoverable?: boolean;
 }
 
@@ -90,32 +94,26 @@ export interface WorkbenchAppProps {
   apiBaseUrl: string;
   mcpEndpoint: string;
   tokenConfigured: boolean;
+  onCopyMcpConfiguration?: () => Promise<void>;
   outsideTauri: boolean;
   modelSettings?: ReactNode;
+  modelSettingsUpdateSafe?: boolean;
 }
 
 export default function WorkbenchApp({
-  api,
+  api: sourceApi,
   apiBaseUrl,
   mcpEndpoint,
   tokenConfigured,
+  onCopyMcpConfiguration,
   outsideTauri,
   modelSettings,
+  modelSettingsUpdateSafe,
 }: WorkbenchAppProps): ReactElement {
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('vault-notes');
-  const [vaultRoot, setVaultRoot] = useState('');
-  const vaultRootRef = useRef(vaultRoot);
-  vaultRootRef.current = vaultRoot;
-  const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(null);
-  const [vaultOpenRequest, setVaultOpenRequest] = useState<{ path: string; intent: { newTab: boolean; split: boolean }; id: number } | null>(null);
-  const [vaultPreviewRequest, setVaultPreviewRequest] = useState<{ path: string; anchor: DOMRect | null; id: number } | null>(null);
-  const [vaultTagQuery, setVaultTagQuery] = useState<string | null>(null);
-  const [vaultRevision, setVaultRevision] = useState(0);
-  const [vaultGraph, setVaultGraph] = useState<VaultGraph>(EMPTY_VAULT_GRAPH);
-  const [vaultGraphRoot, setVaultGraphRoot] = useState('');
-  const [vaultGraphLoading, setVaultGraphLoading] = useState(false);
-  const [vaultGraphError, setVaultGraphError] = useState<string | null>(null);
-  const [vaultGraphMode, setVaultGraphMode] = useState<'global' | 'local'>(() => 'global');
+  const activityRef = useRef<ReturnType<typeof createWorkbenchApiActivity> | null>(null);
+  if (activityRef.current === null) activityRef.current = createWorkbenchApiActivity();
+  const activity = activityRef.current;
+  const api = useMemo(() => activity.wrap(sourceApi), [activity, sourceApi]);
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -128,12 +126,15 @@ export default function WorkbenchApp({
   const [offset, setOffset] = useState(0);
   const [itemsReloadVersion, setItemsReloadVersion] = useState(0);
   const [view, setView] = useState<LibraryView>('all');
+  const [showInbox, setShowInbox] = useState(false);
+  const [inboxOpened, setInboxOpened] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [openNodes, setOpenNodes] = useState<Set<string>>(() => new Set());
   const [contentSelection, setContentSelection] = useState<WorkbenchContent>({ kind: 'library' });
   const [graphScope, setGraphScope] = useState<GraphScope | null>(null);
   const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const [graphScopeRootId, setGraphScopeRootId] = useState<string | null>(null);
   const [graphNotes, setGraphNotes] = useState<GraphNoteIndexEntry[]>([]);
   const [graphQuery, setGraphQuery] = useState('');
   const [graphSearchHits, setGraphSearchHits] = useState<SearchHit[]>([]);
@@ -141,12 +142,14 @@ export default function WorkbenchApp({
   const [graphSearchLoading, setGraphSearchLoading] = useState(false);
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
-  const [graphMode, setGraphMode] = useState<GraphPanelMode>('entry');
+  const [graphMode, setGraphMode] = useState<GraphPanelMode>('mini');
   const [graphPanelWidth, setGraphPanelWidth] = useState(420);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [activeNote, setActiveNote] = useState<ActiveGraphNote | null>(null);
   const [pendingDrafts, setPendingDrafts] = useState<NoteDraft[]>([]);
   const [chapterChoice, setChapterChoice] = useState<ChapterChoice | null>(null);
+  const [vaultOpenRequest, setVaultOpenRequest] = useState<{ path: string; intent: GraphOpenIntent; id: number; draftContent?: string; legacyDraft?: { topicId: string; chapterId: string | null; content: string } } | null>(null);
+  const [vaultContext, setVaultContext] = useState<{ rootPath: string; selectedPath: string | null; revision: number; frontmatter: Record<string, unknown> | null; relatedSources: RelatedSourceDocument[] }>({ rootPath: '', selectedPath: null, revision: 0, frontmatter: null, relatedSources: [] });
   const [moreDetail, setMoreDetail] = useState<NodeDetail | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [newChapterOpen, setNewChapterOpen] = useState(false);
@@ -156,10 +159,90 @@ export default function WorkbenchApp({
   const [query, setQuery] = useState('');
   const [kindFilter, setKindFilter] = useState<LibraryItem['kind'] | 'all'>('all');
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [overlay, setOverlay] = useState<Overlay>(null);
+  const [inboxDetailItem, setInboxDetailItem] = useState<LibraryItem | null>(null);
+  const [overlay, setOverlayState] = useState<Overlay>(null);
+  const updateBusyRef = useRef(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const notesUpdateSafe = useRef(false);
+  const reviewUpdateSafe = useRef(true);
+  const localUpdateSafe = useRef(false);
+  const providerUpdateSafe = useRef(false);
+  providerUpdateSafe.current = modelSettingsUpdateSafe ?? modelSettings === undefined;
+  const reportNotesUpdateSafety = useCallback((safe: boolean) => { notesUpdateSafe.current = safe; }, []);
+  const reportReviewUpdateSafety = useCallback((safe: boolean) => { reviewUpdateSafe.current = safe; }, []);
+  const reportUpdateBusy = useCallback((value: boolean) => { updateBusyRef.current = value; setUpdateBusy(value); }, []);
+  const detailRequestGeneration = useRef(0);
+  const canChangeOverlay = useCallback((next: Overlay): boolean => {
+    if (updateBusyRef.current) return false;
+    if (overlayRef.current === 'settings' && next !== 'settings' && !providerUpdateSafe.current) {
+      setNotice('请先保存或取消设置草稿（含快捷键），并等待操作完成。');
+      return false;
+    }
+    return true;
+  }, []);
+  const setOverlay = useCallback((next: Overlay): boolean => {
+    if (!canChangeOverlay(next)) return false;
+    detailRequestGeneration.current += 1;
+    setOverlayState(next);
+    return true;
+  }, [canChangeOverlay]);
+  const [intakeActivation, setIntakeActivation] = useState<IntakeActivation | null>(null);
+  const [intakeActivationError, setIntakeActivationError] = useState<{ requestId: string; message: string } | null>(null);
+  const [shortcutStatus, setShortcutStatus] = useState<IntakeShortcutStatus | undefined>(undefined);
+  const intakeActivationIds = useRef(new Set<string>());
+  const activeIntakeRequest = useRef<string | null>(null);
+  const intakeNativeAdapters = useMemo(() => outsideTauri ? null : createIntakeNativeAdapters(), [outsideTauri]);
+  const activateIntake = useCallback((activation: IntakeActivation) => {
+    if (updateBusyRef.current) { setNotice('正在处理应用更新，请稍后收集。'); return; }
+    if (!canChangeOverlay('collect')) return;
+    const receivedAt = performance.now();
+    const requestId = activation.requestId.trim();
+    recordCaptureStage(requestId, 'activation_received', 0);
+    if (!/^[A-Za-z0-9._~-]{1,200}$/.test(requestId)) {
+      setIntakeActivationError({ requestId, message: '截图请求无效，未启动。' });
+      setNotice('截图请求无效，未启动。');
+      return;
+    }
+    if (intakeActivationIds.current.has(requestId)) {
+      recordCaptureStage(requestId, 'state_check', performance.now() - receivedAt, 'duplicate_request');
+      setIntakeActivationError({ requestId, message: '该截图请求已处理，未重复启动。' });
+      setNotice('该截图请求已处理，未重复启动。');
+      return;
+    }
+    if (activeIntakeRequest.current !== null || intakeBusyRef.current) {
+      recordCaptureStage(requestId, 'state_check', performance.now() - receivedAt, 'busy');
+      setIntakeActivationError({ requestId, message: '收集窗口正在处理上一项操作；本次截图未启动。' });
+      setNotice('收集窗口正在处理上一项操作；本次截图未启动。');
+      return;
+    }
+    recordCaptureStage(requestId, 'state_check', performance.now() - receivedAt);
+    setIntakeActivationError(null);
+    intakeActivationIds.current.add(requestId);
+    if (intakeActivationIds.current.size > 256) {
+      const oldest = intakeActivationIds.current.values().next().value as string | undefined;
+      if (oldest !== undefined) intakeActivationIds.current.delete(oldest);
+    }
+    activeIntakeRequest.current = requestId;
+    setIntakeActivation({ ...activation, requestId });
+    setOverlay('collect');
+  }, [setOverlay, canChangeOverlay]);
+  const completeIntakeActivation = useCallback((requestId: string) => {
+    if (activeIntakeRequest.current !== requestId) return;
+    activeIntakeRequest.current = null;
+    setIntakeActivation(null);
+    setIntakeActivationError(null);
+  }, []);
+  const intakeBusyRef = useRef(false);
+  const overlayRef = useRef<Overlay>(overlay);
+  overlayRef.current = overlay;
   const [compareItems, setCompareItems] = useState<LibraryItem[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  localUpdateSafe.current = !busy && !chapterActionBusy && pendingDrafts.length === 0 && (activeNote === null || activeNote.status === 'saved');
+  const beforeUpdate = useMemo(() => createApplicationUpdateGuard(
+    () => activity.isIdle() && localUpdateSafe.current && notesUpdateSafe.current && reviewUpdateSafe.current && providerUpdateSafe.current && !intakeBusyRef.current && activeIntakeRequest.current === null && overlayRef.current !== 'collect',
+    async () => (await api.inbox({ limit: 1 })).counts.processing,
+  ), [api, activity]);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemsRequestId = useRef(0);
@@ -180,52 +263,16 @@ export default function WorkbenchApp({
   const noteScrollRef = useRef<HTMLDivElement | null>(null);
   const graphResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const vaultOpenRequestId = useRef(0);
-  const vaultPreviewRequestId = useRef(0);
 
   useEffect(() => {
-    if (vaultRoot === '') return;
-    try {
-      const saved = window.localStorage.getItem(`noltri:vault-graph-mode:${encodeURIComponent(vaultRoot)}`);
-      setVaultGraphMode(saved === 'local' ? 'local' : 'global');
-    } catch { setVaultGraphMode('global'); }
-  }, [vaultRoot]);
-
-  useEffect(() => {
-    if (workspaceMode !== 'vault-notes' || vaultRoot === '') return;
-    let cancelled = false;
-    setVaultGraphLoading(true);
-    setVaultGraphError(null);
-    void api.vaultGraph().then((data) => {
-      if (!cancelled) { setVaultGraph(data); setVaultGraphRoot(vaultRoot); setVaultGraphError(null); }
-    }).catch((error) => {
-      if (!cancelled) setVaultGraphError(describeError(error));
-    }).finally(() => { if (!cancelled) setVaultGraphLoading(false); });
-    return () => { cancelled = true; };
-  }, [api, workspaceMode, vaultRoot, vaultRevision]);
-
-  const graphForCurrentVault = vaultGraphRoot === vaultRoot ? vaultGraph : EMPTY_VAULT_GRAPH;
-
-  const evaluateVaultQuery = useCallback((queryText: string) => api.vaultMatch(queryText), [api]);
-  const vaultTagCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const node of graphForCurrentVault.nodes) {
-      if (node.type !== 'note') continue;
-      const ancestors = new Set<string>();
-      for (const rawTag of node.tags) {
-        const parts = rawTag.replace(/^#/, '').split('/').filter(Boolean);
-        for (let index = 0; index < parts.length; index += 1) ancestors.add(parts.slice(0, index + 1).join('/'));
-      }
-      for (const tag of ancestors) counts.set(tag, (counts.get(tag) ?? 0) + 1);
-    }
-    return counts;
-  }, [graphForCurrentVault.nodes]);
-
-  const changeVaultGraphMode = useCallback((mode: 'global' | 'local'): void => {
-    setVaultGraphMode(mode);
-    if (vaultRoot !== '') {
-      try { window.localStorage.setItem(`noltri:vault-graph-mode:${encodeURIComponent(vaultRoot)}`, mode); } catch { /* Graph still works without storage. */ }
-    }
-  }, [vaultRoot]);
+    const preventEscapeWhileIntakeIsBusy = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || overlayRef.current !== 'collect' || !intakeBusyRef.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener('keydown', preventEscapeWhileIntakeIsBusy, true);
+    return () => document.removeEventListener('keydown', preventEscapeWhileIntakeIsBusy, true);
+  }, []);
 
   function beginNavigationIntent(): number {
     return navigationIntent.current.begin();
@@ -265,6 +312,7 @@ export default function WorkbenchApp({
   }
 
   function replaceContent(next: WorkbenchContent): void {
+    setShowInbox(false);
     contentRef.current = next;
     setContentSelection(next);
   }
@@ -274,6 +322,28 @@ export default function WorkbenchApp({
     setGraphScope(next);
   }
 
+  function requestMarkdownOpen(path: string, intent: GraphOpenIntent = { newTab: false, split: false }, draftContent?: string, legacyDraft?: { topicId: string; chapterId: string | null; content: string }): void {
+    setVaultOpenRequest({ path, intent, id: ++vaultOpenRequestId.current, ...(draftContent === undefined ? {} : { draftContent }), ...(legacyDraft === undefined ? {} : { legacyDraft }) });
+  }
+
+  async function openLegacyMarkdown(topicId: string, chapterId: string | null, intent: number, openIntent: GraphOpenIntent = { newTab: false, split: false }, draftContent?: string, legacyDraft?: { topicId: string; chapterId: string | null; content: string }): Promise<void> {
+    try {
+      await commitLatestNavigation(navigationIntent.current, intent, api.legacyNotePath(topicId, chapterId), (result) => {
+        if (!result.exists) {
+          setNotice('这条知识笔记尚未完成迁移，请刷新资料库后重试。');
+          return;
+        }
+        requestMarkdownOpen(result.path, openIntent, draftContent, legacyDraft);
+      });
+    } catch (error) {
+      if (isCurrentNavigationIntent(intent)) setNotice(`无法打开 Markdown 笔记：${describeError(error)}`);
+    }
+  }
+
+  const handleVaultContextChange = useCallback((rootPath: string, selectedPath: string | null, revision: number, frontmatter: Record<string, unknown> | null, relatedSources: RelatedSourceDocument[]): void => {
+    setVaultContext({ rootPath, selectedPath, revision, frontmatter, relatedSources });
+  }, []);
+
   function pushCurrentHistory(): void {
     contentHistory.current.push({ content: contentRef.current, scope: graphScopeRef.current, mode: graphMode, navCollapsed });
   }
@@ -282,47 +352,28 @@ export default function WorkbenchApp({
     setPendingDrafts(listNoteDrafts());
   }
 
-  useEffect(() => {
-    const active = activeNoteRef.current;
-    if (active === null || active.vaultRoot === vaultRoot) return;
-    const existingDraft = readNoteDraft(active.identity, active.vaultRoot);
-    const needsDraft = active.status !== 'loading' && active.status !== 'saved';
-    const draftSaved = existingDraft?.content === active.content || (needsDraft && writeNoteDraft({
-      ...active.identity,
-      vaultRoot: active.vaultRoot,
-      content: active.content,
-      updatedAt: new Date().toISOString(),
-    }));
-    const savedInOldVault = active.status === 'saved';
-    replaceActiveNote({
-      ...active,
-      status: 'error',
-      rootMismatch: true,
-      rootMismatchSaved: savedInOldVault,
-      draftRecoverable: draftSaved,
-      error: `Vault 已切换；这份正文属于「${active.vaultRoot || '尚未确认的 Vault'}」，不会写入当前 Vault。${savedInOldVault ? '正文已保存于原 Vault。' : draftSaved ? '旧正文已按原 Vault 保存在本机。' : '本机草稿保存失败，请先复制正文。'}`,
-    });
-    refreshPendingDrafts();
-  }, [vaultRoot]);
-
-  async function loadGraph(scope: GraphScope): Promise<void> {
+  const loadGraph = useCallback(async (scope: GraphScope, preserveCurrent = false): Promise<void> => {
     const requestId = ++graphRequestId.current;
     setGraphLoading(true);
     setGraphError(null);
-    setGraphNodes([]);
-    setGraphEdges([]);
+    if (!preserveCurrent) {
+      setGraphNodes([]);
+      setGraphEdges([]);
+      setGraphScopeRootId(null);
+    }
     try {
       const result = await api.selectGraph(scope);
       if (requestId !== graphRequestId.current) return;
       setGraphNodes(result.nodes);
       setGraphEdges(result.edges);
+      setGraphScopeRootId(result.scopeGraphNodeId);
       setGraphError(null);
     } catch (error) {
       if (requestId === graphRequestId.current) setGraphError(describeError(error));
     } finally {
       if (requestId === graphRequestId.current) setGraphLoading(false);
     }
-  }
+  }, [api]);
 
   function rememberReadingPosition(): void {
     if (activeNoteRef.current !== null && noteScrollRef.current !== null) {
@@ -339,8 +390,6 @@ export default function WorkbenchApp({
       const active = activeNoteRef.current;
       setNotice(active?.loadFailed
         ? '正文尚未载入。为避免覆盖已有内容，请重新载入后再切换。'
-        : active?.rootMismatch
-          ? 'Vault 已切换且无法保存原 Vault 的本机草稿，请先复制正文后再继续。'
         : '正文尚未保存，且本地恢复草稿不可用；请重试保存后再切换。');
       return false;
     }
@@ -350,40 +399,18 @@ export default function WorkbenchApp({
   }
 
   async function persistNoteSnapshot(note: ActiveGraphNote): Promise<{ serverSaved: boolean; localSaved: boolean }> {
-    const draft: NoteDraft = { ...note.identity, vaultRoot: note.vaultRoot, content: note.content, updatedAt: new Date().toISOString() };
-    const contextMismatch = note.vaultRoot === '' || vaultRootRef.current !== note.vaultRoot || note.rootMismatch;
-    const localSaved = contextMismatch && note.rootMismatchSaved
-      ? readNoteDraft(note.identity, note.vaultRoot)?.content === note.content
-      : writeNoteDraft(draft);
+    const draft: NoteDraft = { ...note.identity, content: note.content, updatedAt: new Date().toISOString() };
+    const localSaved = writeNoteDraft(draft);
     refreshPendingDrafts();
-    const sameContext = (current: ActiveGraphNote | null | undefined): current is ActiveGraphNote =>
-      sameNoteIdentity(current?.identity, note.identity) && current?.vaultRoot === note.vaultRoot;
-    const currentAtStart = activeNoteRef.current;
-    if (sameContext(currentAtStart) && !currentAtStart.rootMismatch && vaultRootRef.current === note.vaultRoot
-      && currentAtStart.content === note.content && currentAtStart.status !== 'saving') {
-      replaceActiveNote({ ...currentAtStart, status: 'saving', error: undefined });
-    }
-
-    if (contextMismatch) {
-      const matchingDraft = readNoteDraft(note.identity, note.vaultRoot)?.content === note.content;
-      const retained = note.rootMismatchSaved || matchingDraft || writeNoteDraft(draft);
-      const current = activeNoteRef.current;
-      if (sameContext(current)) {
-        replaceActiveNote({
-          ...current,
-          status: 'error',
-          rootMismatch: true,
-          error: `Vault 已切换；正文仍绑定到「${note.vaultRoot || '未知 Vault'}」，未发送保存请求。${note.status === 'saved' ? '正文已保存于原 Vault。' : retained ? '草稿已保留在本机。' : '本机草稿保存失败，请先复制正文。'}`,
-          draftRecoverable: !note.rootMismatchSaved && (matchingDraft || retained),
-        });
-      }
-      return { serverSaved: false, localSaved: retained };
+    if (sameNoteIdentity(activeNoteRef.current?.identity, note.identity) && activeNoteRef.current?.content === note.content
+      && activeNoteRef.current.status !== 'saving') {
+      replaceActiveNote({ ...activeNoteRef.current, status: 'saving', error: undefined });
     }
 
     if (note.content.length > MAX_GRAPH_NOTE_CHARS) {
       const error = `正文为 ${note.content.length.toLocaleString()} 个字符，超过服务器上限 ${MAX_GRAPH_NOTE_CHARS.toLocaleString()} 个字符。${localSaved ? '草稿已保存在本机；请缩短正文后重试。' : '本机草稿也无法保存；请缩短正文后重试。'}`;
       const current = activeNoteRef.current;
-      if (sameContext(current) && current.content === note.content) {
+      if (sameNoteIdentity(current?.identity, note.identity) && current?.content === note.content) {
         replaceActiveNote({ ...current, status: 'error', error, draftRecoverable: localSaved });
       }
       return { serverSaved: false, localSaved };
@@ -391,18 +418,14 @@ export default function WorkbenchApp({
 
     let serverSaved = false;
     let saveError: string | undefined;
-    let savedEtag = note.etag;
     const operation = noteSaveChain.current.catch(() => undefined).then(async () => {
       try {
-        if (vaultRootRef.current !== note.vaultRoot) throw new Error('Vault 已切换；保存请求已取消，正文保留在原 Vault 草稿中。');
-        const saved = await api.saveGraphNote(note.identity.topicId, {
+        await api.saveGraphNote(note.identity.topicId, {
           chapterId: note.identity.chapterId,
           content: note.content,
-          ...(note.etag === null ? {} : { expectedEtag: note.etag }),
-        }, note.vaultRoot);
+        }, vaultContext.rootPath);
         serverSaved = true;
-        savedEtag = saved.etag;
-        clearNoteDraft(note.identity, note.content, note.vaultRoot);
+        clearNoteDraft(note.identity, note.content);
       } catch (error) {
         saveError = describeError(error);
       }
@@ -412,22 +435,10 @@ export default function WorkbenchApp({
     refreshPendingDrafts();
 
     const current = activeNoteRef.current;
-    if (sameContext(current) && current.content === note.content) {
-      if (vaultRootRef.current !== note.vaultRoot || current.rootMismatch) {
-        if (serverSaved) replaceActiveNote({
-          ...current,
-          etag: savedEtag,
-          status: 'error',
-          rootMismatch: true,
-          rootMismatchSaved: true,
-          error: `Vault 已切换；正文已保存于原 Vault「${note.vaultRoot}」，不会写入当前 Vault。`,
-          draftRecoverable: false,
-        });
-      } else {
-        replaceActiveNote(serverSaved
-          ? { ...current, etag: savedEtag, status: 'saved', error: undefined, draftRecoverable: false }
-          : { ...current, status: 'error', error: saveError ?? '保存失败。', draftRecoverable: localSaved });
-      }
+    if (sameNoteIdentity(current?.identity, note.identity) && current?.content === note.content) {
+      replaceActiveNote(serverSaved
+        ? { ...current, status: 'saved', error: undefined, draftRecoverable: false }
+        : { ...current, status: 'error', error: saveError ?? '保存失败。', draftRecoverable: localSaved });
     }
     return { serverSaved, localSaved };
   }
@@ -438,7 +449,7 @@ export default function WorkbenchApp({
       if (active === null) return true;
       if (active.status === 'loading') return true;
       if (active.loadFailed) return false;
-      if (active.status === 'saved' && readNoteDraft(active.identity, active.vaultRoot) === null) return true;
+      if (active.status === 'saved' && readNoteDraft(active.identity) === null) return true;
       if (noteSaveTimer.current !== null) {
         clearTimeout(noteSaveTimer.current);
         noteSaveTimer.current = null;
@@ -453,25 +464,14 @@ export default function WorkbenchApp({
   async function loadNote(identity: NoteIdentity, title: string, selection: WorkbenchContent, options: LoadNoteOptions): Promise<void> {
     const { intent, addHistory = true, transitionPrepared = false, collapseNavigation = true, forceReload = false } = options;
     if (!isCurrentNavigationIntent(intent)) return;
-    const loadRoot = vaultRootRef.current;
     const current = contentRef.current;
     if (contentIdentity(current) !== contentIdentity(selection)) {
       if (!transitionPrepared && !(await prepareContentTransition(selection, addHistory, intent))) return;
-      if (!isCurrentNavigationIntent(intent) || vaultRootRef.current !== loadRoot) return;
-    }
-
-    if (loadRoot === '') {
-      replaceActiveNote({ identity, vaultRoot: '', title, content: '', etag: null, status: 'error', loadFailed: true, error: 'Vault 尚未就绪；正文没有绑定到可写入的笔记目录。' });
-      return;
+      if (!isCurrentNavigationIntent(intent)) return;
     }
 
     const active = activeNoteRef.current;
-    if (active !== null && active.vaultRoot !== loadRoot) {
-      if (active.status === 'loading') return;
-      const preserved = await persistNoteSnapshot(active);
-      if (!preserved.localSaved || vaultRootRef.current !== loadRoot) return;
-    }
-    if (active?.vaultRoot === loadRoot && shouldReuseActiveNote(active.identity, identity, forceReload)) {
+    if (shouldReuseActiveNote(active?.identity ?? null, identity, forceReload)) {
       if (active === null) return;
       replaceContent(selection);
       setChapterChoice(null);
@@ -489,33 +489,33 @@ export default function WorkbenchApp({
     if (collapseNavigation) setNavCollapsed(true);
 
     const requestId = ++noteLoadRequestId.current;
-    replaceActiveNote({ identity, vaultRoot: loadRoot, title, content: '', etag: null, status: 'loading' });
+    replaceActiveNote({ identity, title, content: '', status: 'loading' });
     try {
       const [serverResult, indexResult] = await Promise.allSettled([
         api.graphNote(identity.topicId, identity.chapterId),
         api.listGraphNotes(identity.topicId),
       ]);
-      if (requestId !== noteLoadRequestId.current || vaultRootRef.current !== loadRoot) return;
+      if (requestId !== noteLoadRequestId.current) return;
       if (indexResult.status === 'fulfilled') setGraphNotes(indexResult.value.notes);
       else setGraphNotes([]);
       if (serverResult.status === 'rejected') throw serverResult.reason;
 
       const serverNote = serverResult.value;
-      const draft = readNoteDraft(identity, loadRoot);
+      const draft = readNoteDraft(identity);
       const draftWins = draft !== null && (serverNote.updatedAt === null
         || (Number.isFinite(Date.parse(draft.updatedAt)) && Number.isFinite(Date.parse(serverNote.updatedAt))
           ? Date.parse(draft.updatedAt) >= Date.parse(serverNote.updatedAt)
           : true));
-      if (draft !== null && !draftWins) clearNoteDraft(identity, draft.content, loadRoot);
+      if (draft !== null && !draftWins) clearNoteDraft(identity, draft.content);
       const content = draftWins ? draft!.content : serverNote.content;
-      replaceActiveNote({ identity, vaultRoot: loadRoot, title, content, etag: serverNote.etag, status: draftWins ? 'saving' : 'saved', draftRecoverable: draftWins });
+      replaceActiveNote({ identity, title, content, status: draftWins ? 'saving' : 'saved', draftRecoverable: draftWins });
     } catch (error) {
-      if (requestId !== noteLoadRequestId.current || vaultRootRef.current !== loadRoot) return;
-      const draft = readNoteDraft(identity, loadRoot);
+      if (requestId !== noteLoadRequestId.current) return;
+      const draft = readNoteDraft(identity);
       if (draft !== null) {
-        replaceActiveNote({ identity, vaultRoot: loadRoot, title, content: draft.content, etag: null, status: 'error', error: `服务器暂不可用：${describeError(error)}`, draftRecoverable: true });
+        replaceActiveNote({ identity, title, content: draft.content, status: 'error', error: `服务器暂不可用：${describeError(error)}`, draftRecoverable: true });
       } else {
-        replaceActiveNote({ identity, vaultRoot: loadRoot, title, content: '', etag: null, status: 'error', error: describeError(error), loadFailed: true });
+        replaceActiveNote({ identity, title, content: '', status: 'error', error: describeError(error), loadFailed: true });
       }
     }
     refreshPendingDrafts();
@@ -540,12 +540,12 @@ export default function WorkbenchApp({
     setView('all');
     setSelectedNodeId(selectedId);
     replaceGraphScope(scope);
-    setGraphMode('entry');
+    setGraphMode('mini');
     setGraphQuery('');
     void loadGraph(scope);
   }
 
-  async function navigateToTopic(topic: GraphNode, fromGraph = false, intent = beginNavigationIntent(), addHistory = true): Promise<void> {
+  async function navigateToTopic(topic: GraphNode, fromGraph = false, intent = beginNavigationIntent(), addHistory = true, openIntent: GraphOpenIntent = { newTab: false, split: false }): Promise<void> {
     if (!isCurrentNavigationIntent(intent)) return;
     let scope = graphScopeRef.current;
     if (!fromGraph && (graphMode !== 'expanded' || !graphNodes.some((node) => node.id === topic.id))) {
@@ -563,27 +563,45 @@ export default function WorkbenchApp({
     const selection: WorkbenchContent = { kind: 'topic', topicId: topic.id };
     const transitionPrepared = await prepareContentTransition(selection, addHistory, intent);
     if (!transitionPrepared || !isCurrentNavigationIntent(intent)) return;
+    updateContent(selection);
+    setSelectedNodeId(topic.id);
+    setView('all');
+    setQuery('');
+    setKindFilter('all');
+    setNavCollapsed(false);
+    setChapterChoice(null);
+    setMoreOpen(false);
+    setMoreDetail(null);
     if (!sameGraphScope(graphScopeRef.current, scope)) {
       replaceGraphScope(scope);
       void loadGraph(scope);
     }
     setGraphQuery('');
     if (!(graphMode === 'expanded' && graphNodes.some((node) => node.id === topic.id))) setGraphMode('mini');
-    await loadNote({ topicId: topic.id, chapterId: null }, topic.title, selection, { intent, addHistory: false, transitionPrepared: true });
+    await openLegacyMarkdown(topic.id, null, intent, openIntent);
   }
 
-  async function navigateToChapter(topicId: string, chapterId: string, title: string, options: { intent?: number; addHistory?: boolean; activateScope?: GraphScope } = {}): Promise<void> {
+  async function navigateToChapter(topicId: string, chapterId: string, title: string, options: { intent?: number; addHistory?: boolean; activateScope?: GraphScope; openIntent?: GraphOpenIntent } = {}): Promise<void> {
     const intent = options.intent ?? beginNavigationIntent();
     if (!isCurrentNavigationIntent(intent)) return;
     const selection: WorkbenchContent = { kind: 'chapter', topicId, chapterId };
     if (!(await prepareContentTransition(selection, options.addHistory ?? true, intent)) || !isCurrentNavigationIntent(intent)) return;
+    updateContent(selection);
+    setSelectedNodeId(chapterId);
+    setView('all');
+    setQuery('');
+    setKindFilter('all');
+    setNavCollapsed(false);
+    setMoreOpen(false);
+    setMoreDetail(null);
     if (options.activateScope !== undefined && !sameGraphScope(graphScopeRef.current, options.activateScope)) {
       replaceGraphScope(options.activateScope);
       setGraphMode('mini');
       void loadGraph(options.activateScope);
     }
     setGraphQuery('');
-    await loadNote({ topicId, chapterId }, title, selection, { intent, addHistory: false, transitionPrepared: true });
+    if (graphMode !== 'expanded') setGraphMode('mini');
+    await openLegacyMarkdown(topicId, chapterId, intent, options.openIntent);
   }
 
   async function navigateToLibrary(nextView: LibraryView, intent = beginNavigationIntent()): Promise<void> {
@@ -591,19 +609,17 @@ export default function WorkbenchApp({
     updateContent({ kind: 'library' });
     setChapterChoice(null);
     replaceGraphScope(null);
-    setGraphMode('entry');
+    setGraphMode('mini');
     setNavCollapsed(false);
     setGraphQuery('');
     setView(nextView);
     setSelectedNodeId(null);
     setQuery('');
     setKindFilter('all');
-    setWorkspaceMode('library');
     invalidateItems();
   }
 
   async function selectTreeNode(id: string): Promise<void> {
-    setWorkspaceMode('library');
     const intent = beginNavigationIntent();
     const route = selectionForTreeNode(tree, id);
     if (route === null) {
@@ -622,7 +638,7 @@ export default function WorkbenchApp({
       updateContent({ kind: 'library' });
       setChapterChoice(null);
       replaceGraphScope(null);
-      setGraphMode('entry');
+      setGraphMode('mini');
       setNavCollapsed(false);
       invalidateItems();
       return;
@@ -649,13 +665,14 @@ export default function WorkbenchApp({
   }
 
   function updateContent(next: WorkbenchContent): void {
+    setShowInbox(false);
     if (contentIdentity(next) !== contentIdentity(contentRef.current)) noteLoadRequestId.current += 1;
     contentRef.current = next;
     setContentSelection(next);
     if (next.kind === 'library' || next.kind === 'cards') replaceActiveNote(null);
   }
 
-  async function resolveAndOpenChapter(chapterId: string, options: { intent?: number; scope?: GraphScope; activeTopicId?: string; activateScope?: boolean; action?: 'open' | 'more' } = {}): Promise<void> {
+  async function resolveAndOpenChapter(chapterId: string, options: { intent?: number; scope?: GraphScope; activeTopicId?: string; activateScope?: boolean; action?: 'open' | 'more'; openIntent?: GraphOpenIntent } = {}): Promise<void> {
     const intent = options.intent ?? beginNavigationIntent();
     if (!isCurrentNavigationIntent(intent)) return;
     const scope = options.scope ?? graphScopeRef.current;
@@ -668,14 +685,14 @@ export default function WorkbenchApp({
         navigationIntent.current,
         intent,
         api.resolveChapter({ chapterId, ...(activeTopicId ? { activeTopicId } : {}), scope }),
-        (target) => applyChapterTarget(target, chapterId, scope, intent, options.activateScope ?? false, options.action ?? 'open'),
+        (target) => applyChapterTarget(target, chapterId, scope, intent, options.activateScope ?? false, options.action ?? 'open', options.openIntent),
       );
     } catch (error) {
       if (isCurrentNavigationIntent(intent)) setNotice(`无法定位章节：${describeError(error)}`);
     }
   }
 
-  async function applyChapterTarget(target: Awaited<ReturnType<WorkbenchApi['resolveChapter']>>, chapterId: string, scope: GraphScope, intent: number, activateScope: boolean, action: 'open' | 'more' = 'open'): Promise<void> {
+  async function applyChapterTarget(target: Awaited<ReturnType<WorkbenchApi['resolveChapter']>>, chapterId: string, scope: GraphScope, intent: number, activateScope: boolean, action: 'open' | 'more' = 'open', openIntent?: GraphOpenIntent): Promise<void> {
     if (!isCurrentNavigationIntent(intent)) return;
     if (target.kind === 'resolved') {
       setChapterChoice(null);
@@ -688,6 +705,7 @@ export default function WorkbenchApp({
       await navigateToChapter(target.topicId, target.chapterId, chapter?.title ?? pathChapter?.title ?? '章节正文', {
         intent,
         activateScope: activateScope ? scope : undefined,
+        ...(openIntent === undefined ? {} : { openIntent }),
       });
     } else if (target.kind === 'choose-topic') {
       setChapterChoice({ chapterId: target.chapterId, topicIds: target.topicIds, scope, activateScope, action });
@@ -764,13 +782,29 @@ export default function WorkbenchApp({
     });
   }
 
-  async function handleGraphNodeOpen(node: GraphNode, intent = beginNavigationIntent()): Promise<void> {
+  async function handleGraphNodeOpen(node: GraphNode, openIntentOrIntent: GraphOpenIntent | number = { newTab: false, split: false }): Promise<void> {
+    const intent = typeof openIntentOrIntent === 'number' ? openIntentOrIntent : beginNavigationIntent();
+    const openIntent = typeof openIntentOrIntent === 'number' ? { newTab: false, split: false } : openIntentOrIntent;
     if (!isCurrentNavigationIntent(intent)) return;
-    if (node.nodeType === 'topic') {
-      await navigateToTopic(node, true, intent);
+    if (node.nodeType === 'discipline') {
+      await navigateToCards({ kind: 'discipline', disciplineId: node.id }, node.id, intent);
       return;
     }
-    await resolveAndOpenChapter(node.id, { intent });
+    if (node.nodeType === 'subdiscipline' || node.nodeType === 'domain') {
+      const disciplineId = findTreePath(tree, node.id)?.[0]?.id
+        ?? (graphScopeRef.current === null ? null : graphScopeRef.current.disciplineId);
+      if (disciplineId === null) {
+        setNotice(`无法确定“${node.title}”所属的一级学科。`);
+        return;
+      }
+      await navigateToCards({ kind: 'subdiscipline', disciplineId, subdisciplineId: node.id }, node.id, intent);
+      return;
+    }
+    if (node.nodeType === 'topic') {
+      await navigateToTopic(node, true, intent, true, openIntent);
+      return;
+    }
+    await resolveAndOpenChapter(node.id, { intent, openIntent });
   }
 
   async function openGraphSearchHit(nodeId: string): Promise<void> {
@@ -826,13 +860,13 @@ export default function WorkbenchApp({
     setNavCollapsed(previous.navCollapsed);
     if (reloadGraph && previous.scope !== null) void loadGraph(previous.scope);
     if (previousContent.kind === 'topic') {
-      const topic = graphNodes.find((node) => node.id === previousContent.topicId)
-        ?? graphNodeFromTree(tree, previousContent.topicId);
-      if (topic !== null) await loadNote({ topicId: topic.id, chapterId: null }, topic.title, previousContent, { intent, addHistory: false, transitionPrepared: true, collapseNavigation: previous.navCollapsed });
+      updateContent(previousContent);
+      setSelectedNodeId(previousContent.topicId);
+      await openLegacyMarkdown(previousContent.topicId, null, intent);
     } else if (previousContent.kind === 'chapter') {
-      const chapter = graphNodes.find((node) => node.id === previousContent.chapterId);
-      const indexed = graphNotes.find((entry) => entry.chapterId === previousContent.chapterId);
-      await loadNote({ topicId: previousContent.topicId, chapterId: previousContent.chapterId }, chapter?.title ?? indexed?.chapterTitle ?? '章节正文', previousContent, { intent, addHistory: false, transitionPrepared: true, collapseNavigation: previous.navCollapsed });
+      updateContent(previousContent);
+      setSelectedNodeId(previousContent.chapterId);
+      await openLegacyMarkdown(previousContent.topicId, previousContent.chapterId, intent);
     } else if (previousContent.kind === 'cards') {
       updateContent(previousContent);
       setSelectedNodeId(previousContent.selectedNodeId);
@@ -850,10 +884,10 @@ export default function WorkbenchApp({
 
   function changeNoteContent(content: string): void {
     const active = activeNoteRef.current;
-    if (active === null || active.status === 'loading' || active.rootMismatch || active.vaultRoot === '' || active.vaultRoot !== vaultRootRef.current) return;
+    if (active === null || active.status === 'loading') return;
     const next: ActiveGraphNote = { ...active, content, status: 'saving', error: undefined };
     replaceActiveNote(next);
-    const cached = writeNoteDraft({ ...next.identity, vaultRoot: next.vaultRoot, content, updatedAt: new Date().toISOString() });
+    const cached = writeNoteDraft({ ...next.identity, content, updatedAt: new Date().toISOString() });
     refreshPendingDrafts();
     replaceActiveNote({ ...next, draftRecoverable: cached, ...(cached ? {} : { error: '本地恢复草稿不可用；自动保存仍会重试服务器。' }) });
   }
@@ -861,7 +895,7 @@ export default function WorkbenchApp({
   async function retryActiveNote(): Promise<void> {
     const active = activeNoteRef.current;
     if (active === null) return;
-    if (active.loadFailed || active.rootMismatch) {
+    if (active.loadFailed) {
       await loadNote(active.identity, active.title, contentRef.current, { intent: beginNavigationIntent(), addHistory: false, forceReload: true });
       return;
     }
@@ -870,43 +904,19 @@ export default function WorkbenchApp({
   }
 
   async function openDraft(draft: NoteDraft): Promise<void> {
-    const root = vaultRootRef.current;
-    if (root === '') {
-      setNotice('Vault 尚未就绪，无法安全打开恢复草稿。');
-      return;
-    }
-    if (draft.vaultRoot !== undefined && draft.vaultRoot !== root) {
-      setNotice(`这份草稿属于「${draft.vaultRoot}」，当前打开的是「${root}」。草稿仍保留在本机，请切回原 Vault 后恢复。`);
-      return;
-    }
-    const needsManualBinding = draft.vaultRoot === undefined;
-    if (needsManualBinding && !window.confirm(`这份旧草稿没有 Vault 归属信息。是否手动导入到当前 Vault「${root}」？`)) return;
     const intent = beginNavigationIntent();
-    let title = draft.chapterId === null
-      ? graphNodes.find((node) => node.id === draft.topicId)?.title ?? graphNodeFromTree(tree, draft.topicId)?.title ?? '主题概览'
-      : graphChapterTitle(draft.topicId, draft.chapterId, graphNodes, tree, graphNotes);
     const topic = graphNodes.find((node) => node.id === draft.topicId) ?? graphNodeFromTree(tree, draft.topicId);
     const selection: WorkbenchContent = draft.chapterId === null
       ? { kind: 'topic', topicId: draft.topicId }
       : { kind: 'chapter', topicId: draft.topicId, chapterId: draft.chapterId };
-    if (!(await prepareContentTransition(selection, true, intent)) || !isCurrentNavigationIntent(intent) || vaultRootRef.current !== root) return;
-    if (needsManualBinding && !writeNoteDraft({ ...draft, vaultRoot: root })) {
-      setNotice('无法创建当前 Vault 的安全恢复副本，旧草稿仍保留且未导入。');
-      return;
-    }
-    if (needsManualBinding) clearNoteDraft(draft, draft.content);
-    if (draft.chapterId !== null && title === '章节正文') {
-      try {
-        const detail = await api.nodeDetail(draft.chapterId);
-        if (!isCurrentNavigationIntent(intent)) return;
-        if (detail.node.nodeType === 'chapter') title = detail.node.title;
-      } catch {
-        // Keep the neutral title when optional detail lookup cannot resolve a stale draft.
-      }
-    }
+    if (!(await prepareContentTransition(selection, true, intent)) || !isCurrentNavigationIntent(intent)) return;
+    updateContent(selection);
+    setSelectedNodeId(draft.chapterId ?? draft.topicId);
+    setView('all');
+    setNavCollapsed(false);
     setGraphQuery('');
     if (topic !== null) {
-      const route = selectionForTreeNode(tree, topic.id);
+      const route = selectionForTreeNode(tree, draft.chapterId ?? topic.id);
       const topicIsInExpandedGraph = graphMode === 'expanded' && graphNodes.some((node) => node.id === topic.id);
       if (route !== null && !topicIsInExpandedGraph && !sameGraphScope(graphScopeRef.current, route.scope)) {
         replaceGraphScope(route.scope);
@@ -915,9 +925,9 @@ export default function WorkbenchApp({
       }
     } else {
       replaceGraphScope(null);
-      setGraphMode('entry');
+      setGraphMode('mini');
     }
-    await loadNote(draft, title, selection, { intent, addHistory: false, transitionPrepared: true });
+    await openLegacyMarkdown(draft.topicId, draft.chapterId, intent, { newTab: false, split: false }, draft.content, draft);
   }
 
   async function openTopicMore(topicId: string, intent = beginNavigationIntent()): Promise<void> {
@@ -1021,7 +1031,7 @@ export default function WorkbenchApp({
     noteSaveTimer.current = setTimeout(() => {
       noteSaveTimer.current = null;
       const latest = activeNoteRef.current;
-      if (latest !== null && sameNoteIdentity(latest.identity, activeNote.identity) && latest.vaultRoot === activeNote.vaultRoot && latest.content === activeNote.content) {
+      if (latest !== null && sameNoteIdentity(latest.identity, activeNote.identity) && latest.content === activeNote.content) {
         void persistNoteSnapshot(latest);
       }
     }, 650);
@@ -1031,7 +1041,7 @@ export default function WorkbenchApp({
         noteSaveTimer.current = null;
       }
     };
-  }, [activeNote?.identity.topicId, activeNote?.identity.chapterId, activeNote?.vaultRoot, activeNote?.content, activeNote?.status]);
+  }, [activeNote?.identity.topicId, activeNote?.identity.chapterId, activeNote?.content, activeNote?.status]);
 
   useEffect(() => {
     const requestId = ++graphSearchRequestId.current;
@@ -1068,30 +1078,6 @@ export default function WorkbenchApp({
       if (requestId === graphSearchRequestId.current) graphSearchRequestId.current += 1;
     };
   }, [api, contentSelection.kind, graphNodes, graphQuery, graphScope]);
-
-  useEffect(() => {
-    if (graphScope === null || graphMode === 'entry' || typeof ResizeObserver === 'undefined') return;
-    const shell = shellRef.current;
-    const center = centerRef.current;
-    const sidebar = shell?.querySelector<HTMLElement>('.library-sidebar');
-    const graphPanel = graphPanelRef.current;
-    if (shell === null || shell === undefined || center === null || sidebar === null || sidebar === undefined || graphPanel === null) return;
-
-    const ensureReadableCenter = (): void => {
-      const probe = center.querySelector<HTMLElement>('.editor-width-probe');
-      const notebook = center.querySelector<HTMLElement>('.notebook-center');
-      if (probe === null || notebook === null) return;
-      const readableWidth = probe.getBoundingClientRect().width;
-      const oneRowWidth = sidebar.getBoundingClientRect().width + readableWidth + graphPanel.getBoundingClientRect().width;
-      if (notebook.clientWidth < readableWidth || shell.clientWidth < oneRowWidth) setGraphMode('entry');
-    };
-    const observer = new ResizeObserver(ensureReadableCenter);
-    observer.observe(shell);
-    observer.observe(center);
-    observer.observe(graphPanel);
-    ensureReadableCenter();
-    return () => observer.disconnect();
-  }, [graphScope, graphMode, graphPanelWidth, contentSelection.kind]);
 
   useEffect(() => {
     const requestId = ++itemsRequestId.current;
@@ -1132,7 +1118,7 @@ export default function WorkbenchApp({
     };
   }, [api, itemsReloadVersion, kindFilter, query, selectedNodeId, view]);
 
-  async function refreshTree(): Promise<void> {
+  const refreshTree = useCallback(async (): Promise<void> => {
     try {
       const result = await api.tree();
       setTree(result.nodes);
@@ -1141,7 +1127,16 @@ export default function WorkbenchApp({
     } catch (error) {
       setTreeError(describeError(error));
     }
-  }
+  }, [api]);
+
+  const refreshKnowledgeProjection = useCallback(async (): Promise<void> => {
+    const scope = graphScopeRef.current;
+    await Promise.all([refreshTree(), scope === null ? Promise.resolve() : loadGraph(scope, true)]);
+  }, [loadGraph, refreshTree]);
+
+  const handleVaultDocumentsChanged = useCallback((_paths: readonly string[]): void => {
+    void refreshKnowledgeProjection();
+  }, [refreshKnowledgeProjection]);
 
   useEffect(() => {
     void refresh();
@@ -1175,6 +1170,47 @@ export default function WorkbenchApp({
   }
 
   useEffect(() => {
+    if (outsideTauri) {
+      setShortcutStatus({ screenshot: 'unavailable', openIntake: 'unavailable' });
+      return;
+    }
+    let cancelled = false;
+    const listeners: Array<() => void> = [];
+    let statusRequest = 0;
+    const refreshStatus = (initial = false): void => {
+      if (cancelled) return;
+      const request = ++statusRequest;
+      void commands.getIntakeShortcutStatus()
+        .then((status) => { if (!cancelled && request === statusRequest) setShortcutStatus(status); })
+        .catch(() => { if (!cancelled && request === statusRequest && initial) setShortcutStatus({ screenshot: 'unavailable', openIntake: 'unavailable' }); });
+    };
+    const keepListener = (stopListening: () => void): void => {
+      if (cancelled) stopListening();
+      else listeners.push(stopListening);
+    };
+    // Subscribe before reading so a committed save cannot fall between the read and subscription.
+    void listen<IntakeShortcutStatus>(SHORTCUTS_CHANGED_EVENT, (event) => {
+      if (cancelled) return;
+      const committed = event.payload;
+      if (committed && validShortcutBindings(committed.bindings)
+        && ['registered', 'conflict', 'unavailable'].includes(committed.screenshot)
+        && ['registered', 'conflict', 'unavailable'].includes(committed.openIntake)) {
+        statusRequest += 1;
+        setShortcutStatus(committed);
+      } else refreshStatus();
+    })
+      .then((stopListening) => { keepListener(stopListening); if (!cancelled) refreshStatus(true); })
+      .catch(() => { if (!cancelled) refreshStatus(true); });
+    void listen<IntakeActivation>(INTAKE_ACTIVATION_EVENT, (event) => activateIntake(event.payload))
+      .then(keepListener)
+      .catch(() => { if (!cancelled) setShortcutStatus({ screenshot: 'unavailable', openIntake: 'unavailable' }); });
+    return () => {
+      cancelled = true;
+      listeners.forEach(stopListening => stopListening());
+    };
+  }, [outsideTauri, activateIntake]);
+
+  useEffect(() => {
     const dialog = dialogRef.current;
     if (overlay !== null && dialog !== null && !dialog.open) {
       dialog.showModal();
@@ -1199,17 +1235,21 @@ export default function WorkbenchApp({
   }, [overlay]);
 
   const paths = useMemo(() => collectPaths(tree), [tree]);
-  const sidebarSelectedNodeId = chapterChoice?.chapterId ?? (contentSelection.kind === 'chapter' ? contentSelection.chapterId : selectedNodeId);
+  const sidebarSelectedNodeId = chapterChoice?.chapterId ?? (contentSelection.kind === 'chapter'
+    ? contextualChapterSelectionId(tree, contentSelection.topicId, contentSelection.chapterId)
+    : selectedNodeId);
   const selectedPath = useMemo(
     () => paths.find((path) => path.id === selectedNodeId)?.labels ?? [],
     [paths, selectedNodeId],
   );
-  const selectedItem = items.find((item) => item.id === selectedItemId) ?? null;
+  const selectedItem = inboxDetailItem?.id === selectedItemId ? inboxDetailItem : items.find((item) => item.id === selectedItemId) ?? null;
   const compareIds = compareItems.map((item) => item.id);
   const notebookPath = contentSelection.kind === 'cards'
     ? paths.find((path) => path.id === contentSelection.selectedNodeId)?.labels.join(' / ') ?? ''
-    : contentSelection.kind === 'topic' || contentSelection.kind === 'chapter'
+    : contentSelection.kind === 'topic'
       ? paths.find((path) => path.id === contentSelection.topicId)?.labels.join(' / ') ?? ''
+      : contentSelection.kind === 'chapter'
+        ? contextualChapterPath(tree, contentSelection.topicId, graphChapterTitle(contentSelection.topicId, contentSelection.chapterId, graphNodes, tree, graphNotes)).join(' / ')
       : '';
   const classificationOptions = useMemo(() => collectClassificationOptions(tree), [tree]);
   const connectableTopics = useMemo(
@@ -1228,6 +1268,41 @@ export default function WorkbenchApp({
     action: chapterChoice.action,
   };
 
+  const noteScopePaths = useMemo<ReadonlySet<string> | null>(() => {
+    if (contentSelection.kind === 'library') return null;
+    const nodes = contentSelection.kind === 'cards'
+      ? graphNodes
+      : graphNodes.filter((node) => node.id === (contentSelection.kind === 'topic' ? contentSelection.topicId : contentSelection.chapterId));
+    return new Set(nodes.flatMap(graphNodeNotePaths));
+  }, [contentSelection, graphNodes]);
+
+  const notesScopeTitle = contentSelection.kind === 'library'
+    ? view === 'archive' ? '已归档笔记' : view === 'organize' ? '待整理笔记' : '全部笔记'
+    : contentSelection.kind === 'cards'
+      ? selectedPath.join(' / ') || '学科资料'
+      : notebookPath || '主题笔记';
+
+  const graphContextNodeId = graphScopeRootId ?? '';
+
+  const evaluateGraphQuery = useCallback(async (searchQuery: string): Promise<ReadonlySet<string>> => {
+    const matches = await api.vaultMatch(searchQuery);
+    const paths = new Set([...matches.paths, ...matches.attachmentPaths]);
+    return new Set(graphNodes.filter((node) => graphNodeNotePaths(node).some((path) => paths.has(path))).map((node) => node.id));
+  }, [api, graphNodes]);
+
+  const sourceMeta = vaultContext.frontmatter ?? {};
+  const sourceTitle = metadataText(sourceMeta.sourceTitle);
+  const sourceUrl = safeHttpUrl(metadataText(sourceMeta.sourceUrl));
+  const sourceRows = [
+    ['来源类型', sourceTypeLabel(metadataText(sourceMeta.sourceType))],
+    ['作者', metadataText(sourceMeta.author)],
+    ['引用', metadataText(sourceMeta.citation)],
+    ['页码', metadataText(sourceMeta.page)],
+    ['DOI', metadataText(sourceMeta.doi)],
+    ['收集时间', formatSourceTime(metadataText(sourceMeta.capturedAt))],
+  ].filter((row): row is [string, string] => row[1] !== null);
+  const sourceCount = new Set([...metadataValues(sourceMeta.sourceIds), ...metadataValues(sourceMeta.itemIds)]).size;
+
   const visibleItems = items;
 
   const notify = useCallback((message: string): void => setNotice(message), []);
@@ -1235,17 +1310,15 @@ export default function WorkbenchApp({
   function changeGraphMode(next: 'mini' | 'expanded'): void {
     if (next === 'expanded') {
       if (graphError !== null && graphScope !== null) void loadGraph(graphScope);
-      setGraphMode('expanded');
-      return;
     }
-    setGraphMode(graphScope?.kind === 'topic' ? 'mini' : 'entry');
+    setGraphMode(next);
   }
 
   function openMoreForGraphNode(node: GraphNode): void {
     const intent = beginNavigationIntent();
     setMoreOpen(false);
     setMoreDetail(null);
-    if (node.nodeType === 'topic') {
+    if (node.nodeType !== 'chapter') {
       void openTopicMore(node.id, intent);
       return;
     }
@@ -1310,22 +1383,39 @@ export default function WorkbenchApp({
     }
   }
 
-  async function handleCreated(item: LibraryItem): Promise<void> {
+  function handleIntakePersisted(): void {
     invalidateItems();
     setView('all');
     setSelectedNodeId(null);
     setKindFilter('all');
     setQuery('');
     setItemsReloadVersion((current) => current + 1);
-    setOverlay(null);
     setSelectedItemId(null);
-    notify(item.aiStatus === 'failed' ? '已保存原文，AI 整理失败；内容仍可手动编辑。' : '已收进知识库。');
     void refresh();
+    void refreshKnowledgeProjection();
   }
 
   function openDetail(itemId: string): void {
+    setInboxDetailItem(null);
     setSelectedItemId(itemId);
     setOverlay('detail');
+  }
+
+  async function openInboxSource(rawSourceId: string): Promise<void> {
+    const requestGeneration = ++detailRequestGeneration.current;
+    const intent = beginNavigationIntent();
+    invalidateItems();
+    setItemsReloadVersion((current) => current + 1);
+    try {
+      // Sources outside the current filter/page still have a direct, authorized detail endpoint.
+      const sourceItem = await api.item(rawSourceId);
+      if (!isCurrentNavigationIntent(intent) || requestGeneration !== detailRequestGeneration.current) return;
+      setInboxDetailItem(sourceItem);
+      setSelectedItemId(sourceItem.id);
+      setOverlay('detail');
+    } catch (error) {
+      if (isCurrentNavigationIntent(intent) && requestGeneration === detailRequestGeneration.current) notify(`无法打开原件资料：${describeError(error)}`);
+    }
   }
 
   function toggleCompare(item: LibraryItem): void {
@@ -1341,6 +1431,7 @@ export default function WorkbenchApp({
       setCompareItems([]);
       setItemsReloadVersion((current) => current + 1);
       setOverlay(null);
+      void refreshKnowledgeProjection();
       notify('已移到归档。');
     } catch (error) {
       notify(`归档失败：${describeError(error)}`);
@@ -1357,6 +1448,7 @@ export default function WorkbenchApp({
       setCompareItems([]);
       setItemsReloadVersion((current) => current + 1);
       setOverlay(null);
+      void refreshKnowledgeProjection();
       notify('已恢复到资料库。');
     } catch (error) {
       notify(`恢复失败：${describeError(error)}`);
@@ -1374,8 +1466,28 @@ export default function WorkbenchApp({
     }
   }
 
+  async function copyMcpConfiguration(): Promise<void> {
+    if (!tokenConfigured || !onCopyMcpConfiguration) return;
+    try {
+      await onCopyMcpConfiguration();
+      notify('MCP 连接配置已复制，请仅粘贴到可信客户端。');
+    } catch {
+      notify('复制连接配置失败，请检查本机连接设置或剪贴板权限后重试。');
+    }
+  }
+
+  function openIntakeFromButton(): void {
+    activateIntake({ action: 'openIntake', requestId: 'ui-' + crypto.randomUUID() });
+  }
+
   function closeOverlay(): void {
-    setOverlay(null);
+    if (updateBusyRef.current) return;
+    if (overlay === 'collect' && intakeBusyRef.current) return;
+    if (!setOverlay(null)) return;
+    setInboxDetailItem(null);
+    activeIntakeRequest.current = null;
+    setIntakeActivation(null);
+    setIntakeActivationError(null);
   }
 
   function handleDialogCancel(event: SyntheticEvent<HTMLDialogElement>): void {
@@ -1383,9 +1495,48 @@ export default function WorkbenchApp({
     closeOverlay();
   }
 
+  const relationsGraph = contentSelection.kind !== 'library' && graphScope !== null ? <aside ref={graphPanelRef} className={`graph-panel graph-panel-${graphMode}`} aria-label="Graph 面板" inert={updateBusy}>
+        <button
+          type="button"
+          className="graph-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整 Graph 面板宽度"
+          aria-valuenow={graphPanelWidth}
+          aria-valuemin={300}
+          aria-valuemax={Math.max(300, shellRef.current?.clientWidth ?? 300)}
+          onPointerDown={beginGraphResize}
+          onPointerMove={moveGraphResize}
+          onPointerUp={endGraphResize}
+          onPointerCancel={endGraphResize}
+          onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); adjustGraphResize(1); } else if (event.key === 'ArrowRight') { event.preventDefault(); adjustGraphResize(-1); } }}
+        />
+        {graphError !== null ? <div className="graph-panel-status" role="alert"><span>Graph 暂不可用：{graphError}</span><button type="button" className="text-action" onClick={() => graphScope !== null && void loadGraph(graphScope)}>重新载入</button></div> : graphLoading && graphNodes.length === 0 ? <div className="graph-panel-status" role="status"><span className="loader" />正在读取 Graph…</div> : <WorkbenchGraph
+          nodes={graphNodes}
+          edges={graphEdges}
+          scopeIdentity={graphScopeIdentity(graphScope)}
+          contextNodeId={graphContextNodeId}
+          selectedNodeId={contentSelection.kind === 'cards' ? contentSelection.selectedNodeId : contentSelection.kind === 'topic' ? contentSelection.topicId : contentSelection.kind === 'chapter' ? contentSelection.chapterId : null}
+          mode={graphMode}
+          evaluateQuery={evaluateGraphQuery}
+          onNodeOpen={(node, intent) => { void handleGraphNodeOpen(node, intent); }}
+          onModeChange={changeGraphMode}
+          onNodeMore={openMoreForGraphNode}
+        />}
+        {graphMode === 'mini' ? <section className="graph-source-panel" aria-label="当前笔记来源">
+          <header><strong>来源信息</strong><span title={vaultContext.selectedPath ?? ''}>{sourceTitle ?? metadataText(sourceMeta.title) ?? vaultContext.selectedPath?.split('/').at(-1) ?? '未打开笔记'}</span></header>
+          {sourceTitle !== null ? <strong className="graph-source-title">{sourceTitle}</strong> : null}
+          {vaultContext.selectedPath !== null ? <small className="graph-source-path">{vaultContext.selectedPath}</small> : null}
+          {sourceRows.map(([label, value]) => <div className="graph-source-row" key={label}><span>{label}</span><span>{value}</span></div>)}
+          {sourceUrl !== null ? <a href={sourceUrl} target="_blank" rel="noreferrer">打开原始来源 ↗</a> : null}
+          {vaultContext.relatedSources.length > 0 ? <div className="graph-source-documents"><span>来源快照</span>{vaultContext.relatedSources.map((source) => <button type="button" key={source.sourceId} title={source.path} onClick={() => requestMarkdownOpen(source.path)}>{source.title} ↗</button>)}</div> : null}
+          {sourceCount > 0 ? <small className="graph-source-count">关联 {sourceCount} 条资料</small> : vaultContext.selectedPath !== null && sourceRows.length === 0 ? <small className="graph-source-count">当前笔记没有来源元数据</small> : null}
+        </section> : null}
+      </aside> : null;
+
   return (
-    <div ref={shellRef} className={`library-shell${workspaceMode === 'vault-notes' || contentSelection.kind !== 'library' ? ` library-shell-notebook${workspaceMode === 'vault-notes' || graphScope !== null ? ` library-shell-graph-${graphMode}` : ' library-shell-notebook-no-graph'}` : ''}${pendingDrafts.length > 0 ? ' has-pending-drafts' : ''}`} data-theme={theme} style={{ '--graph-panel-width': `${graphPanelWidth}px` } as CSSProperties}>
-      <aside className={`library-sidebar${navCollapsed ? ' library-sidebar-tree-collapsed' : ''}`} aria-label="知识库侧栏">
+    <div ref={shellRef} className={`library-shell library-shell-notes${pendingDrafts.length > 0 ? ' has-pending-drafts' : ''}`} data-theme={theme} style={{ '--graph-panel-width': `${graphPanelWidth}px` } as CSSProperties}>
+      <aside className={`library-sidebar${navCollapsed ? ' library-sidebar-tree-collapsed' : ''}`} aria-label="知识库侧栏" inert={updateBusy}>
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">知</div>
           <div>
@@ -1394,26 +1545,17 @@ export default function WorkbenchApp({
           </div>
         </div>
 
-        <div className="sidebar-label">工作区</div>
-        <nav className="library-nav" aria-label="工作区">
-          <button className={workspaceMode === 'vault-notes' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => setWorkspaceMode('vault-notes')} type="button">
-            <span className="nav-glyph" aria-hidden="true">✎</span><span>Markdown 笔记</span>
-          </button>
-          <button className={workspaceMode === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { setWorkspaceMode('library'); void navigateToLibrary('all'); }} type="button">
-            <span className="nav-glyph" aria-hidden="true">▦</span><span>资料库</span>
-          </button>
-        </nav>
-
-        <div className="sidebar-label">资料筛选</div>
+        <div className="sidebar-label">资料库</div>
         <nav className="library-nav" aria-label="资料筛选">
-          <button className={view === 'all' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('all'); }} type="button">
-            <span className="nav-glyph" aria-hidden="true">▦</span><span>全部资料</span>
+          <button className={showInbox ? 'nav-row nav-row-active' : 'nav-row'} type="button" aria-label="打开待确认资料" aria-pressed={showInbox} onClick={() => { beginNavigationIntent(); setInboxOpened(true); setShowInbox(true); }}><span className="nav-glyph" aria-hidden="true">✓</span><span>待确认资料</span></button>
+          <button className={!showInbox && view === 'all' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('all'); }} type="button">
+            <span className="nav-glyph" aria-hidden="true">▦</span><span>全部笔记</span>
           </button>
-          <button className={view === 'organize' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('organize'); }} type="button">
+          <button className={!showInbox && view === 'organize' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('organize'); }} type="button">
             <span className="nav-glyph nav-glyph-warm" aria-hidden="true">✳</span><span>待整理</span>
             {items.some((item) => !item.archived && item.aiStatus !== 'ready') ? <span className="nav-dot" aria-label="有待整理内容" /> : null}
           </button>
-          <button className={view === 'archive' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('archive'); }} type="button">
+          <button className={!showInbox && view === 'archive' && contentSelection.kind === 'library' ? 'nav-row nav-row-active' : 'nav-row'} onClick={() => { void navigateToLibrary('archive'); }} type="button">
             <span className="nav-glyph" aria-hidden="true">⌑</span><span>已归档</span>
           </button>
         </nav>
@@ -1445,16 +1587,17 @@ export default function WorkbenchApp({
         <div className="sidebar-bottom">
           {pendingDrafts.length > 0 ? <details className="sidebar-draft-recovery">
             <summary>待同步草稿（{pendingDrafts.length}）</summary>
-            {pendingDrafts.map((draft) => <button className="draft-recovery-row" type="button" key={`${draft.topicId}:${draft.chapterId ?? ''}:${draft.vaultRoot ?? 'unbound'}`} title={draft.vaultRoot ?? '旧草稿没有 Vault 归属；打开时会要求手动导入'} onClick={() => { void openDraft(draft); }}>
+            {pendingDrafts.map((draft) => <button className="draft-recovery-row" type="button" key={`${draft.topicId}:${draft.chapterId ?? ''}`} onClick={() => { void openDraft(draft); }}>
               <span>{draft.chapterId === null
                 ? `主题概览 · ${graphNodes.find((node) => node.id === draft.topicId)?.title ?? graphNodeFromTree(tree, draft.topicId)?.title ?? '主题概览'}`
                 : `章节 · ${graphChapterTitle(draft.topicId, draft.chapterId, graphNodes, tree, graphNotes)}${graphChapterAttachment(graphNotes, draft.topicId, draft.chapterId) === 'detached' ? ' · 未归属' : ''}`}</span>
-              <small>{new Date(draft.updatedAt).toLocaleString()}{draft.vaultRoot === undefined ? ' · 旧草稿，需手动导入' : ` · ${draft.vaultRoot}`}</small>
+              <small>{new Date(draft.updatedAt).toLocaleString()}</small>
             </button>)}
           </details> : null}
           <button type="button" className="settings-link" onClick={() => setOverlay('settings')}>
             <span className="nav-glyph" aria-hidden="true">⚙</span>Provider 管理
           </button>
+          <button type="button" className="settings-link" disabled={outsideTauri} title={outsideTauri ? '请在桌面应用中打开' : '在独立窗口调整规则并查看处理记录'} onClick={() => { void commands.openProcessingConsole().catch(() => setNotice('无法打开规则与处理记录窗口。')); }}>规则与处理记录</button>
           <button type="button" className="settings-link theme-toggle" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label={`切换到${theme === 'dark' ? '浅色' : '深色'}模式`}>
             <span className="nav-glyph" aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span>{theme === 'dark' ? '浅色模式' : '深色模式'}
           </button>
@@ -1463,174 +1606,36 @@ export default function WorkbenchApp({
         </div>
       </aside>
 
-      <main ref={centerRef} className={`library-main${workspaceMode === 'vault-notes' || contentSelection.kind !== 'library' ? ' notebook-main' : ''}`}>
-        <WorkbenchNotes api={api} active={workspaceMode === 'vault-notes'} requestedOpen={vaultOpenRequest} previewRequest={vaultPreviewRequest} tagQuery={vaultTagQuery} vaultTagCounts={vaultTagCounts} onContextChange={(rootPath, selectedPath, revision) => { setVaultRoot(rootPath); setVaultSelectedPath(selectedPath); setVaultRevision(revision); }} />
-        {workspaceMode === 'library' && contentSelection.kind === 'library' && chapterChoiceView !== null ? <ChapterChoicePanel chapterTitle={chapterChoiceView.chapterTitle} candidates={chapterChoiceView.candidates} action={chapterChoiceView.action} onChoose={(topicId) => { void chooseChapterTopic(topicId); }} /> : null}
-        {workspaceMode === 'library' && contentSelection.kind !== 'library' ? <GraphNotebook
-          content={contentSelection}
-          scope={graphScope}
-          nodes={graphNodes}
-          edges={graphEdges}
-          pathLabel={notebookPath}
-          loading={graphLoading}
-          error={graphError}
-          note={activeNote}
-          notes={graphNotes}
-          connectableTopics={connectableTopics}
-          historyAvailable={contentHistory.current.length > 0}
-          moreOpen={moreOpen}
-          moreDetail={moreDetail}
-          scrollRef={noteScrollRef}
-          search={graphQuery}
-          searchError={graphSearchError}
-          searchLoading={graphSearchLoading}
-          searchHits={graphSearchHits}
-          classificationOptions={classificationOptions}
-          onSearch={setGraphQuery}
-          renderTopicCard={(node, onOpen, onMore) => <MemoryCard key={node.id} kind="topic" topic={node} onOpen={onOpen} onMore={onMore} />}
-          onOpenTopic={(node) => { void navigateToTopic(node); }}
-          onOpenChapter={(chapterId) => { void resolveAndOpenChapter(chapterId); }}
-          onOpenOrphan={(topicId, chapterId, title) => { void navigateToChapter(topicId, chapterId, title); }}
-          onChooseTopic={(topicId) => { void chooseChapterTopic(topicId); }}
-          onBack={() => { void returnToPreviousContent(); }}
-          onChangeNote={changeNoteContent}
-          onRetrySave={() => { void retryActiveNote(); }}
-          onMore={(topicId) => { void openTopicMore(topicId); }}
-          onCloseMore={() => setMoreOpen(false)}
-          onMoveTopic={(topicId, targetParentId) => { void moveTopic(topicId, targetParentId); }}
-          onCreateChapter={() => { void createChapterForTopic(); }}
-          onChapterTitleChange={setNewChapterTitle}
-          newChapterOpen={newChapterOpen}
-          newChapterTitle={newChapterTitle}
-          actionBusy={chapterActionBusy}
-          onToggleNewChapter={() => { setNewChapterOpen((current) => !current); setNewChapterTitle(''); }}
-          onDetachChapter={() => { void detachCurrentChapter(); }}
-          onConnectChapter={(topicId) => { void connectChapterToTopic(topicId); }}
-          onOpenSearchHit={(nodeId) => { void openGraphSearchHit(nodeId); }}
-          onOpenSearchItem={openDetail}
-          choice={chapterChoiceView}
-          onCollect={() => setOverlay('collect')}
-          onToggleTheme={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
-          theme={theme}
-        /> : workspaceMode === 'library' ? <>
-        <header className="library-header">
-          <div className="header-copy">
-            <div className="eyebrow">{selectedPath.length > 0 ? selectedPath.join(' / ') : '我的知识空间'}</div>
-            <h1>{view === 'archive' ? '归档' : view === 'organize' ? '待整理' : '让好奇心有处可去'}</h1>
-            <p>{view === 'organize' ? '归纳失败或仍在整理的内容会留在这里。' : '网页、Agent 对话和论文摘录，都能在这里找到。'}</p>
-          </div>
-          <div className="header-actions">
-            <button type="button" className="button-quiet theme-header-toggle" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label={`切换到${theme === 'dark' ? '浅色' : '深色'}模式`}>
-              <span aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span>
-            </button>
-            <button type="button" className="button-quiet" onClick={() => setOverlay('settings')} aria-label="打开 Provider 管理">
-              <span aria-hidden="true">⚙</span>
-            </button>
-            <button type="button" className="button-primary" onClick={() => setOverlay('collect')}>
-              <span className="button-plus" aria-hidden="true">＋</span>快速收集
-            </button>
-          </div>
+      <main className="library-main notes-workspace-main" inert={updateBusy}>
+        <header className="notes-workspace-header">
+          <div><span className="eyebrow">{contentSelection.kind === 'library' ? '知序 · 笔记' : '学科知识'}</span><h1>{showInbox ? '待确认资料' : notesScopeTitle}</h1><p>{showInbox ? '保留原件，只确认需要你判断的内容。' : '在原有学科与方向中浏览、编辑 Markdown 笔记和收集资料。'}</p></div>
+          <button type="button" className="button-primary" onClick={openIntakeFromButton}><span className="button-plus" aria-hidden="true">＋</span>快速收集</button>
         </header>
-
-        <div className="library-tools">
-          <label className="search-field">
-            <span aria-hidden="true" className="search-icon">⌕</span>
-            <input type="search" value={query} maxLength={200} onChange={(event) => updateQuery(event.target.value)} placeholder="搜知识、摘录、来源…" aria-label="搜索资料" />
-            {query !== '' ? <button type="button" className="clear-search" onClick={() => updateQuery('')} aria-label="清空搜索">×</button> : null}
-          </label>
-          {paths.length > 0 ? (
-            <label className="subject-picker">
-              <span className="visually-hidden">按学科或研究方向筛选</span>
-              <select
-                aria-label="按学科或研究方向筛选"
-                value={selectedNodeId ?? ''}
-                onChange={(event) => updateSelectedNode(event.target.value || null)}
-              >
-                <option value="">全部学科与方向</option>
-                {paths.map((path) => <option key={path.id} value={path.id}>{path.labels.join(' / ')}</option>)}
-              </select>
-            </label>
-          ) : null}
-          <div className="kind-filters" role="group" aria-label="按资料类型筛选">
-            <FilterButton active={kindFilter === 'all'} onClick={() => updateKindFilter('all')}>全部类型</FilterButton>
-            <FilterButton active={kindFilter === 'paper_excerpt'} onClick={() => updateKindFilter('paper_excerpt')}>论文摘录</FilterButton>
-            <FilterButton active={kindFilter === 'web_page'} onClick={() => updateKindFilter('web_page')}>网页</FilterButton>
-            <FilterButton active={kindFilter === 'knowledge'} onClick={() => updateKindFilter('knowledge')}>知识卡片</FilterButton>
-            <FilterButton active={kindFilter === 'image'} onClick={() => updateKindFilter('image')}>图片</FilterButton>
-          </div>
-          <span className="result-count">{loading ? '正在读取…' : `${visibleItems.length}${hasMore ? '+' : ''} 条`}</span>
-        </div>
-
-        {itemsError !== null ? (
-          <div className="inline-error" role="alert">
-            <span>暂时无法载入资料：{itemsError}</span>
-            <button type="button" onClick={() => { setItemsReloadVersion((current) => current + 1); void refresh(); }}>重新载入</button>
-          </div>
-        ) : null}
-
-        {loading && items.length === 0 ? (
-          <div className="loading-state" role="status"><span className="loader" />{query.trim() === '' ? '正在打开你的知识库…' : '正在搜索资料…'}</div>
-        ) : visibleItems.length === 0 ? (
-          <EmptyLibrary
-            view={view}
-            hasQuery={query.trim() !== '' || selectedPath.length > 0 || kindFilter !== 'all'}
-            hasMore={hasMore}
-            onClear={() => { invalidateItems(); setQuery(''); setSelectedNodeId(null); setKindFilter('all'); setView('all'); }}
-            onCollect={() => setOverlay('collect')}
-          />
-        ) : (
-          <section className="card-grid" aria-label="资料卡片">
-            {visibleItems.map((item) => (
-              <MemoryCard
-                kind="library"
-                key={item.id}
-                item={item}
-                compareSelected={compareIds.includes(item.id)}
-                onOpen={() => openDetail(item.id)}
-                onCompare={() => toggleCompare(item)}
-              />
-            ))}
-          </section>
-        )}
-        {!loading && hasMore ? (
-          <div className="load-more-wrap"><button type="button" className="button-soft" disabled={loadingMore} onClick={() => void loadMore()}>
-            {loadingMore ? '正在载入…' : '再看一些'}
-          </button></div>
-        ) : null}
-        </> : null}
+        {chapterChoiceView !== null ? <ChapterChoicePanel chapterTitle={chapterChoiceView.chapterTitle} candidates={chapterChoiceView.candidates} action={chapterChoiceView.action} onChoose={(topicId) => { void chooseChapterTopic(topicId); }} /> : null}
+        {inboxOpened ? <section className="notes-review-workspace" aria-label="资料审核工作区" hidden={!showInbox}>
+          <WorkbenchInbox api={api} active={showInbox && !updateBusy && overlay !== 'detail'} onUpdateSafetyChange={reportReviewUpdateSafety} selectedNodeId={selectedNodeId} targetNodes={paths.map((item) => ({ id: item.id, label: item.title }))} onOpenItem={openInboxSource} />
+        </section> : null}
+        <WorkbenchNotes
+          api={api}
+          active={!showInbox && !updateBusy}
+          relationsGraph={relationsGraph}
+          requestedOpen={vaultOpenRequest}
+          scopePaths={noteScopePaths}
+          scopeTitle={notesScopeTitle}
+          libraryView={view}
+          tagQuery={null}
+          vaultTagCounts={new Map()}
+          onUpdateSafetyChange={reportNotesUpdateSafety}
+          onContextChange={handleVaultContextChange}
+          onVaultDocumentsChanged={handleVaultDocumentsChanged}
+          onLegacyDraftSaved={(draft) => {
+            if (!clearNoteDraft(draft, draft.content)) setNotice('笔记已保存，但旧版恢复草稿无法清除。');
+            refreshPendingDrafts();
+          }}
+        />
       </main>
 
-      {workspaceMode === 'vault-notes' ? <aside ref={graphPanelRef} className={`graph-panel graph-panel-${graphMode}`} aria-label="Vault Graph 面板">
-        {graphMode === 'entry' ? <div className="graph-entry">
-          {vaultGraphError !== null ? <p className="graph-entry-error" role="alert">Graph 暂不可用：{vaultGraphError}</p> : null}
-          {vaultGraphLoading ? <span className="graph-entry-loading" role="status">正在读取 Vault Graph…</span> : null}
-          <button type="button" className="button-soft graph-entry-button" onClick={() => changeGraphMode('expanded')}>展开 Graph View</button>
-          {vaultGraphError !== null ? <button type="button" className="text-action" onClick={() => setVaultRevision((revision) => revision + 1)}>重新载入</button> : null}
-        </div> : <WorkbenchGraph
-          data={graphForCurrentVault}
-          vaultRoot={vaultRoot}
-          mode={vaultGraphMode}
-          focusedPath={vaultSelectedPath}
-          selectedPath={vaultSelectedPath}
-          loading={vaultGraphLoading}
-          error={vaultGraphError}
-          onRefresh={() => setVaultRevision((revision) => revision + 1)}
-          evaluateQuery={evaluateVaultQuery}
-          onModeChange={changeVaultGraphMode}
-          onNodeOpen={(path, intent) => {
-            setWorkspaceMode('vault-notes');
-            setVaultOpenRequest({ path, intent, id: ++vaultOpenRequestId.current });
-          }}
-          onTagOpen={(tag) => {
-            changeVaultGraphMode('global');
-            setVaultTagQuery(`tag:${tag.replace(/^#/, '')}`);
-            setWorkspaceMode('vault-notes');
-          }}
-          onNodeHover={(path, anchor) => setVaultPreviewRequest({ path, anchor, id: ++vaultPreviewRequestId.current })}
-        />}
-      </aside> : workspaceMode === 'library' && contentSelection.kind !== 'library' && graphScope !== null ? <aside ref={graphPanelRef} className={`graph-panel graph-panel-${graphMode}`} aria-label="Graph 面板">
-        <div className="graph-entry"><p className="graph-entry-loading">学术知识树仍用于章节与主题导航。</p><button type="button" className="button-soft graph-entry-button" onClick={() => setWorkspaceMode('vault-notes')}>打开 Vault Graph</button></div>
-      </aside> : null}
+
 
       {compareIds.length > 0 ? (
         <div className="compare-dock" role="region" aria-label="并排比较">
@@ -1648,10 +1653,29 @@ export default function WorkbenchApp({
         className={`library-dialog ${overlay === 'detail' ? 'library-dialog-detail' : overlay === 'compare' ? 'library-dialog-compare' : ''}`}
         aria-label={overlay === 'detail' ? '资料详情' : overlay === 'collect' ? '收集资料' : overlay === 'compare' ? '并排比较资料' : overlay === 'settings' ? 'Provider 管理与收集入口设置' : undefined}
         onCancel={handleDialogCancel}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && overlay === 'collect' && intakeBusyRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
         onClick={(event) => { if (event.target === dialogRef.current) closeOverlay(); }}
       >
         {overlay === 'collect' ? (
-          <CaptureDialog api={api} paths={paths} onClose={closeOverlay} onCreated={handleCreated} onError={notify} />
+          <IntakeWindow
+            api={api}
+            paths={paths}
+            onClose={closeOverlay}
+            onPersisted={handleIntakePersisted}
+            onBusyChange={(value) => { intakeBusyRef.current = value; }}
+            screenshotAdapter={intakeNativeAdapters?.screenshot}
+            clipboardAdapter={intakeNativeAdapters?.clipboard}
+            activation={intakeActivation}
+            activationError={intakeActivationError}
+            shortcutStatus={shortcutStatus}
+            onRequestActivation={activateIntake}
+            onActivationComplete={completeIntakeActivation}
+          />
         ) : null}
         {overlay === 'detail' && selectedItem !== null ? (
           <ItemDetailDialog
@@ -1664,9 +1688,10 @@ export default function WorkbenchApp({
             onClose={closeOverlay}
             onCompare={() => toggleCompare(selectedItem)}
             onUpdated={(updated) => {
+              setInboxDetailItem((current) => current?.id === updated.id ? updated : current);
               setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
               setCompareItems((current) => current.map((item) => item.id === updated.id ? updated : item));
-              void refreshTree();
+              void refreshKnowledgeProjection();
               notify('更改已保存。');
             }}
             onArchive={() => void archiveSelected(selectedItem)}
@@ -1680,6 +1705,8 @@ export default function WorkbenchApp({
         {overlay === 'settings' ? (
           <SettingsDialog
             modelSettings={modelSettings}
+            updateBusy={updateBusy}
+            updatePanel={outsideTauri ? <p>应用内更新请在桌面应用中使用。</p> : <NativeUpdatePanel beforeInstall={beforeUpdate} beforeRestart={beforeUpdate} onBusyChange={reportUpdateBusy} />}
             apiBaseUrl={apiBaseUrl}
             mcpEndpoint={mcpEndpoint}
             tokenConfigured={tokenConfigured}
@@ -1688,6 +1715,7 @@ export default function WorkbenchApp({
             healthError={healthError}
             onClose={closeOverlay}
             onCopyEndpoint={() => void copyMcpEndpoint()}
+            onCopyConfiguration={onCopyMcpConfiguration && tokenConfigured ? () => void copyMcpConfiguration() : undefined}
             onRefresh={() => void refresh()}
           />
         ) : null}
@@ -1829,124 +1857,6 @@ function MemoryCover(props: { kind: 'library'; item: LibraryItem } | { kind: 'to
       <span className="note-cover-summary">{excerpt(item.summary || item.content, 96)}</span>
       <span className="note-cover-bottom">{item.subjectPath.at(-1) || '随手收集'}</span>
     </div>
-  );
-}
-
-function CaptureDialog({ api, paths, onClose, onCreated, onError }: {
-  api: WorkbenchApi;
-  paths: CategoryPath[];
-  onClose: () => void;
-  onCreated: (item: LibraryItem) => Promise<void>;
-  onError: (message: string) => void;
-}): ReactElement {
-  const [kind, setKind] = useState<LibraryItem['kind']>('knowledge');
-  const [sourceType, setSourceType] = useState<CreateLibraryItemInput['source']['type']>('manual');
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [url, setUrl] = useState('');
-  const [author, setAuthor] = useState('');
-  const [citation, setCitation] = useState('');
-  const [doi, setDoi] = useState('');
-  const [page, setPage] = useState('');
-  const [researchPoint, setResearchPoint] = useState('');
-  const [categoryId, setCategoryId] = useState('');
-  const [subjectPathInput, setSubjectPathInput] = useState('');
-  const [tags, setTags] = useState('');
-  const [previewImageUrl, setPreviewImageUrl] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (saving) return;
-    const safeImage = previewImageUrl.trim() === '' ? undefined : safeHttpUrl(previewImageUrl.trim()) ?? undefined;
-    const safeSourceUrl = url.trim() === '' ? undefined : safeHttpUrl(url.trim()) ?? undefined;
-    if (url.trim() !== '' && safeSourceUrl === undefined) {
-      onError('来源地址请使用 http 或 https 链接。');
-      return;
-    }
-    if (previewImageUrl.trim() !== '' && safeImage === undefined) {
-      onError('封面地址请使用 http 或 https 链接。');
-      return;
-    }
-    const category = paths.find((path) => path.id === categoryId);
-    const newPath = parseSubjectPath(subjectPathInput);
-    const subjectPath = newPath.length > 0 ? newPath : category?.labels;
-    const input: CreateLibraryItemInput = {
-      content: content.trim(),
-      kind,
-      source: {
-        type: sourceType,
-        ...(title.trim() === '' ? {} : { title: title.trim() }),
-        ...(safeSourceUrl === undefined ? {} : { url: safeSourceUrl }),
-        platform: sourceType === 'web' ? '网页' : sourceType === 'agent' ? 'Agent' : sourceType === 'desktop_app' ? '桌面应用' : '手动收集',
-        capturedAt: new Date().toISOString(),
-        author: author.trim() || null,
-        citation: citation.trim() || null,
-        doi: doi.trim() || null,
-        page: page.trim() || null,
-      },
-      ...(subjectPath === undefined ? {} : { subjectPath }),
-      researchPoint: researchPoint.trim() || null,
-      tags: tags.split(/[，,]/).map((tag) => tag.trim()).filter(Boolean),
-      ...(safeImage === undefined ? {} : { previewImageUrl: safeImage }),
-    };
-    setSaving(true);
-    try {
-      const result = await api.createItem(input);
-      await onCreated(result.item);
-    } catch (error) {
-      onError(`保存失败：${describeError(error)}。原文仍在输入框中，请重试。`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <section className="dialog-content capture-dialog" aria-labelledby="collect-title">
-      <DialogHeader eyebrow="放进知识库" title="收集一条资料" onClose={onClose} />
-      <p className="dialog-intro">保存原文后，AI 会自动判断学科与研究方向；你也可以手动指定或稍后修改。</p>
-      <form className="capture-form" onSubmit={(event) => void submit(event)}>
-        <div className="form-field">
-          <label>资料类型</label>
-          <div className="kind-picker" role="group" aria-label="选择资料类型">
-            {(['knowledge', 'paper_excerpt', 'web_page', 'image'] as const).map((option) => (
-              <button key={option} type="button" className={kind === option ? 'kind-option kind-option-active' : 'kind-option'} aria-pressed={kind === option} onClick={() => setKind(option)}>{KIND_LABELS[option]}</button>
-            ))}
-          </div>
-        </div>
-        <div className="form-two-column">
-          <div className="form-field"><label htmlFor="capture-source-type">来自哪里</label>
-            <select id="capture-source-type" value={sourceType} onChange={(event) => setSourceType(event.target.value as CreateLibraryItemInput['source']['type'])}>
-              <option value="manual">手动摘录</option><option value="web">网页</option><option value="agent">Agent 对话</option><option value="desktop_app">桌面应用</option>
-            </select>
-          </div>
-          <div className="form-field"><label htmlFor="capture-category">学科与研究方向</label>
-            <select id="capture-category" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-              <option value="">由 AI 自动判断</option>{paths.map((path) => <option key={path.id} value={path.id}>{path.title}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="form-field"><label htmlFor="capture-new-path">新建学科或研究方向 <span>可留空</span></label><input id="capture-new-path" value={subjectPathInput} onChange={(event) => setSubjectPathInput(event.target.value)} placeholder="例如：社会科学 / 经济学 / 因果推断" /><p className="field-hint">用“/”分层；填写后会按此路径创建或归类。</p></div>
-        <div className="form-field"><label htmlFor="capture-title">标题 <span>可留空</span></label><input id="capture-title" value={title} onChange={(event) => setTitle(event.target.value)} maxLength={600} placeholder={kind === 'paper_excerpt' ? '论文或章节标题' : '给这条资料起个名字'} /></div>
-        <div className="form-field"><label htmlFor="capture-content">原文或摘录</label><textarea id="capture-content" required minLength={8} maxLength={40000} value={content} onChange={(event) => setContent(event.target.value)} rows={6} placeholder={kind === 'paper_excerpt' ? '粘贴研究发现、方法或关键段落…' : '粘贴网页内容、Agent 答复或自己的笔记…'} data-autofocus /></div>
-        {kind === 'paper_excerpt' ? <div className="form-field"><label htmlFor="capture-point">研究点 <span>这段摘录说明了什么？</span></label><input id="capture-point" value={researchPoint} onChange={(event) => setResearchPoint(event.target.value)} maxLength={1000} placeholder="例如：市场规模变化与融资约束的关系" /></div> : null}
-        <details className="citation-fields">
-          <summary>补充出处与标签</summary>
-          <div className="form-field"><label htmlFor="capture-url">来源链接</label><input id="capture-url" type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" /></div>
-          {kind === 'paper_excerpt' ? (
-            <div className="form-two-column">
-              <div className="form-field"><label htmlFor="capture-author">作者</label><input id="capture-author" value={author} onChange={(event) => setAuthor(event.target.value)} placeholder="作者姓名" /></div>
-              <div className="form-field"><label htmlFor="capture-page">页码</label><input id="capture-page" value={page} onChange={(event) => setPage(event.target.value)} placeholder="例如 12–14" /></div>
-              <div className="form-field"><label htmlFor="capture-doi">DOI</label><input id="capture-doi" value={doi} onChange={(event) => setDoi(event.target.value)} placeholder="10.…" /></div>
-              <div className="form-field"><label htmlFor="capture-citation">完整引用</label><input id="capture-citation" value={citation} onChange={(event) => setCitation(event.target.value)} placeholder="期刊、年份、卷期" /></div>
-            </div>
-          ) : null}
-          <div className="form-field"><label htmlFor="capture-tags">标签</label><input id="capture-tags" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用逗号分隔，如：方法, 综述" /></div>
-          {(kind === 'image' || kind === 'web_page') ? <div className="form-field"><label htmlFor="capture-image">封面图片地址 <span>可留空</span></label><input id="capture-image" type="url" value={previewImageUrl} onChange={(event) => setPreviewImageUrl(event.target.value)} placeholder="https://…" /></div> : null}
-        </details>
-        <div className="dialog-actions"><button type="button" className="button-soft" onClick={onClose}>取消</button><button type="submit" className="button-primary" disabled={saving || content.trim().length < 8}>{saving ? '正在保存…' : '保存到知序'}</button></div>
-      </form>
-    </section>
   );
 }
 
@@ -2129,8 +2039,10 @@ function CompareDialog({ items, onClose }: { items: LibraryItem[]; onClose: () =
   );
 }
 
-function SettingsDialog({ modelSettings, apiBaseUrl, mcpEndpoint, tokenConfigured, outsideTauri, health, healthError, onClose, onCopyEndpoint, onRefresh }: {
+function SettingsDialog({ modelSettings, updatePanel, updateBusy, apiBaseUrl, mcpEndpoint, tokenConfigured, outsideTauri, health, healthError, onClose, onCopyEndpoint, onCopyConfiguration, onRefresh }: {
   modelSettings?: ReactNode;
+  updatePanel: ReactNode;
+  updateBusy: boolean;
   apiBaseUrl: string;
   mcpEndpoint: string;
   tokenConfigured: boolean;
@@ -2139,17 +2051,19 @@ function SettingsDialog({ modelSettings, apiBaseUrl, mcpEndpoint, tokenConfigure
   healthError: string | null;
   onClose: () => void;
   onCopyEndpoint: () => void;
+  onCopyConfiguration?: () => void;
   onRefresh: () => void;
 }): ReactElement {
   return (
     <section className="dialog-content settings-dialog-content" aria-labelledby="settings-title">
       <DialogHeader eyebrow="Provider 管理" title="模型服务与收集入口" onClose={onClose} />
-      {modelSettings}
+      <fieldset disabled={updateBusy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>{modelSettings}</fieldset>
+      {updatePanel}
       <details className="connection-details"><summary>浏览器、Agent 与本机连接</summary>
       <p className="dialog-intro">收集入口接到同一个知识库。论文摘录也可以直接从这里粘贴保存。</p>
       <div className="setup-steps">
         <div className="setup-step"><span>01</span><div><strong>网页</strong><p>安装知序浏览器扩展。遇到有用的网页或段落时，点扩展即可收集来源和内容。</p></div></div>
-        <div className="setup-step"><span>02</span><div><strong>Agent</strong><p>在 Codex 或其他 Agent 的 MCP 设置中添加下方入口；之后把想留存的回答发送给知序。</p><code>{mcpEndpoint || '暂不可用'}</code><button type="button" className="copy-inline" onClick={onCopyEndpoint} disabled={!mcpEndpoint}>复制入口地址</button></div></div>
+        <div className="setup-step"><span>02</span><div><strong>Agent</strong><p>在 Codex 或其他 Agent 的 MCP 设置中添加下方入口；之后把想留存的回答发送给知序。</p><p>本机托管连接需要授权配置，仅有入口地址无法完成认证。含凭据的配置请只粘贴到你信任的客户端。</p><code>{mcpEndpoint || '暂不可用'}</code><button type="button" className="copy-inline" onClick={onCopyEndpoint} disabled={!mcpEndpoint}>复制入口地址</button>{tokenConfigured && onCopyConfiguration ? <button type="button" className="copy-inline" onClick={onCopyConfiguration} disabled={!mcpEndpoint}>复制MCP连接配置（含本机凭据）</button> : null}</div></div>
         <div className="setup-step"><span>03</span><div><strong>论文与手记</strong><p>点“快速收集”，粘贴段落，再补上作者、页码和研究点，日后就能按方向对读。</p></div></div>
       </div>
       <div className="connection-summary">
@@ -2239,6 +2153,37 @@ function sameNoteIdentity(left: NoteIdentity | null | undefined, right: NoteIden
 
 function sameGraphScope(left: GraphScope | null, right: GraphScope): boolean {
   return left !== null && graphScopeIdentity(left) === graphScopeIdentity(right);
+}
+
+function graphNodeNotePaths(node: GraphNode): string[] {
+  return [...new Set([node.notePath, ...(node.notePaths ?? [])].filter((path): path is string => typeof path === 'string' && path.length > 0))];
+}
+
+function metadataText(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) {
+    const values = value.map(metadataText).filter((item): item is string => item !== null);
+    return values.length > 0 ? values.join(', ') : null;
+  }
+  return null;
+}
+
+function metadataValues(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(metadataText).filter((item): item is string => item !== null);
+  const text = metadataText(value);
+  return text === null ? [] : [text];
+}
+
+function sourceTypeLabel(value: string | null): string | null {
+  if (value === null) return null;
+  return ({ web: '网页', desktop_app: '桌面应用', agent: 'Agent', manual: '手动收集' } as Record<string, string>)[value] ?? value;
+}
+
+function formatSourceTime(value: string | null): string | null {
+  if (value === null) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function readColorTheme(): ColorTheme {

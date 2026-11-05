@@ -232,7 +232,7 @@ function evalTerm(raw: string, file: SearchFile, defaultCaseSensitive: boolean):
     if (operator === 'block' || operator === 'section') {
       const candidates = operator === 'block'
         ? Object.values(file.metadata.blocks ?? {}).map((block) => file.content.slice(block.position.start.offset, block.position.end.offset))
-        : (file.metadata.headings ?? []).map((heading) => file.content.slice(heading.position.start.offset));
+        : (file.metadata.headings ?? []).map((heading) => file.content.slice(heading.position.start.offset, heading.position.end.offset));
       const matched = candidates.some((value) => includes(value));
       return { matched, positions: [], score: matched ? 1 : 0 };
     }

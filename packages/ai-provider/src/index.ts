@@ -1,13 +1,13 @@
 import type { AiProviderConfig } from '@noltri/shared';
 import { createOfflineProvider } from './offline';
-import { createOpenAiProvider } from './openai';
+import { createOpenAiProvider, type OpenAiProviderOptions } from './openai';
 import type { AIProvider } from './types';
 import { knowledgeError } from '@noltri/shared';
 
-export function createProvider(config: AiProviderConfig): AIProvider {
+export function createProvider(config: AiProviderConfig, options?: OpenAiProviderOptions): AIProvider {
   switch (config.driver) {
     case 'openai':
-      return createOpenAiProvider(config);
+      return createOpenAiProvider(config, options);
     case 'offline':
       return createOfflineProvider({ embeddingDim: config.embeddingDim });
     case 'disabled':
@@ -36,3 +36,6 @@ export * from './types';
 export { OfflineDeterministicProvider, createOfflineProvider } from './offline';
 export { OpenAiCompatibleProvider, createOpenAiProvider } from './openai';
 export type { AiProviderConfig, AiProtocol } from '@noltri/shared';
+
+export type { OpenAiProviderOptions } from './openai';
+export { recognizeImage, validateRecognizeImageInput, validateImageRecognitionResult } from './image-recognition';

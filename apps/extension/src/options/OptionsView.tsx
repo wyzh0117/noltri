@@ -95,10 +95,10 @@ export function OptionsView() {
           className="input"
           type="url"
           value={apiBaseUrl}
-          placeholder="http://localhost:8787"
+          placeholder="http://localhost:18887"
           onChange={(event) => setApiBaseUrl(event.target.value)}
         />
-        <p className="hint">仅支持 http / https，例如 http://127.0.0.1:8787</p>
+        <p className="hint">仅支持 http / https，例如 http://127.0.0.1:18887</p>
       </section>
 
       <section className="card">

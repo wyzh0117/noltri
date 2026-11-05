@@ -8,16 +8,19 @@ export interface GraphPalette {
   node: string;
   text: string;
   muted: string;
-  tag: string;
-  attachment: string;
-  unresolved: string;
+  discipline: string;
+  subdiscipline: string;
+  domain: string;
+  topic: string;
+  chapter: string;
   focused: string;
   selected: string;
 }
 
 export const DEFAULT_GRAPH_PALETTE: GraphPalette = {
   line: '#d8ddd4', node: '#89978c', text: '#48534b', muted: '#899188',
-  tag: '#b88934', attachment: '#71819c', unresolved: '#c65d58', focused: '#3d6853', selected: '#3d6853',
+  discipline: '#2f5542', subdiscipline: '#527e67', domain: '#9a7f50',
+  topic: '#3d6853', chapter: '#89978c', focused: '#3d6853', selected: '#3d6853',
 };
 
 export function graphPaletteFromElement(element: HTMLElement): GraphPalette {
@@ -28,9 +31,11 @@ export function graphPaletteFromElement(element: HTMLElement): GraphPalette {
     node: read('--muted', DEFAULT_GRAPH_PALETTE.node),
     text: read('--ink-soft', DEFAULT_GRAPH_PALETTE.text),
     muted: read('--muted', DEFAULT_GRAPH_PALETTE.muted),
-    tag: read('--graph-tag', DEFAULT_GRAPH_PALETTE.tag),
-    attachment: read('--graph-attachment', DEFAULT_GRAPH_PALETTE.attachment),
-    unresolved: read('--graph-unresolved', DEFAULT_GRAPH_PALETTE.unresolved),
+    discipline: read('--ink', DEFAULT_GRAPH_PALETTE.discipline),
+    subdiscipline: read('--green-dark', DEFAULT_GRAPH_PALETTE.subdiscipline),
+    domain: DEFAULT_GRAPH_PALETTE.domain,
+    topic: read('--green', DEFAULT_GRAPH_PALETTE.topic),
+    chapter: read('--muted', DEFAULT_GRAPH_PALETTE.chapter),
     focused: read('--green', DEFAULT_GRAPH_PALETTE.focused),
     selected: read('--green', DEFAULT_GRAPH_PALETTE.selected),
   };
@@ -128,8 +133,22 @@ function rgba(context: CanvasRenderingContext2D, color: string, alpha = 1): [num
   return [channel(parts[0]!), channel(parts[1]!), channel(parts[2]!), alpha * (parts[3] === undefined ? 1 : Number.parseFloat(parts[3]!))];
 }
 
-function addVertex(target: number[], point: GraphPoint, color: [number, number, number, number], size: number, viewport: GraphViewport): void {
-  target.push(point.x / viewport.width * 2 - 1, 1 - point.y / viewport.height * 2, ...color, size);
+function ensureVertexCapacity(buffer: Float32Array<ArrayBuffer>, required: number): Float32Array<ArrayBuffer> {
+  if (buffer.length >= required) return buffer;
+  let capacity = Math.max(256, buffer.length);
+  while (capacity < required) capacity *= 2;
+  return new Float32Array(capacity);
+}
+
+function addVertex(target: Float32Array<ArrayBuffer>, offset: number, x: number, y: number, color: [number, number, number, number], size: number, viewport: GraphViewport): number {
+  target[offset++] = x / viewport.width * 2 - 1;
+  target[offset++] = 1 - y / viewport.height * 2;
+  target[offset++] = color[0];
+  target[offset++] = color[1];
+  target[offset++] = color[2];
+  target[offset++] = color[3];
+  target[offset++] = size;
+  return offset;
 }
 
 function nodeColor(node: GraphModel['nodes'][number], input: GraphRenderInput): string {
@@ -137,10 +156,13 @@ function nodeColor(node: GraphModel['nodes'][number], input: GraphRenderInput): 
   if (node.id === input.hoveredId) return input.palette.focused;
   if (node.id === input.focusedId) return input.palette.focused;
   if (node.colorGroup !== null) return node.colorGroup;
-  if (node.type === 'tag') return input.palette.tag;
-  if (node.type === 'unresolved') return input.palette.unresolved;
-  if (node.type === 'attachment') return input.palette.attachment;
-  return input.palette.node;
+  switch (node.type) {
+    case 'discipline': return input.palette.discipline;
+    case 'subdiscipline': return input.palette.subdiscipline;
+    case 'domain': return input.palette.domain;
+    case 'topic': return input.palette.topic;
+    case 'chapter': return input.palette.chapter;
+  }
 }
 
 export class WorkbenchGraphRenderer {
@@ -149,16 +171,19 @@ export class WorkbenchGraphRenderer {
   private readonly gl: WebGL2RenderingContext | null;
   private readonly program: WebGLProgram | null;
   private readonly vertexBuffer: WebGLBuffer | null;
+  private readonly positionAttribute: number;
+  private readonly colorAttribute: number;
+  private readonly sizeAttribute: number;
+  private readonly roundPointsUniform: WebGLUniformLocation | null;
   private readonly fallbackContext: CanvasRenderingContext2D | null;
   private readonly labelContext: CanvasRenderingContext2D;
   private readonly webglCanvas: HTMLCanvasElement;
   private readonly fallbackCanvas: HTMLCanvasElement;
   private readonly labelCanvas: HTMLCanvasElement;
   private dpr = 1;
-  private readonly edgeVertices: number[] = [];
-  private readonly haloVertices: number[] = [];
-  private readonly nodeVertices: number[] = [];
-  private vertexScratch = new Float32Array(0);
+  private edgeVertices = new Float32Array(0);
+  private haloVertices = new Float32Array(0);
+  private nodeVertices = new Float32Array(0);
   private gpuBufferBytes = 0;
   private indexedModel: GraphModel | null = null;
   private lineEdges: GraphModel['edges'] = [];
@@ -169,6 +194,10 @@ export class WorkbenchGraphRenderer {
   private neighborhoodKey: string | null = null;
   private neighborhoodModel: GraphModel | null = null;
   private neighborhood: Set<string> | null = null;
+  private readonly colorCache = new Map<string, [number, number, number, number]>();
+  private labelOrder: GraphModel['nodes'] = [];
+  private visibleNodeIds = new Set<string>();
+  private orderedVisibleNodes: GraphModel['nodes'] = [];
 
   constructor(webglCanvas: HTMLCanvasElement, fallbackCanvas: HTMLCanvasElement, labelCanvas: HTMLCanvasElement) {
     this.webglCanvas = webglCanvas;
@@ -183,7 +212,7 @@ export class WorkbenchGraphRenderer {
     let vertexBuffer: WebGLBuffer | null = null;
     let fallbackReason: string | null = null;
     try {
-      gl = webglCanvas.getContext('webgl2', { alpha: true, antialias: true, preserveDrawingBuffer: true });
+      gl = webglCanvas.getContext('webgl2', { alpha: true, antialias: true });
       if (gl === null) fallbackReason = 'WebGL2 is unavailable';
       else {
         program = createProgram(gl);
@@ -198,6 +227,10 @@ export class WorkbenchGraphRenderer {
       vertexBuffer = null;
     }
     if (gl !== null && program !== null) {
+      this.positionAttribute = gl.getAttribLocation(program, 'a_position');
+      this.colorAttribute = gl.getAttribLocation(program, 'a_color');
+      this.sizeAttribute = gl.getAttribLocation(program, 'a_size');
+      this.roundPointsUniform = gl.getUniformLocation(program, 'u_round_points');
       this.mode = 'webgl';
       this.gl = gl;
       this.program = program;
@@ -206,6 +239,10 @@ export class WorkbenchGraphRenderer {
       webglCanvas.hidden = false;
       fallbackCanvas.hidden = true;
     } else {
+      this.positionAttribute = -1;
+      this.colorAttribute = -1;
+      this.sizeAttribute = -1;
+      this.roundPointsUniform = null;
       const context = fallbackCanvas.getContext('2d');
       if (context === null) throw new Error('Graph rendering is unavailable: WebGL2 and Canvas 2D could not initialize');
       this.mode = 'canvas';
@@ -244,6 +281,16 @@ export class WorkbenchGraphRenderer {
     if (this.gl !== null && this.vertexBuffer !== null) this.gl.deleteBuffer(this.vertexBuffer);
   }
 
+  private color(color: string, alpha = 1): [number, number, number, number] {
+    const key = `${color}\0${alpha}`;
+    const cached = this.colorCache.get(key);
+    if (cached !== undefined) return cached;
+    if (this.colorCache.size >= 128) this.colorCache.clear();
+    const parsed = rgba(this.labelContext, color, alpha);
+    this.colorCache.set(key, parsed);
+    return parsed;
+  }
+
   private prepareModel(model: GraphModel): void {
     if (this.indexedModel === model) return;
     this.indexedModel = model;
@@ -253,11 +300,13 @@ export class WorkbenchGraphRenderer {
       this.adjacency.get(edge.target)?.add(edge.source);
     }
     this.lineEdges = uniqueGraphLineEdges(model.edges);
+    this.labelOrder = [...model.nodes].sort((left, right) => right.degree - left.degree || left.id.localeCompare(right.id));
     this.neighborhoodModel = null;
   }
 
   private collectVisible(input: GraphRenderInput): void {
     this.visibleNodes.length = 0;
+    this.visibleNodeIds.clear();
     this.visibleEdges.length = 0;
     this.visibleArrows.length = 0;
     const { camera, viewport, positions } = input;
@@ -268,7 +317,10 @@ export class WorkbenchGraphRenderer {
       const y = viewport.height / 2 + camera.y + point.y * camera.scale;
       const radius = graphNodeScreenRadius(node, camera.scale);
       const margin = radius + Math.min(320, node.title.length * 8 + 16);
-      if (x >= -margin && x <= viewport.width + margin && y >= -margin && y <= viewport.height + margin) this.visibleNodes.push(node);
+      if (x >= -margin && x <= viewport.width + margin && y >= -margin && y <= viewport.height + margin) {
+        this.visibleNodes.push(node);
+        this.visibleNodeIds.add(node.id);
+      }
     }
     for (const edge of this.lineEdges) {
       const source = positions[edge.source];
@@ -280,6 +332,8 @@ export class WorkbenchGraphRenderer {
       const y1 = viewport.height / 2 + camera.y + target.y * camera.scale;
       if (graphSegmentCoordinatesVisibleInViewport(x0, y0, x1, y1, viewport)) this.visibleEdges.push(edge);
     }
+    this.orderedVisibleNodes.length = 0;
+    for (const node of this.labelOrder) if (this.visibleNodeIds.has(node.id)) this.orderedVisibleNodes.push(node);
     if (!input.showArrows) return;
     for (const edge of input.model.edges) {
       const source = positions[edge.source];
@@ -315,84 +369,78 @@ export class WorkbenchGraphRenderer {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(program);
-    const labelContext = this.labelContext;
     const neighborhood = this.hoverNeighborhood(input);
-    const edgeData = this.edgeVertices;
-    edgeData.length = 0;
+    let edgeData = ensureVertexCapacity(this.edgeVertices, this.visibleEdges.length * 42);
+    let edgeOffset = 0;
     for (const edge of this.visibleEdges) {
       const source = input.positions[edge.source];
       const target = input.positions[edge.target];
       if (source === undefined || target === undefined) continue;
-      const sourceScreen = graphPointToScreen(source, input.camera, input.viewport);
-      const targetScreen = graphPointToScreen(target, input.camera, input.viewport);
+      const sourceX = input.viewport.width / 2 + input.camera.x + source.x * input.camera.scale;
+      const sourceY = input.viewport.height / 2 + input.camera.y + source.y * input.camera.scale;
+      const targetX = input.viewport.width / 2 + input.camera.x + target.x * input.camera.scale;
+      const targetY = input.viewport.height / 2 + input.camera.y + target.y * input.camera.scale;
       const alpha = neighborhood !== null && !neighborhood.has(edge.source) && !neighborhood.has(edge.target) ? 0.16 : 0.8;
-      const color = rgba(labelContext, edge.source === input.hoveredId || edge.target === input.hoveredId ? input.palette.focused : input.palette.line, alpha);
-      const dx = targetScreen.x - sourceScreen.x;
-      const dy = targetScreen.y - sourceScreen.y;
+      const color = this.color(edge.source === input.hoveredId || edge.target === input.hoveredId ? input.palette.focused : input.palette.line, alpha);
+      const dx = targetX - sourceX;
+      const dy = targetY - sourceY;
       const distance = Math.max(0.001, Math.hypot(dx, dy));
       const halfWidth = Math.max(0.05, edge.width / 2);
-      const offset = { x: -dy / distance * halfWidth, y: dx / distance * halfWidth };
-      const first = { x: sourceScreen.x + offset.x, y: sourceScreen.y + offset.y };
-      const second = { x: sourceScreen.x - offset.x, y: sourceScreen.y - offset.y };
-      const third = { x: targetScreen.x + offset.x, y: targetScreen.y + offset.y };
-      const fourth = { x: targetScreen.x - offset.x, y: targetScreen.y - offset.y };
-      addVertex(edgeData, first, color, 1, input.viewport);
-      addVertex(edgeData, second, color, 1, input.viewport);
-      addVertex(edgeData, third, color, 1, input.viewport);
-      addVertex(edgeData, third, color, 1, input.viewport);
-      addVertex(edgeData, second, color, 1, input.viewport);
-      addVertex(edgeData, fourth, color, 1, input.viewport);
+      const offsetX = -dy / distance * halfWidth;
+      const offsetY = dx / distance * halfWidth;
+      edgeOffset = addVertex(edgeData, edgeOffset, sourceX + offsetX, sourceY + offsetY, color, 1, input.viewport);
+      edgeOffset = addVertex(edgeData, edgeOffset, sourceX - offsetX, sourceY - offsetY, color, 1, input.viewport);
+      edgeOffset = addVertex(edgeData, edgeOffset, targetX + offsetX, targetY + offsetY, color, 1, input.viewport);
+      edgeOffset = addVertex(edgeData, edgeOffset, targetX + offsetX, targetY + offsetY, color, 1, input.viewport);
+      edgeOffset = addVertex(edgeData, edgeOffset, sourceX - offsetX, sourceY - offsetY, color, 1, input.viewport);
+      edgeOffset = addVertex(edgeData, edgeOffset, targetX - offsetX, targetY - offsetY, color, 1, input.viewport);
     }
-    this.drawVertices(edgeData, gl.TRIANGLES, false);
+    this.edgeVertices = edgeData;
+    this.drawVertices(edgeData, edgeOffset, gl.TRIANGLES, false);
 
-    const haloData = this.haloVertices;
-    const nodeData = this.nodeVertices;
-    haloData.length = 0;
-    nodeData.length = 0;
+    let haloData = ensureVertexCapacity(this.haloVertices, this.visibleNodes.length * 7);
+    let haloOffset = 0;
+    let nodeData = ensureVertexCapacity(this.nodeVertices, this.visibleNodes.length * 7);
+    let nodeOffset = 0;
     for (const node of this.visibleNodes) {
       const point = input.positions[node.id];
       if (point === undefined) continue;
-      const screen = graphPointToScreen(point, input.camera, input.viewport);
+      const x = input.viewport.width / 2 + input.camera.x + point.x * input.camera.scale;
+      const y = input.viewport.height / 2 + input.camera.y + point.y * input.camera.scale;
       const color = nodeColor(node, input);
       const opacity = neighborhood !== null && !neighborhood.has(node.id) ? 0.2 : 1;
       const nodeSize = graphNodeScreenRadius(node, input.camera.scale) * 2 * this.dpr;
       if (node.id === input.selectedId || node.id === input.focusedId || node.id === input.hoveredId) {
-        addVertex(haloData, screen, rgba(labelContext, input.palette.focused, 0.2), nodeSize + 10 * this.dpr, input.viewport);
+        haloOffset = addVertex(haloData, haloOffset, x, y, this.color(input.palette.focused, 0.2), nodeSize + 10 * this.dpr, input.viewport);
       }
-      addVertex(nodeData, screen, rgba(labelContext, color, opacity), nodeSize, input.viewport);
+      nodeOffset = addVertex(nodeData, nodeOffset, x, y, this.color(color, opacity), nodeSize, input.viewport);
     }
-    this.drawVertices(haloData, gl.POINTS, true);
-    this.drawVertices(nodeData, gl.POINTS, true);
+    this.haloVertices = haloData;
+    this.nodeVertices = nodeData;
+    this.drawVertices(haloData, haloOffset, gl.POINTS, true);
+    this.drawVertices(nodeData, nodeOffset, gl.POINTS, true);
   }
 
-  private drawVertices(data: number[], mode: number, roundPoints: boolean): void {
+  private drawVertices(data: Float32Array, length: number, mode: number, roundPoints: boolean): void {
     const gl = this.gl;
     const program = this.program;
-    if (gl === null || program === null || this.vertexBuffer === null || data.length === 0) return;
-    if (this.vertexScratch.length < data.length) {
-      let capacity = Math.max(256, this.vertexScratch.length);
-      while (capacity < data.length) capacity *= 2;
-      this.vertexScratch = new Float32Array(capacity);
-    }
-    for (let index = 0; index < data.length; index += 1) this.vertexScratch[index] = data[index]!;
+    if (gl === null || program === null || this.vertexBuffer === null || length === 0) return;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
-    if (this.gpuBufferBytes < this.vertexScratch.byteLength) {
-      this.gpuBufferBytes = this.vertexScratch.byteLength;
+    const requiredBytes = length * Float32Array.BYTES_PER_ELEMENT;
+    if (this.gpuBufferBytes < requiredBytes) {
+      this.gpuBufferBytes = requiredBytes;
       gl.bufferData(gl.ARRAY_BUFFER, this.gpuBufferBytes, gl.DYNAMIC_DRAW);
     }
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.vertexScratch.subarray(0, data.length));
-    const position = gl.getAttribLocation(program, 'a_position');
-    const color = gl.getAttribLocation(program, 'a_color');
-    const size = gl.getAttribLocation(program, 'a_size');
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, length));
     const stride = 7 * Float32Array.BYTES_PER_ELEMENT;
-    gl.enableVertexAttribArray(position);
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, stride, 0);
-    gl.enableVertexAttribArray(color);
-    gl.vertexAttribPointer(color, 4, gl.FLOAT, false, stride, 2 * Float32Array.BYTES_PER_ELEMENT);
-    gl.enableVertexAttribArray(size);
-    gl.vertexAttribPointer(size, 1, gl.FLOAT, false, stride, 6 * Float32Array.BYTES_PER_ELEMENT);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_round_points'), roundPoints ? 1 : 0);
-    gl.drawArrays(mode, 0, data.length / 7);
+    gl.enableVertexAttribArray(this.positionAttribute);
+    gl.vertexAttribPointer(this.positionAttribute, 2, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(this.colorAttribute);
+    gl.vertexAttribPointer(this.colorAttribute, 4, gl.FLOAT, false, stride, 2 * Float32Array.BYTES_PER_ELEMENT);
+    gl.enableVertexAttribArray(this.sizeAttribute);
+    gl.vertexAttribPointer(this.sizeAttribute, 1, gl.FLOAT, false, stride, 6 * Float32Array.BYTES_PER_ELEMENT);
+    gl.uniform1f(this.roundPointsUniform, roundPoints ? 1 : 0);
+    gl.drawArrays(mode, 0, length / 7);
   }
 
   private drawCanvas2D(context: CanvasRenderingContext2D, input: GraphRenderInput): void {
@@ -476,8 +524,8 @@ export class WorkbenchGraphRenderer {
     }
 
     const pinned = new Set([input.selectedId, input.focusedId, input.hoveredId].filter((id): id is string => id !== null));
-    const labels = resolveGraphLabelIds(this.visibleNodes, input.positions, input.camera, input.viewport, input.labelMode, pinned, (text) => context.measureText(text).width);
     context.font = '12px system-ui, sans-serif';
+    const labels = resolveGraphLabelIds(this.orderedVisibleNodes, input.positions, input.camera, input.viewport, input.labelMode, pinned, (text) => context.measureText(text).width, true);
     context.textBaseline = 'middle';
     for (const node of this.visibleNodes) {
       if (!labels.has(node.id)) continue;

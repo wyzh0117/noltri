@@ -9,11 +9,13 @@
  * timeout instead of an immediate `SQLITE_BUSY` when the runtime briefly shares the file.
  */
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { MAX_CAPTURE_ASSET_BYTES } from '@noltri/schema';
 
 /** Bumped by appending a new entry to MIGRATIONS; stored in `PRAGMA user_version`. */
-export const SQLITE_SCHEMA_VERSION = 7;
+export const SQLITE_SCHEMA_VERSION = 13;
 
 export interface SqliteOpenOptions {
   /** Absolute path to the database file, or `:memory:`. */
@@ -587,6 +589,120 @@ create index if not exists knowledge_notes_chapter_lookup_idx
   on knowledge_notes (user_id, chapter_id) where chapter_id is not null;
 `;
 
+/** P1 capture intake: original image bytes and ordered idempotent batch/item state share the profile DB. */
+const DDL_V8 = `
+create table if not exists capture_assets (
+  user_id text not null,
+  asset_id text not null,
+  session_id text not null,
+  mime_type text not null check (mime_type in ('image/png', 'image/jpeg', 'image/webp', 'image/gif')),
+  sha256 text not null check (length(sha256) = 64),
+  byte_length integer not null check (byte_length > 0 and byte_length <= ${MAX_CAPTURE_ASSET_BYTES}),
+  bytes blob not null,
+  created_at text not null,
+  primary key (user_id, asset_id)
+) without rowid;
+create index if not exists capture_assets_session_idx on capture_assets (user_id, session_id, created_at);
+
+create table if not exists capture_batches (
+  user_id text not null,
+  batch_id text not null,
+  session_id text not null,
+  payload_hash text not null check (length(payload_hash) = 64),
+  created_at text not null,
+  updated_at text not null,
+  primary key (user_id, batch_id)
+) without rowid;
+create index if not exists capture_batches_user_idx on capture_batches (user_id, created_at);
+
+create table if not exists capture_batch_items (
+  user_id text not null,
+  batch_id text not null,
+  request_id text not null,
+  user_order integer not null check (user_order >= 0),
+  kind text not null check (kind in ('text', 'image', 'composite')),
+  status text not null check (status in ('queued', 'assets_saved', 'processing', 'needs_review', 'done', 'failed')),
+  request_json text not null,
+  raw_source_id text,
+  duplicate integer not null default 0 check (duplicate in (0, 1)),
+  retryable integer not null default 0 check (retryable in (0, 1)),
+  error_reason text,
+  updated_at text not null,
+  primary key (user_id, batch_id, request_id),
+  unique (user_id, batch_id, user_order),
+  foreign key (user_id, batch_id) references capture_batches (user_id, batch_id) on delete cascade
+) without rowid;
+create index if not exists capture_batch_items_status_idx
+  on capture_batch_items (user_id, batch_id, status, user_order);
+`;
+
+/** Per-RawSource extracted-point identity makes capture retries idempotent without text-global merging. */
+const DDL_V9 = `
+alter table knowledge_items add column capture_point_index integer
+  check (capture_point_index is null or capture_point_index >= 0);
+create unique index if not exists knowledge_items_capture_point_uq
+  on knowledge_items (user_id, raw_source_id, capture_point_index)
+  where capture_point_index is not null;
+`;
+
+/** Frozen extraction/placement runs and version-scoped point identity make retries resumable. */
+const DDL_V10 = `
+alter table knowledge_items add column capture_analysis_version integer not null default 1
+  check (capture_analysis_version >= 1);
+drop index if exists knowledge_items_capture_point_uq;
+create unique index knowledge_items_capture_point_uq
+  on knowledge_items (user_id, raw_source_id, capture_analysis_version, capture_point_index)
+  where capture_point_index is not null;
+create table if not exists capture_processing_plans (
+  user_id text not null,
+  raw_source_id text not null,
+  analysis_version integer not null check (analysis_version >= 1),
+  points_json text not null,
+  created_at text not null,
+  updated_at text not null,
+  primary key (user_id, raw_source_id, analysis_version),
+  foreign key (raw_source_id) references raw_sources (id) on delete cascade
+);
+create index if not exists capture_processing_plans_latest_idx
+  on capture_processing_plans (user_id, raw_source_id, analysis_version desc);
+`;
+
+/** Human review is independent from processing; historical done is not proof of confirmation. */
+const DDL_V11 = `
+alter table raw_sources add column review_status text not null default 'needs_review'
+  check (review_status in ('needs_review', 'confirmed', 'deferred', 'rejected'));
+alter table raw_sources add column review_revision integer not null default 0
+  check (typeof(review_revision) = 'integer' and review_revision >= 0 and review_revision <= 9007199254740991);
+create index raw_sources_review_inbox_idx on raw_sources (user_id, review_status, created_at desc);
+create table source_review_actions (
+  user_id text not null,
+  raw_source_id text not null references raw_sources (id) on delete cascade,
+  action_id text not null check (length(action_id) between 1 and 128),
+  intent_json text not null,
+  response_json text not null,
+  created_at text not null,
+  primary key (user_id, raw_source_id, action_id)
+);
+`;
+
+const DDL_V12 = `
+alter table capture_batch_items add column processing_reason text
+  check (processing_reason is null or processing_reason in ('offline', 'unsupported', 'input_selection_required', 'uncertain_recognition', 'insufficient_text', 'recognition_too_long'));
+create table capture_image_recognition_snapshots (
+  user_id text not null,
+  raw_source_id text not null references raw_sources (id) on delete cascade,
+  version integer not null check (version = 1),
+  snapshot_json text not null,
+  primary key (user_id, raw_source_id, version)
+);
+`;
+
+const DDL_V13 = `
+alter table capture_processing_plans add column rules_snapshot_json text;
+alter table capture_processing_plans add column extraction_ready integer not null default 1
+  check (extraction_ready in (0, 1));
+`;
+
 const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => void }> = [
   { version: 1, apply: (db) => db.exec(DDL_V1) },
   { version: 2, apply: (db) => db.exec(DDL_V2) },
@@ -595,6 +711,12 @@ const MIGRATIONS: ReadonlyArray<{ version: number; apply: (db: DatabaseSync) => 
   { version: 5, apply: (db) => db.exec(DDL_V5) },
   { version: 6, apply: (db) => db.exec(DDL_V6) },
   { version: 7, apply: (db) => db.exec(DDL_V7) },
+  { version: 8, apply: (db) => db.exec(DDL_V8) },
+  { version: 9, apply: (db) => db.exec(DDL_V9) },
+  { version: 10, apply: (db) => db.exec(DDL_V10) },
+  { version: 11, apply: (db) => db.exec(DDL_V11) },
+  { version: 12, apply: (db) => db.exec(DDL_V12) },
+  { version: 13, apply: (db) => db.exec(DDL_V13) },
 ];
 
 function readString(db: DatabaseSync, sql: string): string {
@@ -626,20 +748,94 @@ export function probeFts5(db: DatabaseSync): { ok: boolean; error: string | null
   }
 }
 
-/** Applies every migration above the stored `user_version`. Idempotent. */
-export function migrateSqlite(db: DatabaseSync): number {
-  const current = readNumber(db, 'pragma user_version');
-  for (const step of MIGRATIONS) {
-    if (step.version <= current) continue;
-    db.exec('begin immediate');
+export interface SqliteLineageInspection {
+  lineage: 'empty' | 'main' | 'screenshot' | 'v3-course-workspace' | 'unknown';
+  userVersion: number;
+}
+
+/**
+ * Fingerprints of complete sqlite_schema definitions (tables, indexes, constraints and FTS shadows).
+ * Derived independently from main 361c0c3 (1–7), screenshot f4da552 (8–10) and v2.0.0 / 259c089 (8).
+ * The literal historical SQL and provenance live in test/fixtures/sqlite-lineage.
+ * ponytail: exact definitions intentionally reject even harmless external schema edits; admit another
+ * shape only with an independently sourced fixture and a reviewed compatibility decision.
+ */
+const KNOWN_SCHEMA_SIGNATURES: ReadonlyArray<SqliteLineageInspection & { signature: string }> = [
+  { lineage: 'main', userVersion: 1, signature: '11dc023076f6756a231b8300f98a5ef85b5b47b9295acc2b99f1e74873ef321a' },
+  { lineage: 'main', userVersion: 2, signature: '999ee56efd9c5173d47d9c129f00c090e100097593e727086a7932cf3ca0c86c' },
+  { lineage: 'main', userVersion: 3, signature: '7ed834127da176d3aabdfd0ad17df5c452c98d7b9db76e4d3746f6d14371cdd4' },
+  { lineage: 'main', userVersion: 4, signature: '2e58a25f4bbb38185101e0b350eae5016885c0f48a0cedb19514d00737564265' },
+  { lineage: 'main', userVersion: 5, signature: '093a2073aee8abad6845566dda447087588cc0b94ea848dab85ec9dd5b4417ae' },
+  { lineage: 'main', userVersion: 6, signature: '6df09f11177535a78f3bf4c724871e05a79620851cf4344efd50e72aaa649b07' },
+  { lineage: 'main', userVersion: 7, signature: 'e2f305f1cebf33a1b30bd448ed9ab1836f32c757dcb07fe3a1d23e244acb9e41' },
+  { lineage: 'screenshot', userVersion: 8, signature: 'fdd76d806fdd9bdc8fd4c8b8040cb77b0a6433880d40d25f022efb334a27f1ff' },
+  { lineage: 'screenshot', userVersion: 9, signature: 'd143d0558e6ef138fe53a6eadc475d34cca778fa613d680ac9c1df12ffa63a35' },
+  { lineage: 'screenshot', userVersion: 10, signature: 'c9e72a12e5ed7b4fd913a4fd679e72179aa64e4ff9b757bb15fc709b0aa7f3ab' },
+  { lineage: 'v3-course-workspace', userVersion: 8, signature: '97f4099da89e65377e273b96caf820f7799e252153efa09560516d6988b09d6f' },
+];
+
+let generatedSchemaSignatures: Map<number, string> | undefined;
+function trustedGeneratedSchemaSignature(version: number): string | undefined {
+  if (generatedSchemaSignatures === undefined) {
+    const scratch = new DatabaseSync(':memory:', { enableForeignKeyConstraints: true });
+    const signatures = new Map<number, string>();
     try {
+      for (const step of MIGRATIONS) {
+        step.apply(scratch);
+        if (step.version < 11) continue;
+        const objects = scratch.prepare("select type, name, tbl_name, sql from main.sqlite_schema where name not glob 'sqlite_*' order by type, name").all();
+        signatures.set(step.version, createHash('sha256').update(JSON.stringify(objects)).digest('hex'));
+      }
+      generatedSchemaSignatures = signatures;
+    } finally { scratch.close(); }
+  }
+  return generatedSchemaSignatures.get(version);
+}
+
+/** Read-only inspection: user_version alone cannot distinguish the two incompatible version 8s. */
+export function inspectSqliteLineage(db: DatabaseSync): SqliteLineageInspection {
+  const userVersion = readNumber(db, 'pragma user_version');
+  const objects = db.prepare(
+    "select type, name, tbl_name, sql from main.sqlite_schema where name not glob 'sqlite_*' order by type, name",
+  ).all();
+  // A temporary table could shadow a main table in an unqualified migration statement.
+  const temporaryObjects = readNumber(db, "select count(*) from temp.sqlite_schema where name not glob 'sqlite_*'");
+  if (temporaryObjects > 0) return { lineage: 'unknown', userVersion };
+  if (userVersion === 0 && objects.length === 0) return { lineage: 'empty', userVersion };
+  const signature = createHash('sha256').update(JSON.stringify(objects)).digest('hex');
+  const known = KNOWN_SCHEMA_SIGNATURES.find((shape) => shape.userVersion === userVersion && shape.signature === signature);
+  const isCurrent = userVersion >= 11 && signature === trustedGeneratedSchemaSignature(userVersion);
+  return { lineage: known?.lineage ?? (isCurrent ? 'screenshot' : 'unknown'), userVersion };
+}
+
+function requireCompatibleLineage(db: DatabaseSync): SqliteLineageInspection {
+  const inspection = inspectSqliteLineage(db);
+  if (inspection.lineage === 'unknown' || inspection.lineage === 'v3-course-workspace') {
+    throw new Error(
+      `Database lineage ${inspection.lineage} at user_version ${inspection.userVersion} cannot be automatically upgraded; ` +
+      'preserve this profile and use a compatible importer',
+    );
+  }
+  return inspection;
+}
+
+/** Applies only known compatible migrations, atomically across the complete upgrade. Idempotent. */
+export function migrateSqlite(db: DatabaseSync): number {
+  const inspected = requireCompatibleLineage(db);
+  if (inspected.userVersion === SQLITE_SCHEMA_VERSION) return inspected.userVersion;
+  db.exec('begin immediate');
+  try {
+    // Recheck after acquiring the write lock so a concurrent schema change cannot bypass the guard.
+    const current = requireCompatibleLineage(db).userVersion;
+    for (const step of MIGRATIONS) {
+      if (step.version <= current) continue;
       step.apply(db);
       db.exec(`pragma user_version = ${String(step.version)}`);
-      db.exec('commit');
-    } catch (error) {
-      db.exec('rollback');
-      throw error;
     }
+    db.exec('commit');
+  } catch (error) {
+    db.exec('rollback');
+    throw error;
   }
   return readNumber(db, 'pragma user_version');
 }
@@ -658,27 +854,33 @@ export function openSqlite(options: SqliteOpenOptions): SqliteConnection {
     timeout: busyTimeoutMs,
   });
 
-  // `journal_mode = wal` is a file-level setting that survives reopen; on `:memory:` SQLite reports
-  // `memory` back and we keep whatever it answered rather than asserting a mode we did not get.
-  if (options.readOnly !== true) db.exec('pragma journal_mode = wal');
-  db.exec(`pragma synchronous = ${synchronous}`);
-  db.exec(`pragma busy_timeout = ${String(busyTimeoutMs)}`);
-  // Applied after the journal mode so a file-level change never races the schema upgrade.
-  const version = options.readOnly === true ? readNumber(db, 'pragma user_version') : migrateSqlite(db);
+  try {
+    if (options.readOnly !== true) requireCompatibleLineage(db);
+    // `journal_mode = wal` is a file-level setting that survives reopen; on `:memory:` SQLite reports
+    // `memory` back and we keep whatever it answered rather than asserting a mode we did not get.
+    if (options.readOnly !== true) db.exec('pragma journal_mode = wal');
+    db.exec(`pragma synchronous = ${synchronous}`);
+    db.exec(`pragma busy_timeout = ${String(busyTimeoutMs)}`);
+    // Applied after the journal mode so a file-level change never races the schema upgrade.
+    const version = options.readOnly === true ? readNumber(db, 'pragma user_version') : migrateSqlite(db);
 
-  const fts5 = probeFts5(db);
-  const pragmas: SqlitePragmas = {
-    journalMode: readString(db, 'pragma journal_mode'),
-    synchronous: SYNCHRONOUS_BY_CODE[readString(db, 'pragma synchronous')] ?? 'unknown',
-    foreignKeys: readNumber(db, 'pragma foreign_keys'),
-    busyTimeout: readNumber(db, 'pragma busy_timeout'),
-    schemaVersion: version,
-    sqliteVersion: readString(db, 'select sqlite_version()'),
-    fts5Available: fts5.ok,
-    fts5Error: fts5.error,
-  };
+    const fts5 = probeFts5(db);
+    const pragmas: SqlitePragmas = {
+      journalMode: readString(db, 'pragma journal_mode'),
+      synchronous: SYNCHRONOUS_BY_CODE[readString(db, 'pragma synchronous')] ?? 'unknown',
+      foreignKeys: readNumber(db, 'pragma foreign_keys'),
+      busyTimeout: readNumber(db, 'pragma busy_timeout'),
+      schemaVersion: version,
+      sqliteVersion: readString(db, 'select sqlite_version()'),
+      fts5Available: fts5.ok,
+      fts5Error: fts5.error,
+    };
 
-  return { db, pragmas };
+    return { db, pragmas };
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 export {

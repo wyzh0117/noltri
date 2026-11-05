@@ -5,14 +5,16 @@ import type { GraphSettings } from './workbench-graph-settings';
 
 export interface SavedGraphState {
   camera: GraphCamera | null;
+  cameraReady: boolean;
   positions: Record<string, GraphPoint>;
   settings: GraphSettings;
 }
 
-const STORAGE_PREFIX = 'noltri:vault-graph-v1:';
+const STORAGE_PREFIX = 'noltri:knowledge-graph-v1:';
+const INITIAL_CAMERA: GraphCamera = { x: 0, y: 0, scale: 0.5 };
 
-export function graphStateScopeIdentity(vaultRoot: string, mode: 'global' | 'local', focusPath: string | null): string {
-  return `${vaultRoot}\0${mode}\0${mode === 'local' ? focusPath ?? '' : ''}`;
+export function graphStateScopeIdentity(scopeIdentity: string, mode: 'mini' | 'expanded'): string {
+  return `${scopeIdentity}\0${mode}`;
 }
 
 export function graphStateKey(scopeIdentity: string): string {
@@ -20,7 +22,7 @@ export function graphStateKey(scopeIdentity: string): string {
 }
 
 function emptyGraphState(): SavedGraphState {
-  return { camera: null, positions: {}, settings: { ...DEFAULT_GRAPH_SETTINGS, groups: [] } };
+  return { camera: null, cameraReady: false, positions: {}, settings: { ...DEFAULT_GRAPH_SETTINGS, groups: [] } };
 }
 
 export function readGraphState(scopeIdentity: string): SavedGraphState {
@@ -29,8 +31,8 @@ export function readGraphState(scopeIdentity: string): SavedGraphState {
     if (raw === null) return emptyGraphState();
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== 'object') return emptyGraphState();
-    const record = parsed as { camera?: Partial<GraphCamera> | null; positions?: unknown; settings?: unknown };
-    const camera = record.camera !== null && record.camera !== undefined
+    const record = parsed as { camera?: Partial<GraphCamera> | null; cameraReady?: unknown; positions?: unknown; settings?: unknown };
+    const storedCamera = record.camera !== null && record.camera !== undefined
       && Number.isFinite(record.camera.x) && Number.isFinite(record.camera.y) && Number.isFinite(record.camera.scale)
       ? {
           x: record.camera.x!,
@@ -38,6 +40,12 @@ export function readGraphState(scopeIdentity: string): SavedGraphState {
           scale: Math.min(8, Math.max(1 / 128, record.camera.scale!)),
         }
       : null;
+    // Older builds persisted the initial placeholder camera when layout settled before ResizeObserver.
+    const legacyPlaceholder = record.cameraReady !== true && storedCamera !== null
+      && storedCamera.x === INITIAL_CAMERA.x && storedCamera.y === INITIAL_CAMERA.y && storedCamera.scale === INITIAL_CAMERA.scale;
+    const cameraReady = storedCamera !== null
+      && (record.cameraReady === true || (record.cameraReady !== false && !legacyPlaceholder));
+    const camera = cameraReady ? storedCamera : null;
     const positions: Record<string, GraphPoint> = {};
     if (record.positions !== null && typeof record.positions === 'object' && !Array.isArray(record.positions)) {
       for (const [id, value] of Object.entries(record.positions).slice(0, 20_000)) {
@@ -47,7 +55,7 @@ export function readGraphState(scopeIdentity: string): SavedGraphState {
         }
       }
     }
-    return { camera, positions, settings: normalizeGraphSettings(record.settings) };
+    return { camera, cameraReady, positions, settings: normalizeGraphSettings(record.settings) };
   } catch {
     return emptyGraphState();
   }
@@ -55,7 +63,7 @@ export function readGraphState(scopeIdentity: string): SavedGraphState {
 
 export function writeGraphState(scopeIdentity: string, state: SavedGraphState): void {
   try {
-    window.localStorage.setItem(graphStateKey(scopeIdentity), JSON.stringify(state));
+    window.localStorage.setItem(graphStateKey(scopeIdentity), JSON.stringify({ ...state, camera: state.cameraReady ? state.camera : null }));
   } catch {
     // Browser storage can be disabled or full; the in-memory view remains usable.
   }

@@ -214,7 +214,7 @@ describe('constructor guards (BYOK config)', () => {
     const fake = await startFake(() => ({ body: {} }));
     const provider = providerFor(fake.baseUrl);
     expect(provider.id).toBe('openai-compatible');
-    expect(provider.capabilities).toEqual({ embeddings: true, chat: true, structuredOutput: true });
+    expect(provider.capabilities).toEqual({ embeddings: true, chat: true, structuredOutput: true, processingInstructions: true });
   });
 });
 

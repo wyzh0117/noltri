@@ -358,6 +358,16 @@ export function parseWikiLink(raw: string): { embed: boolean; target: string; al
   return { embed: match[1] === '!', target, alias: match[3]?.trim() || target.split('#')[0]?.split('/').at(-1) || target };
 }
 
+export function incompleteWikiLinkAt(content: string, cursor: number): { start: number; end: number; query: string } | null {
+  const end = Math.max(0, Math.min(content.length, Math.trunc(cursor)));
+  const prefix = content.slice(0, end);
+  const start = prefix.lastIndexOf('[[');
+  if (start < 0 || start < prefix.lastIndexOf(']]')) return null;
+  const query = prefix.slice(start + 2);
+  return query.includes('\n') || query.includes('\r') || query.includes(']') || query.includes('|')
+    ? null : { start, end, query };
+}
+
 export function extractSubpath(content: string, subpath: string): string | null {
   const body = content.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, '');
   const target = subpath.replace(/^#/, '').trim();
@@ -367,6 +377,14 @@ export function extractSubpath(content: string, subpath: string): string | null 
     const id = target.slice(1).toLocaleLowerCase();
     const line = lines.findIndex((candidate) => new RegExp(`(?:^|\\s)\\^${escapeRegExp(id)}\\s*$`, 'i').test(candidate));
     if (line < 0) return null;
+    const standalone = new RegExp(`^\\s*\\^${escapeRegExp(id)}\\s*$`, 'i').test(lines[line]!);
+    if (standalone) {
+      let end = line;
+      while (end > 0 && lines[end - 1]!.trim() === '') end -= 1;
+      let start = end - 1;
+      while (start > 0 && lines[start - 1]!.trim() !== '') start -= 1;
+      return lines.slice(start, end).join('\n');
+    }
     let start = line;
     let end = line + 1;
     while (start > 0 && lines[start - 1]!.trim() !== '') start -= 1;
@@ -406,11 +424,12 @@ export function safeNoteHref(value: string): string | null {
   return href;
 }
 
-export function replaceMentionAt(content: string, start: number, end: number, expected: string, targetPath: string): string | null {
+export function replaceMentionAt(content: string, start: number, end: number, expected: string, targetPath: string, alias?: string): string | null {
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > content.length) return null;
   const actual = content.slice(start, end).normalize('NFC').toLocaleLowerCase();
   if (actual !== expected.normalize('NFC').toLocaleLowerCase()) return null;
-  return `${content.slice(0, start)}[[${targetPath}]]${content.slice(end)}`;
+  const label = alias === undefined ? '' : `|${alias.replace(/[\]\r\n]/gu, ' ').trim()}`;
+  return `${content.slice(0, start)}[[${targetPath}${label}]]${content.slice(end)}`;
 }
 
 export function setFrontmatterProperty(content: string, key: string, value: unknown): string {

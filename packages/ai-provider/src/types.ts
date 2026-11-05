@@ -8,6 +8,8 @@ export interface ExtractInput {
   sourceLabel: string;
   sourceType: string;
   maxItems?: number;
+  /** Frozen applied extraction rules; at most 4,000 characters, separate from source text. */
+  instructions?: string;
 }
 
 export interface ExtractedKnowledge {
@@ -37,6 +39,8 @@ export interface ClassifyInput {
   /** Attach when the best match clears this; otherwise create a node. */
   attachThreshold: number;
   scopeHint?: ContextScope;
+  /** Frozen applied classification rules; at most 4,000 characters. */
+  instructions?: string;
 }
 
 export type ClassificationAction = 'attach' | 'create';
@@ -80,10 +84,51 @@ export interface ChatResult {
   completionTokens?: number;
 }
 
+/** The provider sees content only; asset IDs, hashes and provenance remain caller-owned. */
+export type ImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+
+export interface RecognizeImageInput {
+  /** Read-only encoded image, never rewritten by recognition. */
+  bytes: Uint8Array;
+  mimeType: ImageMimeType;
+}
+
+/** Normalized geometry; positive area fully contained in the unit square. */
+export interface ImageRecognitionRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ImageRecognitionBlock {
+  kind: 'paragraph' | 'table' | 'code' | 'formula' | 'image';
+  text: string;
+  region?: ImageRecognitionRegion;
+}
+
+export interface ImageUncertainRegion {
+  reason: string;
+  /** Only the visible partial transcription, with uncertainty retained. */
+  text?: string;
+  region?: ImageRecognitionRegion;
+}
+
+export interface ImageRecognitionResult {
+  text: string;
+  confidence: number;
+  blocks: ImageRecognitionBlock[];
+  uncertainRegions: ImageUncertainRegion[];
+}
+
 export interface ProviderCapabilities {
   embeddings: boolean;
   chat: boolean;
   structuredOutput: boolean;
+  /** Missing means unavailable; text-only providers need no changes. */
+  imageRecognition?: boolean;
+  /** Sends applied instructions to the model; absent does not advertise support. */
+  processingInstructions?: boolean;
 }
 
 /**
@@ -97,4 +142,5 @@ export interface AIProvider {
   classifyKnowledge(input: ClassifyInput): Promise<ClassifyResult>;
   embed(texts: string[]): Promise<number[][]>;
   chat(input: ChatInput): Promise<ChatResult>;
+  recognizeImage?(input: RecognizeImageInput): Promise<ImageRecognitionResult>;
 }

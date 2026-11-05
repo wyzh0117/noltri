@@ -21,4 +21,14 @@ describe('ApiClient vault link resolution', () => {
       { linkpath: 'Target', sourcePath: 'Nested/Source.md', kind: 'wikilink' },
     ]);
   });
+
+  it('parses backlinks with the revision of the published link index', async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ revision: 7, backlinks: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as unknown as typeof fetch;
+    const client = new ApiClient({ baseUrl: 'http://127.0.0.1:8787', fetchImpl });
+
+    await expect(client.vaultBacklinks('Target.md')).resolves.toEqual({ revision: 7, backlinks: [] });
+  });
 });

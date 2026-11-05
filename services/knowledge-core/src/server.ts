@@ -9,53 +9,47 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { MAX_CAPTURE_ASSET_BYTES, MAX_CAPTURE_BATCH_BODY_BYTES } from '@noltri/schema';
 import { config as loadDotenv } from 'dotenv';
 import { createLogger } from '@noltri/shared';
-import { loadCoreConfig } from './config';
+import { CORE_DEFAULTS, loadCoreConfig } from './config';
 import { buildHandler, type CoreBundle } from './http/index';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const MAX_HTTP_BODY_BYTES = 16_000_000;
+const MAX_HTTP_BODY_BYTES = MAX_CAPTURE_BATCH_BODY_BYTES;
 
-class BodyTooLargeError extends Error {}
+class BodyTooLargeError extends Error {
+  constructor(readonly maxBytes: number) { super(`request body exceeds ${String(maxBytes)} bytes`); }
+}
 
-/** Loads local credentials without assuming cwd; process env always has priority over dotenv files. */
-export function loadRootEnv(startFrom: string = here): string | null {
+/** Explicit env files are exclusive; defaults never search the checkout or retired home. */
+export function loadRootEnv(): string | null {
   const explicit = process.env.NOLTRI_ENV_FILE?.trim();
-  const findUp = (name: string): string | undefined => {
-    let cursor = startFrom;
-    for (let depth = 0; depth < 8; depth += 1) {
-      const candidate = path.join(cursor, name);
-      if (existsSync(candidate)) return candidate;
-      const parent = path.dirname(cursor);
-      if (parent === cursor) break;
-      cursor = parent;
-    }
-    return undefined;
-  };
-  const home = path.join(os.homedir(), '.noltri');
+  if (explicit) {
+    if (!existsSync(explicit)) return null;
+    loadDotenv({ path: explicit, quiet: true, override: false });
+    return explicit;
+  }
+  const home = path.join(os.homedir(), CORE_DEFAULTS.dataDirname);
   const data = process.env.NOLTRI_DATA_DIR?.trim();
   const candidates = [
-    explicit,
-    findUp('.env.local'),
     path.join(home, '.env.local'),
     ...(data ? [path.join(data, '.env.local')] : []),
-    findUp('.env'),
     path.join(home, '.env'),
     ...(data ? [path.join(data, '.env')] : []),
-  ].filter((candidate): candidate is string => candidate !== undefined && existsSync(candidate));
-  for (const candidate of new Set(candidates)) loadDotenv({ path: candidate, quiet: true });
+  ].filter((candidate) => existsSync(candidate));
+  for (const candidate of new Set(candidates)) loadDotenv({ path: candidate, quiet: true, override: false });
   return candidates[0] ?? null;
 }
 
 async function readBody(request: IncomingMessage): Promise<Buffer | undefined> {
+  const pathname = new URL(request.url ?? '/', 'http://noltri.local').pathname;
+  const maxBytes = /^\/api\/capture\/assets\/[^/]+\/?$/.test(pathname) ? MAX_CAPTURE_ASSET_BYTES : MAX_HTTP_BODY_BYTES;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
     size += buffer.length;
-    if (size > MAX_HTTP_BODY_BYTES) throw new BodyTooLargeError();
+    if (size > maxBytes) throw new BodyTooLargeError(maxBytes);
     chunks.push(buffer);
   }
   const body = Buffer.concat(chunks);
@@ -77,27 +71,15 @@ function headersOf(request: IncomingMessage): Headers {
 
 const SKIP_RESPONSE_HEADERS = new Set(['content-length', 'transfer-encoding', 'content-encoding']);
 
-export function toWebRequest(request: IncomingMessage, body: Buffer | undefined, port: number, encodedVaultRoot?: string): Request {
+export function toWebRequest(request: IncomingMessage, body: Buffer | undefined, port: number): Request {
   const host = request.headers.host ?? `127.0.0.1:${String(port)}`;
   const url = `http://${host}${request.url ?? '/'}`;
   const method = request.method ?? 'GET';
-  const headers = headersOf(request);
-  if (encodedVaultRoot !== undefined) headers.set('x-noltri-vault-root', encodedVaultRoot);
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers: headersOf(request) };
   if (body !== undefined && method !== 'GET' && method !== 'HEAD') {
     init.body = body;
   }
   return new Request(url, init);
-}
-
-function needsVaultMutationRoot(method: string, pathname: string): boolean {
-  const route = pathname.replace(/\/+$/, '') || '/';
-  return method === 'PUT' && (
-    route === '/api/vault/settings' || route === '/api/vault/file' || /^\/api\/notes\/[^/]+$/.test(route)
-  ) || method === 'DELETE' && route === '/api/vault/file' || method === 'POST' && [
-    '/api/vault/folder', '/api/vault/rename', '/api/vault/rename-block',
-    '/api/vault/history/restore', '/api/vault/legacy-note/restore',
-  ].includes(route);
 }
 
 async function writeWebResponse(response: Response, target: ServerResponse): Promise<void> {
@@ -106,6 +88,8 @@ async function writeWebResponse(response: Response, target: ServerResponse): Pro
     if (!SKIP_RESPONSE_HEADERS.has(name.toLowerCase())) headers[name] = value;
   });
   const body = response.body === null ? null : Buffer.from(await response.arrayBuffer());
+  // writeHead disables Node's implicit length inference; frame the actual buffered bytes.
+  if (body !== null) headers['content-length'] = String(body.byteLength);
   target.writeHead(response.status, response.statusText, headers);
   if (body === null) target.end();
   else target.end(body);
@@ -133,14 +117,8 @@ export async function startServer(options: { port?: number } = {}): Promise<Runn
       const method = request.method ?? 'GET';
       const pathname = (request.url ?? '/').split('?')[0];
       try {
-        const incomingVaultRoot = request.headers['x-noltri-vault-root'];
-        const encodedVaultRoot = needsVaultMutationRoot(method, pathname)
-          ? incomingVaultRoot === undefined
-            ? encodeURIComponent(await bundle.vault.captureRootForMutation())
-            : Array.isArray(incomingVaultRoot) ? incomingVaultRoot.join(',') : incomingVaultRoot
-          : undefined;
         const body = await readBody(request);
-        const webRequest = toWebRequest(request, body, port, encodedVaultRoot);
+        const webRequest = toWebRequest(request, body, port);
         const webResponse = await bundle.handle(webRequest);
         await writeWebResponse(webResponse, response);
         logger.info('http', {
@@ -162,7 +140,7 @@ export async function startServer(options: { port?: number } = {}): Promise<Runn
         }
         response.end(
           JSON.stringify({ error: error instanceof BodyTooLargeError
-            ? { code: 'invalid_request', message: `请求正文超过 ${MAX_HTTP_BODY_BYTES} 字节` }
+            ? { code: 'invalid_request', message: `请求正文超过 ${error.maxBytes} 字节` }
             : { code: 'internal_error', message: 'Knowledge Core 未能完成该请求' } }),
         );
       }

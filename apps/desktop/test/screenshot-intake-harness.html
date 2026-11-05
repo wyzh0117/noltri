@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:1420; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>Noltri Screenshot Intake Browser Harness</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body, #root { width: 100%; min-height: 100%; margin: 0; }
+      body { background: #f3f1e9; color: #202722; font: 13px/1.5 system-ui, sans-serif; }
+      .harness-shell { min-height: 100vh; padding: 10px; }
+      .harness-controls { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 0 auto 10px; max-width: 1100px; }
+      .harness-controls button { min-height: 30px; padding: 5px 9px; border: 1px solid #d9ded7; border-radius: 6px; background: #fffefb; color: #445149; }
+      .harness-status { margin-left: auto; color: #79847d; font: 10px ui-monospace, monospace; }
+      .intake-window { max-width: 1100px; max-height: calc(100vh - 62px); margin: 0 auto; overflow: auto; background: #fffefb; }
+      #harness-result { max-width: 1100px; max-height: 150px; margin: 8px auto; padding: 7px; overflow: auto; border: 1px solid #d9ded7; border-radius: 6px; background: #fffefb; font: 10px/1.4 ui-monospace, monospace; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./screenshot-intake-harness.tsx"></script>
+  </body>
+</html>

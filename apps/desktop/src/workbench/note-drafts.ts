@@ -4,19 +4,14 @@ export interface NoteIdentity {
 }
 
 export interface NoteDraft extends NoteIdentity {
-  /** Root which owned the loaded legacy note; absent only on drafts written before Vault scoping. */
-  vaultRoot?: string;
   content: string;
   updatedAt: string;
 }
 
 const STORAGE_PREFIX = 'noltri:note-draft:v1:';
 
-function identityKey(identity: NoteIdentity, vaultRoot?: string): string {
-  const key = vaultRoot === undefined
-    ? [identity.topicId, identity.chapterId]
-    : [identity.topicId, identity.chapterId, vaultRoot];
-  return `${STORAGE_PREFIX}${encodeURIComponent(JSON.stringify(key))}`;
+function identityKey(identity: NoteIdentity): string {
+  return `${STORAGE_PREFIX}${encodeURIComponent(JSON.stringify([identity.topicId, identity.chapterId]))}`;
 }
 
 function isNoteDraft(value: unknown): value is NoteDraft {
@@ -25,7 +20,6 @@ function isNoteDraft(value: unknown): value is NoteDraft {
   return typeof draft.topicId === 'string'
     && draft.topicId.length > 0
     && (draft.chapterId === null || (typeof draft.chapterId === 'string' && draft.chapterId.length > 0))
-    && (draft.vaultRoot === undefined || (typeof draft.vaultRoot === 'string' && draft.vaultRoot.length > 0))
     && typeof draft.content === 'string'
     && typeof draft.updatedAt === 'string';
 }
@@ -33,14 +27,14 @@ function isNoteDraft(value: unknown): value is NoteDraft {
 function readStoredDraft(key: string): NoteDraft | null {
   try {
     const value: unknown = JSON.parse(window.localStorage.getItem(key) ?? 'null');
-    return isNoteDraft(value) && identityKey(value, value.vaultRoot) === key ? value : null;
+    return isNoteDraft(value) && identityKey(value) === key ? value : null;
   } catch {
     return null;
   }
 }
 
-export function readNoteDraft(identity: NoteIdentity, vaultRoot?: string): NoteDraft | null {
-  return readStoredDraft(identityKey(identity, vaultRoot));
+export function readNoteDraft(identity: NoteIdentity): NoteDraft | null {
+  return readStoredDraft(identityKey(identity));
 }
 
 export function listNoteDrafts(): NoteDraft[] {
@@ -61,7 +55,7 @@ export function listNoteDrafts(): NoteDraft[] {
 
 export function writeNoteDraft(draft: NoteDraft): boolean {
   try {
-    window.localStorage.setItem(identityKey(draft, draft.vaultRoot), JSON.stringify(draft));
+    window.localStorage.setItem(identityKey(draft), JSON.stringify(draft));
     return true;
   } catch {
     return false;
@@ -69,8 +63,8 @@ export function writeNoteDraft(draft: NoteDraft): boolean {
 }
 
 /** Remove only the version the server accepted; newer typing may have replaced it in flight. */
-export function clearNoteDraft(identity: NoteIdentity, savedContent: string, vaultRoot?: string): boolean {
-  const key = identityKey(identity, vaultRoot);
+export function clearNoteDraft(identity: NoteIdentity, savedContent: string): boolean {
+  const key = identityKey(identity);
   if (readStoredDraft(key)?.content !== savedContent) return true;
   try {
     window.localStorage.removeItem(key);

@@ -1,5 +1,6 @@
 export * from './enums';
 export * from './capture';
+export * from './capture-batch';
 export * from './knowledge';
 export * from './graph';
 export * from './api';
@@ -7,3 +8,5 @@ export * from './grants';
 export * from './config';
 export * from './library';
 export * from './notes';
+export * from './processing-rules';
+export * from './image-capture';

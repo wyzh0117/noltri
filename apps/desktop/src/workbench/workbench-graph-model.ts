@@ -1,7 +1,4 @@
-import type { NoteMatchesResponse, VaultGraph, VaultGraphNode } from '@noltri/schema';
-
-export type GraphViewMode = 'global' | 'local';
-export type GraphEntityType = VaultGraphNode['type'] | 'tag';
+import type { GraphEdge, GraphNode } from '@noltri/schema';
 
 export interface GraphGroupMatch {
   query: string;
@@ -10,38 +7,14 @@ export interface GraphGroupMatch {
 }
 
 export interface GraphQueryMatch {
-  revision: number;
-  paths: ReadonlySet<string>;
-  matchingTags: ReadonlySet<string>;
-  attachmentPaths: ReadonlySet<string>;
-  tagIds: ReadonlySet<string>;
-}
-
-export function graphQueryMatchFromResponse(response: NoteMatchesResponse): GraphQueryMatch {
-  const matchingTags = new Set(response.matchingTags);
-  const tagIds = new Set([...matchingTags].map(tagNodeId));
-  return {
-    revision: response.revision,
-    paths: new Set(response.paths),
-    matchingTags,
-    attachmentPaths: new Set(response.attachmentPaths),
-    tagIds,
-  };
+  nodeIds: ReadonlySet<string>;
 }
 
 export interface GraphModelOptions {
-  mode: GraphViewMode;
-  focusPath: string | null;
-  depth: number;
-  showOutgoing: boolean;
-  showIncoming: boolean;
-  neighborLinks: boolean;
-  showTags: boolean;
-  showAttachments: boolean;
-  existingFilesOnly: boolean;
   showOrphans: boolean;
   nodeSizeMultiplier: number;
   lineSizeMultiplier: number;
+  preserveNodeIds?: ReadonlySet<string>;
 }
 
 export interface GraphModelMatches {
@@ -51,18 +24,12 @@ export interface GraphModelMatches {
 
 export interface GraphViewNode {
   id: string;
-  path: string | null;
   title: string;
-  basename: string;
-  type: GraphEntityType;
-  tags: string[];
+  type: GraphNode['nodeType'];
   degree: number;
   weight: number;
   size: number;
   colorGroup: string | null;
-  depth: number | null;
-  mtime?: number;
-  ctime?: number;
 }
 
 export interface GraphViewEdge {
@@ -70,9 +37,8 @@ export interface GraphViewEdge {
   source: string;
   target: string;
   count: number;
-  resolved: boolean;
   width: number;
-  mtime?: number;
+  relationType: GraphEdge['relationType'];
 }
 
 export interface GraphModel {
@@ -81,229 +47,215 @@ export interface GraphModel {
 }
 
 const clamp = (value: number, minimum: number, maximum: number): number => Math.min(maximum, Math.max(minimum, value));
-
-export function tagNodeId(tag: string): string {
-  return `tag:${tag.trim().replace(/^#/, '').toLocaleLowerCase()}`;
-}
+const nodeTypeOrder: Record<GraphNode['nodeType'], number> = {
+  discipline: 0,
+  subdiscipline: 1,
+  domain: 2,
+  topic: 3,
+  chapter: 4,
+};
 
 export function graphNodeSize(weight: number, multiplier = 1): number {
   return clamp(multiplier, 0.1, 5) * clamp(3 * Math.sqrt(Math.max(0, weight) + 1), 8, 30);
 }
 
-function pathTitle(path: string): string {
-  const name = path.split('/').at(-1) ?? path;
-  return name.replace(/\.[^.]+$/, '');
-}
-
-interface MutableNode {
-  id: string;
-  path: string | null;
-  title: string;
-  basename: string;
-  type: GraphEntityType;
-  tags: string[];
-  relatedPaths: Set<string>;
-  degree: number;
-  depth: number | null;
-  weight: number;
-  colorGroup: string | null;
-  mtime?: number;
-  ctime?: number;
-}
-
-interface MutableEdge {
-  id: string;
-  source: string;
-  target: string;
-  count: number;
-  resolved: boolean;
-  mtime?: number;
-}
-
-function matchesNode(node: MutableNode, match: GraphQueryMatch | null): boolean {
-  if (match === null || node.type === 'unresolved') return true;
-  if (node.type === 'tag') return match.tagIds.has(node.id);
-  if (node.path === null) return false;
-  return node.type === 'attachment' ? match.attachmentPaths.has(node.path) : match.paths.has(node.path);
-}
-
-function colorForGroup(node: MutableNode, groups: readonly GraphGroupMatch[]): string | null {
-  for (const group of groups) {
-    if (matchesNode(node, group.match)) return group.color;
-  }
-  return null;
+function colorForGroup(nodeId: string, groups: readonly GraphGroupMatch[]): string | null {
+  return groups.find((group) => group.match.nodeIds.has(nodeId))?.color ?? null;
 }
 
 export function buildGraphModel(
-  data: VaultGraph,
+  sourceNodes: readonly GraphNode[],
+  sourceEdges: readonly GraphEdge[],
   options: GraphModelOptions,
   matches: GraphModelMatches = { filter: null, groups: [] },
 ): GraphModel {
-  const nodesById = new Map<string, MutableNode>();
-  const rawEdges = new Map<string, MutableEdge>();
-
-  const ensureNode = (node: VaultGraphNode): MutableNode => {
-    const existing = nodesById.get(node.path);
-    if (existing !== undefined) return existing;
-    const created: MutableNode = {
-      id: node.path,
-      path: node.path,
-      title: node.title,
-      basename: node.basename,
-      type: node.type,
-      tags: node.tags ?? [],
-      mtime: (node as VaultGraphNode & { mtime?: number }).mtime,
-      ctime: (node as VaultGraphNode & { ctime?: number }).ctime,
-      relatedPaths: new Set([node.path]),
-      degree: 0,
-      depth: null,
-      weight: 0,
-      colorGroup: null,
-    };
-    nodesById.set(created.id, created);
-    return created;
-  };
-
-  for (const node of data.nodes) ensureNode(node);
-  for (const edge of data.edges) {
-    if (!nodesById.has(edge.sourcePath)) continue;
-    if (!nodesById.has(edge.targetPath)) {
-      if (edge.resolved) continue;
-      const path = edge.targetPath;
-      ensureNode({ path, title: pathTitle(path), basename: pathTitle(path), type: 'unresolved', tags: [] });
-    }
-    const id = `${edge.sourcePath}\0${edge.targetPath}`;
-    const previous = rawEdges.get(id);
-    if (previous === undefined) rawEdges.set(id, { id, source: edge.sourcePath, target: edge.targetPath, count: Math.max(1, edge.count), resolved: edge.resolved, mtime: nodesById.get(edge.sourcePath)?.mtime });
-    else {
-      previous.count += Math.max(1, edge.count);
-      previous.resolved = previous.resolved && edge.resolved;
-    }
-  }
-
-  if (options.showTags) {
-    const canonicalTags = new Map<string, MutableNode>();
-    for (const note of [...nodesById.values()]) {
-      if (note.type !== 'note') continue;
-      for (const sourceTag of note.tags) {
-        const tag = sourceTag.trim().replace(/^#/, '');
-        if (tag === '') continue;
-        const id = tagNodeId(tag);
-        let tagNode = canonicalTags.get(id);
-        if (tagNode === undefined) {
-          tagNode = {
-            id, path: null, title: `#${tag}`, basename: tag, type: 'tag', tags: [tag], relatedPaths: new Set(),
-            degree: 0, depth: null, weight: 0, colorGroup: null,
-          };
-          canonicalTags.set(id, tagNode);
-          nodesById.set(id, tagNode);
-        }
-      tagNode.relatedPaths.add(note.id);
-        const edgeId = `${note.id}\0${tagNode.id}`;
-      rawEdges.set(edgeId, { id: edgeId, source: note.id, target: tagNode.id, count: 1, resolved: true, mtime: note.mtime });
-      }
-    }
-  }
-
-  const nodeVisible = (node: MutableNode): boolean => {
-    if (node.type === 'tag') return options.showTags && matchesNode(node, matches.filter);
-    if (node.type === 'attachment' && !options.showAttachments) return false;
-    if (node.type === 'unresolved' && options.existingFilesOnly) return false;
-    return matchesNode(node, matches.filter);
-  };
-  const availableIds = new Set([...nodesById.values()].filter(nodeVisible).map((node) => node.id));
-  const allEdges = [...rawEdges.values()].filter((edge) => availableIds.has(edge.source) && availableIds.has(edge.target));
-  const incidentEdges = new Map<string, MutableEdge[]>();
-  for (const edge of allEdges) {
-    for (const id of [edge.source, edge.target]) {
-      const incident = incidentEdges.get(id);
-      if (incident === undefined) incidentEdges.set(id, [edge]);
-      else incident.push(edge);
-    }
-  }
-
-  let chosenIds = new Set(availableIds);
-  let chosenEdges = allEdges;
-  const depths = new Map<string, number>();
-  if (options.mode === 'local') {
-    chosenIds = new Set();
-    chosenEdges = [];
-    const root = options.focusPath;
-    if (root !== null && availableIds.has(root)) {
-      chosenIds.add(root);
-      depths.set(root, 0);
-      let frontier = [root];
-      const maxDepth = clamp(Math.floor(options.depth), 1, 5);
-      for (let depth = 1; depth <= maxDepth; depth += 1) {
-        const next: string[] = [];
-        for (const current of frontier) {
-          for (const edge of incidentEdges.get(current) ?? []) {
-            const isOutgoing = edge.source === current;
-            const isIncoming = edge.target === current;
-            if ((!isOutgoing || !options.showOutgoing) && (!isIncoming || !options.showIncoming)) continue;
-            const other = isOutgoing ? edge.target : edge.source;
-            if (!availableIds.has(other)) continue;
-            chosenEdges.push(edge);
-            if (!chosenIds.has(other)) {
-              chosenIds.add(other);
-              depths.set(other, depth);
-              if (nodesById.get(other)?.type !== 'tag' && nodesById.get(other)?.type !== 'unresolved') next.push(other);
-            }
-          }
-        }
-        frontier = next;
-        if (frontier.length === 0) break;
-      }
-      if (options.neighborLinks) chosenEdges = allEdges.filter((edge) => chosenIds.has(edge.source) && chosenIds.has(edge.target));
-      else chosenEdges = [...new Map(chosenEdges.map((edge) => [edge.id, edge])).values()];
-    }
-  }
-
-  const degrees = new Map([...chosenIds].map((id) => [id, 0]));
-  for (const edge of chosenEdges) {
-    degrees.set(edge.source, (degrees.get(edge.source) ?? 0) + edge.count);
-    degrees.set(edge.target, (degrees.get(edge.target) ?? 0) + edge.count);
+  const nodeById = new Map<string, GraphNode>();
+  for (const node of sourceNodes) if (!nodeById.has(node.id)) nodeById.set(node.id, node);
+  const preserve = options.preserveNodeIds ?? new Set<string>();
+  const visibleIds = new Set([...nodeById.keys()].filter((id) => matches.filter === null || matches.filter.nodeIds.has(id) || preserve.has(id)));
+  let edges = sourceEdges
+    .filter((edge) => visibleIds.has(edge.fromNodeId) && visibleIds.has(edge.toNodeId))
+    .map((edge) => ({
+      id: edge.id || `${edge.fromNodeId}\0${edge.toNodeId}\0${edge.relationType}`,
+      source: edge.fromNodeId,
+      target: edge.toNodeId,
+      count: 1,
+      width: clamp(options.lineSizeMultiplier, 0.1, 5),
+      relationType: edge.relationType,
+    } satisfies GraphViewEdge));
+  const degrees = new Map([...visibleIds].map((id) => [id, 0]));
+  for (const edge of edges) {
+    degrees.set(edge.source, (degrees.get(edge.source) ?? 0) + 1);
+    degrees.set(edge.target, (degrees.get(edge.target) ?? 0) + 1);
   }
   if (!options.showOrphans) {
-    for (const id of chosenIds) {
-      if ((degrees.get(id) ?? 0) === 0 && !(options.mode === 'local' && id === options.focusPath)) chosenIds.delete(id);
-    }
-    chosenEdges = chosenEdges.filter((edge) => chosenIds.has(edge.source) && chosenIds.has(edge.target));
+    for (const id of visibleIds) if ((degrees.get(id) ?? 0) === 0 && !preserve.has(id)) visibleIds.delete(id);
+    edges = edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
   }
 
-  const nodes = [...chosenIds].map((id) => {
-    const node = nodesById.get(id)!;
+  const nodes = [...visibleIds].map((id) => {
+    const node = nodeById.get(id)!;
     const degree = degrees.get(id) ?? 0;
-    const depth = depths.get(id) ?? null;
-    const localWeight = depth === null ? degree : Math.max(0, 30 - (30 / Math.max(1, options.depth)) * depth);
-    node.degree = degree;
-    node.depth = depth;
-    node.weight = depth === null ? degree : localWeight;
-    node.colorGroup = colorForGroup(node, matches.groups);
     return {
-      id: node.id,
-      path: node.path,
+      id,
       title: node.title,
-      basename: node.basename,
-      type: node.type,
-      tags: [...node.tags],
+      type: node.nodeType,
       degree,
-      weight: node.weight,
-      size: graphNodeSize(node.weight, options.nodeSizeMultiplier),
-      colorGroup: node.colorGroup,
-      depth,
-      mtime: node.mtime,
-      ctime: node.ctime,
+      weight: degree,
+      size: graphNodeSize(degree, options.nodeSizeMultiplier),
+      colorGroup: colorForGroup(id, matches.groups),
     } satisfies GraphViewNode;
-  });
-  const edges = chosenEdges
-    .filter((edge) => chosenIds.has(edge.source) && chosenIds.has(edge.target))
-    .map((edge) => ({
-      ...edge,
-      width: clamp(options.lineSizeMultiplier, 0.1, 5),
-      mtime: edge.mtime,
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id));
+  }).sort((left, right) => left.id.localeCompare(right.id));
 
-  return { nodes: nodes.sort((left, right) => left.id.localeCompare(right.id)), edges };
+  return {
+    nodes,
+    edges: edges.sort((left, right) => left.id.localeCompare(right.id)),
+  };
+}
+
+export function graphContextAnchorId(
+  contextNodeId: string,
+  nodes: readonly GraphNode[],
+): string | null {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return byId.has(contextNodeId) ? contextNodeId : null;
+}
+
+/** Keep the selected semantic node's taxonomy path when a query filters the graph. */
+export function graphContextPathIds(
+  contextNodeId: string,
+  selectedNodeId: string | null,
+  nodes: readonly GraphNode[],
+): Set<string> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const ids = new Set<string>();
+  if (byId.has(contextNodeId)) ids.add(contextNodeId);
+  let current = selectedNodeId === null ? undefined : byId.get(selectedNodeId);
+  const visited = new Set<string>();
+  while (current !== undefined && !visited.has(current.id)) {
+    visited.add(current.id);
+    ids.add(current.id);
+    if (current.id === contextNodeId || current.parentId === null) break;
+    current = byId.get(current.parentId);
+  }
+  return ids;
+}
+
+export interface GraphWindow {
+  nodes: GraphViewNode[];
+  edges: GraphViewEdge[];
+  hiddenCount: number;
+}
+
+/** Keep the current node and scope root visible, then fill the mini graph by breadth-first adjacency. */
+export function selectGraphWindow(
+  model: GraphModel,
+  contextNodeId: string,
+  selectedNodeId: string | null,
+  allSemanticNodes: readonly GraphNode[],
+  limit = 40,
+): GraphWindow {
+  const nodeById = new Map(model.nodes.map((node) => [node.id, node]));
+  const fullById = new Map(allSemanticNodes.map((node) => [node.id, node]));
+  const path: string[] = [];
+  const visitedPath = new Set<string>();
+  let current = selectedNodeId === null ? undefined : fullById.get(selectedNodeId);
+  while (current !== undefined && !visitedPath.has(current.id)) {
+    visitedPath.add(current.id);
+    if (nodeById.has(current.id)) path.unshift(current.id);
+    if (current.id === contextNodeId || current.parentId === null) break;
+    current = fullById.get(current.parentId);
+  }
+  const seeds = [...new Set([
+    ...(nodeById.has(contextNodeId) ? [contextNodeId] : []),
+    ...path,
+    ...(selectedNodeId !== null && nodeById.has(selectedNodeId) ? [selectedNodeId] : []),
+  ])];
+  const maximum = Math.max(1, Math.floor(limit));
+  const neighbors = new Map<string, Set<string>>();
+  for (const edge of model.edges) {
+    const left = neighbors.get(edge.source) ?? new Set<string>();
+    left.add(edge.target);
+    neighbors.set(edge.source, left);
+    const right = neighbors.get(edge.target) ?? new Set<string>();
+    right.add(edge.source);
+    neighbors.set(edge.target, right);
+  }
+  const children = new Map<string, string[]>();
+  for (const node of allSemanticNodes) {
+    if (node.parentId === null || !nodeById.has(node.id)) continue;
+    const siblings = children.get(node.parentId) ?? [];
+    siblings.push(node.id);
+    children.set(node.parentId, siblings);
+  }
+  const compare = (left: string, right: string): number => {
+    const leftNode = nodeById.get(left)!;
+    const rightNode = nodeById.get(right)!;
+    return (nodeTypeOrder[leftNode.type] - nodeTypeOrder[rightNode.type])
+      || (rightNode.degree - leftNode.degree)
+      || left.localeCompare(right);
+  };
+  const ordered: GraphViewNode[] = [];
+  const included = new Set<string>();
+  const queue: string[] = [];
+  for (const seed of seeds) {
+    if (included.size >= maximum) break;
+    const node = nodeById.get(seed);
+    if (node === undefined || included.has(seed)) continue;
+    included.add(seed);
+    ordered.push(node);
+    queue.push(seed);
+  }
+  for (let cursor = 0; cursor < queue.length && ordered.length < maximum; cursor += 1) {
+    const current = queue[cursor]!;
+    const descendants = (children.get(current) ?? []).filter((id) => !included.has(id)).sort(compare);
+    const descendantSet = new Set(descendants);
+    const adjacent = [...new Set([...descendants, ...(neighbors.get(current) ?? [])])].filter((id) => !included.has(id)).sort((left, right) => {
+      const leftIsChild = descendantSet.has(left);
+      const rightIsChild = descendantSet.has(right);
+      return (leftIsChild === rightIsChild ? 0 : leftIsChild ? -1 : 1) || compare(left, right);
+    });
+    for (const id of adjacent) {
+      if (ordered.length >= maximum) break;
+      const node = nodeById.get(id);
+      if (node === undefined) continue;
+      included.add(id);
+      ordered.push(node);
+      queue.push(id);
+    }
+  }
+  if (ordered.length < maximum) {
+    for (const node of [...model.nodes].sort((left, right) => compare(left.id, right.id))) {
+      if (ordered.length >= maximum) break;
+      if (!included.has(node.id)) {
+        included.add(node.id);
+        ordered.push(node);
+      }
+    }
+  }
+  const ids = new Set(ordered.map((node) => node.id));
+  return {
+    nodes: ordered,
+    edges: model.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)),
+    hiddenCount: Math.max(0, model.nodes.length - ordered.length),
+  };
+}
+
+export function graphStructureKey(model: GraphModel): string {
+  let hash = 2166136261;
+  const feed = (value: string): void => {
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    hash ^= 0;
+    hash = Math.imul(hash, 16777619);
+  };
+  for (const node of model.nodes) feed(node.id);
+  for (const edge of model.edges) {
+    feed(edge.id);
+    feed(edge.source);
+    feed(edge.target);
+  }
+  return `${model.nodes.length}:${model.edges.length}:${hash >>> 0}`;
 }

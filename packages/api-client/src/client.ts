@@ -1,8 +1,43 @@
 import { z } from 'zod';
 import {
   apiErrorSchema,
+  processingRulesStateSchema,
+  saveProcessingRulesDraftRequestSchema,
+  saveProcessingRulesDraftResponseSchema,
+  applyProcessingRulesRequestSchema,
+  applyProcessingRulesResponseSchema,
+  rollbackProcessingRulesRequestSchema,
+  rollbackProcessingRulesResponseSchema,
+  processingRecordsResponseSchema,
+  type ProcessingRulesState,
+  type SaveProcessingRulesDraftRequest,
+  type SaveProcessingRulesDraftResponse,
+  type ApplyProcessingRulesRequest,
+  type ApplyProcessingRulesResponse,
+  type RollbackProcessingRulesRequest,
+  type RollbackProcessingRulesResponse,
+  type ProcessingRecordsResponse,
+
+  MAX_CAPTURE_ASSET_BYTES,
   assignSourceRequestSchema,
+  reviewSourceRequestSchema,
+  reviewSourceResponseSchema,
+  type ReviewSourceRequest,
+  type ReviewSourceResponse,
+  type ReviewStatus,
   assignSourceResponseSchema,
+  captureAssetBytesMatchMime,
+  captureAssetRefSchema,
+  captureBatchListQuerySchema,
+  captureBatchListSchema,
+  captureAssetUploadResultSchema,
+  captureBatchRequestSchema,
+  processCaptureBatchRequestSchema,
+  captureRecognitionResponseSchema,
+  type ProcessCaptureBatchRequest,
+  type CaptureRecognitionResponse,
+  captureBatchStatusSchema,
+  captureBatchSubmitResultSchema,
   captureRequestSchema,
   captureResultSchema,
   createVaultFolderRequestSchema,
@@ -49,6 +84,8 @@ import {
   knowledgeNodeSchema,
   moveNodeResponseSchema,
   nodeChatResponseSchema,
+  noteInterpretationRequestSchema,
+  noteInterpretationResponseSchema,
   nodeContextSchema,
   nodeDetailSchema,
   renameNoteRequestSchema,
@@ -71,6 +108,14 @@ import {
   writeNoteFileRequestSchema,
   type AssignSourceRequest,
   type AssignSourceResponse,
+  type CaptureAssetMime,
+  type CaptureAssetRef,
+  type CaptureAssetUploadResult,
+  type CaptureBatchList,
+  type CaptureBatchListQuery,
+  type CaptureBatchRequest,
+  type CaptureBatchStatus,
+  type CaptureBatchSubmitResult,
   type CaptureRequest,
   type CaptureResult,
   type CreateVaultFolderRequest,
@@ -117,6 +162,8 @@ import {
   type MoveNodeResponse,
   type NodeChatRequest,
   type NodeChatResponse,
+  type NoteInterpretationRequest,
+  type NoteInterpretationResponse,
   type NodeContext,
   type NodeContextRequest,
   type NodeDetail,
@@ -146,7 +193,21 @@ export { MAX_SNIPPET_CHARS, MIN_SNIPPET_CHARS } from '@noltri/schema';
 
 export const apiRoutes = {
   health: '/api/health',
+  processingRules: '/api/admin/processing-rules',
+  processingRulesDraft: '/api/admin/processing-rules/draft',
+  processingRulesApply: '/api/admin/processing-rules/apply',
+  processingRulesRollback: '/api/admin/processing-rules/rollback',
+  processingRecords: '/api/admin/processing-records',
   capture: '/api/capture',
+  captureAsset: (assetId: string) => `/api/capture/assets/${encodeURIComponent(assetId)}`,
+  captureBatches: '/api/capture/batches',
+  captureBatchProcess: (batchId: string) => `/api/capture/batches/${encodeURIComponent(batchId)}/process`,
+  captureRecognition: (id: string) => `/api/inbox/${encodeURIComponent(id)}/recognition`,
+  captureBatch: (batchId: string) => `/api/capture/batches/${encodeURIComponent(batchId)}`,
+  captureBatchAsset: (batchId: string, assetId: string) =>
+    `/api/capture/batches/${encodeURIComponent(batchId)}/assets/${encodeURIComponent(assetId)}`,
+  captureBatchItemRetry: (batchId: string, requestId: string) =>
+    `/api/capture/batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(requestId)}/retry`,
   items: '/api/items',
   item: (id: string) => `/api/items/${encodeURIComponent(id)}`,
   itemRestore: (id: string) => `/api/items/${encodeURIComponent(id)}/restore`,
@@ -188,12 +249,14 @@ export const apiRoutes = {
   inbox: '/api/inbox',
   inboxSource: (id: string) => `/api/inbox/${encodeURIComponent(id)}`,
   inboxAssign: (id: string) => `/api/inbox/${encodeURIComponent(id)}/assign`,
+  inboxReview: (id: string) => `/api/inbox/${encodeURIComponent(id)}/review`,
   captureRetry: (id: string) => `/api/capture/${encodeURIComponent(id)}/retry`,
   node: (id: string) => `/api/nodes/${encodeURIComponent(id)}`,
   move: (id: string) => `/api/nodes/${encodeURIComponent(id)}/move`,
   search: '/api/search',
   nodeContext: '/api/node-context',
   chat: '/api/chat',
+  noteInterpretation: '/api/note-interpretation',
   conversations: '/api/conversations',
   conversationMessages: (id: string) => `/api/conversations/${encodeURIComponent(id)}/messages`,
   grants: '/api/admin/grants',
@@ -354,6 +417,124 @@ export class ApiClient {
     return this.request('POST', apiRoutes.capture, captureResultSchema, { body: validated.data });
   }
 
+  uploadCaptureAsset(input: {
+    assetId: string;
+    sessionId: string;
+    mimeType: CaptureAssetMime;
+    sha256: string;
+    bytes: Uint8Array;
+  }): Promise<CaptureAssetUploadResult> {
+    const validated = captureAssetRefSchema.pick({ assetId: true, sessionId: true, mimeType: true, sha256: true })
+      .safeParse({ assetId: input.assetId, sessionId: input.sessionId, mimeType: input.mimeType, sha256: input.sha256 });
+    if (!validated.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Capture asset metadata is not sendable', validated.error.issues);
+    }
+    if (input.bytes.byteLength === 0 || input.bytes.byteLength > MAX_CAPTURE_ASSET_BYTES) {
+      throw new ApiClientError(400, 'invalid_request', 'Capture asset byte length is out of range');
+    }
+    const body = new Blob([new Uint8Array(input.bytes).buffer as ArrayBuffer], { type: validated.data.mimeType });
+    return this.request('PUT', apiRoutes.captureAsset(validated.data.assetId), captureAssetUploadResultSchema, {
+      rawBody: body,
+      headers: {
+        'content-type': validated.data.mimeType,
+        'x-noltri-session-id': validated.data.sessionId,
+        'x-noltri-content-sha256': validated.data.sha256,
+      },
+    });
+  }
+
+  createCaptureBatch(input: CaptureBatchRequest): Promise<CaptureBatchSubmitResult> {
+    const validated = captureBatchRequestSchema.safeParse(input);
+    if (!validated.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Capture batch payload is not sendable', validated.error.issues);
+    }
+    return this.request('POST', apiRoutes.captureBatches, captureBatchSubmitResultSchema, { body: validated.data });
+  }
+
+  getCaptureBatchStatus(batchId: string): Promise<CaptureBatchStatus> {
+    return this.request('GET', apiRoutes.captureBatch(batchId), captureBatchStatusSchema);
+  }
+
+  listCaptureBatches(input: Partial<CaptureBatchListQuery> = {}): Promise<CaptureBatchList> {
+    const validated = captureBatchListQuerySchema.safeParse(input);
+    if (!validated.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Capture batch list query is invalid', validated.error.issues);
+    }
+    const query = new URLSearchParams({ limit: String(validated.data.limit) });
+    return this.request('GET', `${apiRoutes.captureBatches}?${query}`, captureBatchListSchema);
+  }
+
+  async readCaptureAsset(batchId: string, assetId: string): Promise<{ asset: CaptureAssetRef; bytes: Uint8Array }> {
+    const parsedBatchId = captureBatchStatusSchema.shape.batchId.safeParse(batchId);
+    const parsedAssetId = captureAssetRefSchema.shape.assetId.safeParse(assetId);
+    if (!parsedBatchId.success || !parsedAssetId.success) {
+      throw new ApiClientError(400, 'invalid_request', 'Capture batch or asset id is invalid');
+    }
+
+    const path = apiRoutes.captureBatchAsset(parsedBatchId.data, parsedAssetId.data);
+    const response = await this.fetchResponse('GET', path, { headers: { accept: 'application/octet-stream' } });
+    if (!response.ok) throw await responseError(response, await readJson(response), path);
+
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (!Number.isSafeInteger(declaredLength) || declaredLength <= 0 || declaredLength > MAX_CAPTURE_ASSET_BYTES) {
+      throw new ApiClientError(502, 'internal_error', `Knowledge Core response has an invalid asset length for GET ${path}`);
+    }
+
+    const bytes = await readBoundedBytes(response, declaredLength, path);
+    const asset = captureAssetRefSchema.safeParse({
+      assetId: response.headers.get('x-noltri-asset-id'),
+      sessionId: response.headers.get('x-noltri-session-id'),
+      mimeType: response.headers.get('content-type'),
+      byteLength: Number(response.headers.get('content-length')),
+      sha256: response.headers.get('x-noltri-content-sha256'),
+      createdAt: response.headers.get('x-noltri-created-at'),
+    });
+    if (!asset.success || asset.data.assetId !== parsedAssetId.data || asset.data.byteLength !== declaredLength
+      || bytes.byteLength !== declaredLength || !captureAssetBytesMatchMime(bytes, asset.data.mimeType)) {
+      throw new ApiClientError(502, 'internal_error', `Knowledge Core response did not match the shared contract for GET ${path}`, asset.success ? undefined : asset.error.issues);
+    }
+    return { asset: asset.data, bytes };
+  }
+
+  processingRules(): Promise<ProcessingRulesState> {
+    return this.request('GET', apiRoutes.processingRules, processingRulesStateSchema);
+  }
+
+  saveProcessingRulesDraft(request: SaveProcessingRulesDraftRequest): Promise<SaveProcessingRulesDraftResponse> {
+    const parsed = saveProcessingRulesDraftRequestSchema.safeParse(request);
+    if (!parsed.success) throw new ApiClientError(400, 'invalid_request', 'Invalid processing rules draft', parsed.error.issues);
+    return this.request('PUT', apiRoutes.processingRulesDraft, saveProcessingRulesDraftResponseSchema, { body: parsed.data });
+  }
+
+  applyProcessingRules(request: ApplyProcessingRulesRequest): Promise<ApplyProcessingRulesResponse> {
+    const parsed = applyProcessingRulesRequestSchema.safeParse(request);
+    if (!parsed.success) throw new ApiClientError(400, 'invalid_request', 'Invalid processing rules apply request', parsed.error.issues);
+    return this.request('POST', apiRoutes.processingRulesApply, applyProcessingRulesResponseSchema, { body: parsed.data });
+  }
+
+  rollbackProcessingRules(request: RollbackProcessingRulesRequest): Promise<RollbackProcessingRulesResponse> {
+    const parsed = rollbackProcessingRulesRequestSchema.safeParse(request);
+    if (!parsed.success) throw new ApiClientError(400, 'invalid_request', 'Invalid processing rules rollback request', parsed.error.issues);
+    return this.request('POST', apiRoutes.processingRulesRollback, rollbackProcessingRulesResponseSchema, { body: parsed.data });
+  }
+
+  processingRecords(): Promise<ProcessingRecordsResponse> {
+    return this.request('GET', apiRoutes.processingRecords, processingRecordsResponseSchema);
+  }
+
+  processCaptureBatch(batchId: string, request: ProcessCaptureBatchRequest = {}): Promise<CaptureBatchStatus> {
+    const parsed = processCaptureBatchRequestSchema.safeParse(request);
+    if (!parsed.success) throw new ApiClientError(400, 'invalid_request', 'Invalid image processing selection', parsed.error.issues);
+    return this.request('POST', apiRoutes.captureBatchProcess(batchId), captureBatchStatusSchema, { body: parsed.data });
+  }
+  captureRecognition(rawSourceId: string): Promise<CaptureRecognitionResponse> {
+    return this.request('GET', apiRoutes.captureRecognition(rawSourceId), captureRecognitionResponseSchema);
+  }
+
+  retryCaptureBatchItem(batchId: string, requestId: string): Promise<CaptureBatchStatus> {
+    return this.request('POST', apiRoutes.captureBatchItemRetry(batchId, requestId), captureBatchStatusSchema);
+  }
+
   listItems(query: LibraryItemsQuery = {}): Promise<LibraryItemsResponse> {
     const validated = libraryItemsQuerySchema.safeParse(query);
     if (!validated.success) {
@@ -421,8 +602,10 @@ export class ApiClient {
     return this.request('GET', apiRoutes.vault, vaultSnapshotSchema);
   }
 
-  vaultSettings(): Promise<VaultSettings> {
-    return this.request('GET', apiRoutes.vaultSettings, vaultSettingsSchema);
+  vaultSettings(vaultRootPath?: string): Promise<VaultSettings> {
+    return this.request('GET', apiRoutes.vaultSettings, vaultSettingsSchema, {
+      ...(vaultRootPath === undefined ? {} : { vaultRootPath }),
+    });
   }
 
   updateVaultSettings(input: UpdateVaultSettingsRequest, vaultRootPath: string): Promise<VaultSettings> {
@@ -619,9 +802,10 @@ export class ApiClient {
   }
 
   /** 收件箱 feed. `status` is comma-separated, matching the server's query contract. */
-  inbox(query: { status?: string; limit?: number; offset?: number } = {}): Promise<InboxResponse> {
+  inbox(query: { status?: string; reviewStatus?: ReviewStatus; limit?: number; offset?: number } = {}): Promise<InboxResponse> {
     const params = new URLSearchParams();
     if (query.status) params.set('status', query.status);
+    if (query.reviewStatus) params.set('reviewStatus', query.reviewStatus);
     if (query.limit !== undefined) params.set('limit', String(query.limit));
     if (query.offset !== undefined) params.set('offset', String(query.offset));
     const suffix = params.toString();
@@ -630,6 +814,12 @@ export class ApiClient {
 
   rawSource(id: string): Promise<RawSource> {
     return this.request('GET', apiRoutes.inboxSource(id), rawSourceSchema);
+  }
+
+  reviewSource(rawSourceId: string, request: ReviewSourceRequest): Promise<ReviewSourceResponse> {
+    const validated = reviewSourceRequestSchema.safeParse(request);
+    if (!validated.success) throw new ApiClientError(400, 'invalid_request', 'Review payload is not sendable', validated.error.issues);
+    return this.request('POST', apiRoutes.inboxReview(rawSourceId), reviewSourceResponseSchema, { body: validated.data });
   }
 
   assignSource(rawSourceId: string, request: AssignSourceRequest): Promise<AssignSourceResponse> {
@@ -667,6 +857,14 @@ export class ApiClient {
   chat(request: NodeChatRequest): Promise<NodeChatResponse> {
     return this.request('POST', apiRoutes.chat, nodeChatResponseSchema, {
       body: request,
+      timeoutMs: Math.max(this.timeoutMs, 120_000),
+    });
+  }
+
+  interpretNote(request: NoteInterpretationRequest): Promise<NoteInterpretationResponse> {
+    const validated = validatedRequest(noteInterpretationRequestSchema, request, 'Note interpretation');
+    return this.request('POST', apiRoutes.noteInterpretation, noteInterpretationResponseSchema, {
+      body: validated,
       timeoutMs: Math.max(this.timeoutMs, 120_000),
     });
   }
@@ -717,48 +915,12 @@ export class ApiClient {
     method: string,
     path: string,
     responseSchema: z.ZodType<Output>,
-    init: { body?: unknown; timeoutMs?: number; vaultRootPath?: string } = {},
+    init: { body?: unknown; rawBody?: Blob; headers?: Record<string, string>; timeoutMs?: number; vaultRootPath?: string } = {},
   ): Promise<Output> {
-    const headers: Record<string, string> = { accept: 'application/json' };
-    if (init.body !== undefined) headers['content-type'] = 'application/json';
-    if (this.token) headers.authorization = `Bearer ${this.token}`;
-    if (this.clientHint) headers['x-noltri-client'] = this.clientHint;
-    if (init.vaultRootPath !== undefined) {
-      if (init.vaultRootPath.length === 0) throw new ApiClientError(400, 'invalid_request', 'Vault root context is required for writes');
-      headers['x-noltri-vault-root'] = encodeURIComponent(init.vaultRootPath);
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method,
-        headers,
-        body: init.body === undefined ? undefined : JSON.stringify(init.body),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw new ApiClientError(0, 'internal_error', describeNetworkError(error));
-    } finally {
-      clearTimeout(timer);
-    }
+    const response = await this.fetchResponse(method, path, init);
 
     const payload: unknown = await readJson(response);
-
-    if (!response.ok) {
-      const parsed = apiErrorSchema.safeParse(payload);
-      if (parsed.success) {
-        throw new ApiClientError(
-          response.status,
-          parsed.data.error.code,
-          parsed.data.error.message,
-          parsed.data.error.details,
-          { retryable: parsed.data.error.retryable, traceId: parsed.data.error.traceId },
-        );
-      }
-      throw new ApiClientError(response.status, 'internal_error', `Request failed with status ${response.status}`, payload);
-    }
+    if (!response.ok) throw await responseError(response, payload, path);
 
     const validated = responseSchema.safeParse(payload);
     if (!validated.success) {
@@ -771,6 +933,50 @@ export class ApiClient {
     }
     return validated.data;
   }
+
+  private async fetchResponse(
+    method: string,
+    path: string,
+    init: { body?: unknown; rawBody?: Blob; headers?: Record<string, string>; timeoutMs?: number; vaultRootPath?: string } = {},
+  ): Promise<Response> {
+    const headers: Record<string, string> = { accept: 'application/json', ...init.headers };
+    if (init.body !== undefined) headers['content-type'] = 'application/json';
+    if (this.token) headers.authorization = `Bearer ${this.token}`;
+    if (this.clientHint) headers['x-noltri-client'] = this.clientHint;
+    if (init.vaultRootPath !== undefined) {
+      if (init.vaultRootPath.length === 0) throw new ApiClientError(400, 'invalid_request', 'Vault root context is required for writes');
+      headers['x-noltri-vault-root'] = encodeURIComponent(init.vaultRootPath);
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? this.timeoutMs);
+    try {
+      return await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: init.rawBody ?? (init.body === undefined ? undefined : JSON.stringify(init.body)),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      throw new ApiClientError(0, 'internal_error', describeNetworkError(error));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function responseError(response: Response, payload: unknown, path: string): Promise<ApiClientError> {
+  const parsed = apiErrorSchema.safeParse(payload);
+  if (parsed.success) {
+    return new ApiClientError(
+      response.status,
+      parsed.data.error.code,
+      parsed.data.error.message,
+      parsed.data.error.details,
+      { retryable: parsed.data.error.retryable, traceId: parsed.data.error.traceId },
+    );
+  }
+  return new ApiClientError(response.status, 'internal_error', `Request failed for ${path} with status ${response.status}`, payload);
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -781,6 +987,38 @@ async function readJson(response: Response): Promise<unknown> {
   } catch {
     return { raw: text.slice(0, 500) };
   }
+}
+
+async function readBoundedBytes(response: Response, expectedLength: number, path: string): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) throw new ApiClientError(502, 'internal_error', `Knowledge Core response has no asset body for GET ${path}`);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > expectedLength || total > MAX_CAPTURE_ASSET_BYTES) {
+        await reader.cancel();
+        throw new ApiClientError(502, 'internal_error', `Knowledge Core response exceeded its declared asset length for GET ${path}`);
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof ApiClientError) throw error;
+    throw new ApiClientError(502, 'internal_error', `Knowledge Core asset response could not be read for GET ${path}`);
+  } finally {
+    reader.releaseLock();
+  }
+  if (total !== expectedLength) throw new ApiClientError(502, 'internal_error', `Knowledge Core response did not match its declared asset length for GET ${path}`);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function describeNetworkError(error: unknown): string {

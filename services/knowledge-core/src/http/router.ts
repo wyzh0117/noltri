@@ -7,6 +7,8 @@
  */
 import {
   assignSourceRequestSchema,
+  reviewSourceRequestSchema,
+  captureBatchListQuerySchema,
   captureRequestSchema,
   createVaultFolderRequestSchema,
   deleteVaultFileRequestSchema,
@@ -19,6 +21,7 @@ import {
   libraryItemsQuerySchema,
   moveNodeRequestSchema,
   nodeChatRequestSchema,
+  noteInterpretationRequestSchema,
   nodeContextRequestSchema,
   patchNodeRequestSchema,
   patchLibraryItemInputSchema,
@@ -41,6 +44,7 @@ import {
   type InboxQuery,
   type MoveNodeRequest,
   type NodeChatRequest,
+  type NoteInterpretationRequest,
   type NodeContextRequest,
   type PatchNodeRequest,
   type SearchRequest,
@@ -53,8 +57,12 @@ import { requireNodeAccess, requireScope, type GrantStore } from '../authorizati
 import type { KnowledgeCore } from '../core';
 import type { ActorContext } from '../types';
 import type { VaultService } from '../notes/vault';
+import type { ProcessingRulesStore } from '../services/processing-rules';
+import { readProcessingRules, saveProcessingRulesDraft, applyProcessingRules, rollbackProcessingRules, readProcessingRecords } from '../services/processing-rules-api';
 import { handleAdminGrants } from './admin';
 import { parseWith, readJsonBody } from './parse';
+import { readCaptureRecognition } from '../services/image-capture';
+import { processCaptureBatch, getCaptureBatchStatus, listCaptureBatches, putCaptureAsset, readCaptureAsset, retryCaptureBatchItem, submitCaptureBatch } from '../services/capture-intake';
 import {
   archiveLibraryItem,
   createLibraryItem,
@@ -78,6 +86,7 @@ export interface RouterDeps {
   /** Presence of a store is what turns 连接中心's own endpoints on. */
   grants?: GrantStore | null;
   vault?: VaultService;
+  processingRules?: ProcessingRulesStore;
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
@@ -90,7 +99,20 @@ interface Route {
 /** `:param` positions are matched by shape, not by a route library. */
 const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'health'] },
+  { method: 'GET', segments: ['api', 'admin', 'processing-rules'] },
+  { method: 'PUT', segments: ['api', 'admin', 'processing-rules', 'draft'] },
+  { method: 'POST', segments: ['api', 'admin', 'processing-rules', 'apply'] },
+  { method: 'POST', segments: ['api', 'admin', 'processing-rules', 'rollback'] },
+  { method: 'GET', segments: ['api', 'admin', 'processing-records'] },
   { method: 'POST', segments: ['api', 'capture'] },
+  { method: 'PUT', segments: ['api', 'capture', 'assets', ':assetId'] },
+  { method: 'POST', segments: ['api', 'capture', 'batches'] },
+  { method: 'GET', segments: ['api', 'capture', 'batches'] },
+  { method: 'GET', segments: ['api', 'capture', 'batches', ':batchId'] },
+  { method: 'POST', segments: ['api', 'capture', 'batches', ':batchId', 'process'] },
+  { method: 'GET', segments: ['api', 'inbox', ':id', 'recognition'] },
+  { method: 'GET', segments: ['api', 'capture', 'batches', ':batchId', 'assets', ':assetId'] },
+  { method: 'POST', segments: ['api', 'capture', 'batches', ':batchId', 'items', ':requestId', 'retry'] },
   { method: 'GET', segments: ['api', 'items'] },
   { method: 'POST', segments: ['api', 'items'] },
   { method: 'GET', segments: ['api', 'items', ':id'] },
@@ -141,12 +163,14 @@ const ROUTES: Route[] = [
   { method: 'GET', segments: ['api', 'inbox'] },
   { method: 'GET', segments: ['api', 'inbox', ':id'] },
   { method: 'POST', segments: ['api', 'inbox', ':id', 'assign'] },
+  { method: 'POST', segments: ['api', 'inbox', ':id', 'review'] },
   { method: 'GET', segments: ['api', 'nodes', ':id'] },
   { method: 'PATCH', segments: ['api', 'nodes', ':id'] },
   { method: 'POST', segments: ['api', 'nodes', ':id', 'move'] },
   { method: 'POST', segments: ['api', 'search'] },
   { method: 'POST', segments: ['api', 'node-context'] },
   { method: 'POST', segments: ['api', 'chat'] },
+  { method: 'POST', segments: ['api', 'note-interpretation'] },
   { method: 'GET', segments: ['api', 'conversations'] },
   { method: 'GET', segments: ['api', 'conversations', ':id', 'messages'] },
   { method: 'POST', segments: ['api', 'capture', ':id', 'retry'] },
@@ -173,7 +197,8 @@ function corsHeaders(config: CoreConfig, request: Request): Record<string, strin
   const headers: Record<string, string> = {
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'access-control-allow-headers': 'authorization, content-type, x-noltri-client, x-noltri-vault-root',
+    'access-control-allow-headers': 'authorization, content-type, x-noltri-client, x-noltri-vault-root, x-noltri-session-id, x-noltri-content-sha256',
+    'access-control-expose-headers': 'content-length, x-noltri-asset-id, x-noltri-session-id, x-noltri-content-sha256, x-noltri-created-at',
     'access-control-max-age': '600',
   };
   if (!wildcard) headers.vary = 'origin';
@@ -230,6 +255,7 @@ export function createRequestHandler(deps: RouterDeps): RequestHandler {
         config,
         grants,
         vault: deps.vault,
+        processingRules: deps.processingRules,
         resolve,
         cors,
       });
@@ -268,12 +294,13 @@ interface DispatchArgs {
   config: CoreConfig;
   grants: GrantStore | null;
   vault?: VaultService;
+  processingRules?: ProcessingRulesStore;
   resolve: IdentityResolver;
   cors: Record<string, string>;
 }
 
 async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
-  const { route, segments, method, url, request, core, config, grants, resolve, cors, vault } = args;
+  const { route, segments, method, url, request, core, config, grants, resolve, cors, vault, processingRules } = args;
   const path = route.join('/');
   const encodedVaultRoot = request.headers.get('x-noltri-vault-root');
   let requestVaultRoot: string | undefined;
@@ -288,6 +315,18 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
   }
 
   const identity = await resolve(request, config);
+  if (['api/admin/processing-rules', 'api/admin/processing-rules/draft', 'api/admin/processing-rules/apply', 'api/admin/processing-rules/rollback', 'api/admin/processing-records'].includes(path)) {
+    // Check the resolved device before reading a body or touching any management state.
+    if (identity.via !== 'dev-token' || identity.grant !== undefined) throw knowledgeError('unauthorized', 'Authenticated device required');
+    if (url.searchParams.size > 0 || request.headers.has('x-noltri-vault-root')) throw knowledgeError('invalid_request', 'Processing rules use the fixed profile');
+    if (processingRules === undefined) throw knowledgeError('storage_error', 'Processing rules storage unavailable');
+    if (path === 'api/admin/processing-rules') return json(200, await readProcessingRules(processingRules, identity), cors);
+    if (path === 'api/admin/processing-records') return json(200, await readProcessingRecords(processingRules, identity), cors);
+    const body = await readJsonBody(request);
+    if (path === 'api/admin/processing-rules/draft') return json(200, await saveProcessingRulesDraft(processingRules, identity, body), cors);
+    if (path === 'api/admin/processing-rules/apply') return json(200, await applyProcessingRules(processingRules, identity, body), cors);
+    return json(200, await rollbackProcessingRules(processingRules, identity, body), cors);
+  }
   const grant = identity.grant;
   // Cheap rejection before any body is read: the credential decides what this client may do at all.
   requireScope(grant, method, path);
@@ -318,7 +357,7 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
   switch (path) {
     case 'api/vault/settings': {
       if (vault === undefined) throw knowledgeError('internal_error', 'Vault service is not configured');
-      if (method === 'GET') return json(200, await vault.getSettings(), cors);
+      if (method === 'GET') return json(200, await vault.getSettings(requestVaultRoot), cors);
       const input = parseWith(updateVaultSettingsRequestSchema, await readJsonBody(request), 'vault settings');
       return json(200, await vault.updateSettings(input, requestVaultRoot), cors);
     }
@@ -492,6 +531,73 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       const payload = parseWith(captureRequestSchema, await readJsonBody(request), 'capture');
       return json(200, await core.capture(payload satisfies CaptureRequest, actor), cors);
     }
+    case 'api/capture/assets/:assetId': {
+      requireNodeAccess(grant, null, '保存采集原件');
+      const sessionId = request.headers.get('x-noltri-session-id');
+      const sha256 = request.headers.get('x-noltri-content-sha256');
+      const mimeType = request.headers.get('content-type');
+      if (sessionId === null || sha256 === null || mimeType === null) {
+        throw knowledgeError('invalid_request', '上传原件需要 session、SHA-256 和 Content-Type');
+      }
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const saved = await putCaptureAsset(core, actor, {
+        assetId: decodeURIComponent(paramAt(route, segments, 'assetId')),
+        sessionId,
+        mimeType,
+        sha256,
+        bytes,
+      });
+      return json(200, saved, cors);
+    }
+    case 'api/capture/batches': {
+      if (method === 'GET') {
+        requireNodeAccess(grant, null, '读取采集批次');
+        const query = parseWith(captureBatchListQuerySchema, Object.fromEntries(url.searchParams), 'capture batch list query');
+        return json(200, await listCaptureBatches(core, actor, query), cors);
+      }
+      requireNodeAccess(grant, null, '自动归类批量写入');
+      return json(200, await submitCaptureBatch(core, actor, await readJsonBody(request)), cors);
+    }
+    case 'api/capture/batches/:batchId/process': {
+      requireNodeAccess(grant, null, '处理采集图片');
+      const batchId = decodeURIComponent(paramAt(route, segments, 'batchId'));
+      return json(200, await processCaptureBatch(core, actor, batchId, await readJsonBody(request)), cors);
+    }
+    case 'api/inbox/:id/recognition': {
+      requireNodeAccess(grant, null, '读取图片识别衍生内容');
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      return json(200, await readCaptureRecognition(core, actor, id), cors);
+    }
+    case 'api/capture/batches/:batchId': {
+      requireNodeAccess(grant, null, '读取批次状态');
+      const batchId = decodeURIComponent(paramAt(route, segments, 'batchId'));
+      return json(200, await getCaptureBatchStatus(core, actor, batchId), cors);
+    }
+    case 'api/capture/batches/:batchId/assets/:assetId': {
+      requireNodeAccess(grant, null, '读取采集批次原件');
+      const batchId = decodeURIComponent(paramAt(route, segments, 'batchId'));
+      const assetId = decodeURIComponent(paramAt(route, segments, 'assetId'));
+      const { asset, bytes } = await readCaptureAsset(core, actor, batchId, assetId);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          ...cors,
+          'content-type': asset.mimeType,
+          'content-length': String(asset.byteLength),
+          'cache-control': 'private, no-store',
+          'x-noltri-asset-id': asset.assetId,
+          'x-noltri-session-id': asset.sessionId,
+          'x-noltri-content-sha256': asset.sha256,
+          'x-noltri-created-at': asset.createdAt,
+        },
+      });
+    }
+    case 'api/capture/batches/:batchId/items/:requestId/retry': {
+      requireNodeAccess(grant, null, '重试批次项目');
+      const batchId = decodeURIComponent(paramAt(route, segments, 'batchId'));
+      const requestId = decodeURIComponent(paramAt(route, segments, 'requestId'));
+      return json(200, await retryCaptureBatchItem(core, actor, batchId, requestId), cors);
+    }
     case 'api/tree': {
       const query = parseWith(treeQuerySchema, Object.fromEntries(url.searchParams), 'tree query');
       requireNodeAccess(grant, query.rootId ?? null, '整棵知识树');
@@ -590,6 +696,12 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       if (source === null) throw knowledgeError('not_found', `原文 ${id} 不存在 / raw source not found`);
       return json(200, source, cors);
     }
+    case 'api/inbox/:id/review': {
+      const id = decodeURIComponent(paramAt(route, segments, 'id'));
+      const body = parseWith(reviewSourceRequestSchema, await readJsonBody(request), 'review source');
+      requireNodeAccess(grant, body.action === 'confirm' ? body.nodeId : null, '审核原文');
+      return json(200, await core.reviewSource(id, body, actor), cors);
+    }
     case 'api/inbox/:id/assign': {
       const id = decodeURIComponent(paramAt(route, segments, 'id'));
       const body = parseWith(assignSourceRequestSchema, await readJsonBody(request), 'assign source');
@@ -628,6 +740,11 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       const body = parseWith(nodeChatRequestSchema, await readJsonBody(request), 'chat');
       requireNodeAccess(grant, body.nodeId, '对话节点');
       return json(200, await core.chat(body satisfies NodeChatRequest, actor), cors);
+    }
+    case 'api/note-interpretation': {
+      const body = parseWith(noteInterpretationRequestSchema, await readJsonBody(request), 'note interpretation');
+      requireNodeAccess(grant, null, '笔记解读');
+      return json(200, await core.interpretNote(body satisfies NoteInterpretationRequest), cors);
     }
     case 'api/conversations': {
       const nodeId = url.searchParams.get('nodeId') ?? undefined;

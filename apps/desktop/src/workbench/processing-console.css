@@ -1,0 +1,46 @@
+.processing-console { --pc-border: #e0ded6; --pc-muted: #6c706a; color: #29342c; background: #f8f8f3; min-height: 100vh; box-sizing: border-box; padding: clamp(20px, 3vw, 48px); font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+.processing-console * { box-sizing: border-box; }
+.processing-console h1 { margin: 3px 0 8px; font-size: 28px; letter-spacing: -.5px; }
+.processing-console h2 { margin: 0 0 12px; font-size: 18px; overflow-wrap: anywhere; }
+.processing-console h3 { margin-top: 24px; }
+.processing-console p { margin: 6px 0 14px; }
+.processing-console-header, .processing-section-title { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
+.processing-eyebrow, .processing-note, .processing-console small, .processing-console time { color: var(--pc-muted); }
+.processing-eyebrow { font-size: 12px; letter-spacing: .12em; }
+.processing-panel { padding: 24px; margin: 20px 0; border: 1px solid var(--pc-border); border-radius: 14px; background: #fff; min-width: 0; }
+.processing-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; }
+.processing-console fieldset { border: 0; padding: 0; margin: 20px 0; min-width: 0; }
+.processing-console legend { font-weight: 600; margin-bottom: 12px; }
+.processing-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.processing-fields label, .processing-instruction { display: flex; flex-direction: column; gap: 5px; }
+.processing-instruction { margin-bottom: 16px; }
+.processing-console input, .processing-console textarea { width: 100%; border: 1px solid #c9cec7; border-radius: 7px; background: #fcfcfa; color: inherit; padding: 9px 10px; font: inherit; }
+.processing-console textarea { resize: vertical; }
+.processing-console button { border: 1px solid #c9cec7; border-radius: 7px; background: #fff; padding: 8px 13px; color: inherit; cursor: pointer; font: inherit; }
+.processing-console button:hover:enabled { background: #edf2eb; }
+.processing-console button:disabled { opacity: .48; cursor: default; }
+.processing-console :focus-visible { outline: 2px solid #497454; outline-offset: 3px; }
+.processing-console button.processing-primary { color: white; background: #3e6248; border-color: #3e6248; }
+.processing-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 12px; }
+.processing-feedback, .processing-error { padding: 12px 16px; border-radius: 8px; background: #edf4ec; }
+.processing-console .processing-error { color: #8b3827; background: #fbefeb; }
+.processing-history { padding-left: 22px; }
+.processing-history li { padding: 14px 0; border-bottom: 1px solid var(--pc-border); }
+.processing-history time, .processing-history span { display: block; }
+.processing-console code { overflow-wrap: anywhere; }
+.processing-console details { margin: 12px 0; }
+.processing-console summary { cursor: pointer; color: #3e6248; }
+.processing-rule-summary dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.processing-rule-summary dd { margin: 0; font-weight: 600; }
+.processing-rule-summary dt { color: var(--pc-muted); }
+.processing-rule-summary pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; padding: 10px; background: #f7f8f4; border-radius: 6px; max-height: 320px; overflow-y: auto; }
+.processing-table-scroll { overflow-x: auto; }
+.runtime-diagnostics-summary { display: flex; flex-wrap: wrap; gap: 20px; }
+.runtime-diagnostics-summary dt { color: var(--pc-muted); }
+.runtime-diagnostics-summary dd { margin: 0; font-weight: 600; }
+.processing-console table { width: 100%; border-collapse: collapse; text-align: left; }
+.processing-console caption { text-align: left; color: var(--pc-muted); padding: 6px 0; }
+.processing-console th, .processing-console td { padding: 12px; border-bottom: 1px solid var(--pc-border); white-space: nowrap; }
+.processing-console th { background: #f7f8f4; font-weight: 500; }
+@media (max-width: 900px) { .processing-columns { grid-template-columns: 1fr; gap: 0; } .processing-console-header, .processing-section-title { flex-wrap: wrap; } }
+@media (max-width: 450px) { .processing-fields { grid-template-columns: 1fr; } .processing-panel { padding: 16px; } }

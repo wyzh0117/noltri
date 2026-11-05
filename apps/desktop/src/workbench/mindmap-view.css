@@ -1,0 +1,35 @@
+.vault-note-view-stack { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.vault-body-view-toggle { min-height: 25px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink-soft); font-size: 9px; cursor: pointer; }
+.vault-body-view-toggle:hover, .vault-body-view-toggle:focus-visible { border-color: var(--green); color: var(--green-dark); }
+.vault-body-view-toggle.is-active { background: var(--green-pale); color: var(--green-dark); }
+.vault-note-view-layer { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; opacity: 0; transform: translateY(7px); visibility: hidden; pointer-events: none; }
+.vault-note-view-layer.is-active { opacity: 1; transform: none; visibility: visible; pointer-events: auto; }
+.vault-mindmap-scroll { width: 100%; height: 100%; overflow: auto; padding: 22px clamp(18px, 4vw, 54px) 50px; scrollbar-width: thin; }
+.vault-mindmap-heading { margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.vault-mindmap-heading > span, .vault-mindmap-lead > span, .vault-mindmap-body > span { color: var(--muted); font-size: 9px; letter-spacing: .04em; }
+.vault-mindmap-heading h2 { margin: 3px 0 0; color: var(--ink); font: 500 20px/1.4 var(--serif, Georgia, serif); overflow-wrap: anywhere; }
+.vault-mindmap-empty { margin: 0; padding: 18px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 11px; text-align: center; }
+.vault-mindmap-tree { display: grid; align-content: start; gap: 13px; }
+.vault-mindmap-roots, .vault-mindmap-children { display: grid; align-content: start; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.vault-mindmap-node { position: relative; min-width: 0; }
+.vault-mindmap-node::before { position: absolute; top: -10px; left: -13px; width: 13px; height: 19px; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); border-radius: 0 0 0 7px; content: ''; }
+.vault-mindmap-roots > .vault-mindmap-node::before { display: none; }
+.vault-mindmap-children { margin: 10px 0 0 19px; padding-left: 16px; border-left: 1px solid var(--line); }
+.vault-mindmap-card { min-width: 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--green) 18%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--paper) 92%, var(--green-pale)); box-shadow: 0 2px 8px #20272208; }
+.vault-mindmap-node.level-1 > .vault-mindmap-card { border-left: 3px solid var(--green); }
+.vault-mindmap-node.level-2 > .vault-mindmap-card { border-left: 3px solid color-mix(in srgb, var(--green) 68%, #8d9b78); }
+.vault-mindmap-title { display: inline-flex; align-items: baseline; gap: 8px; max-width: calc(100% - 30px); padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; font: 500 12px/1.5 var(--serif, Georgia, serif); cursor: pointer; }
+.vault-mindmap-title:hover, .vault-mindmap-title:focus-visible { color: var(--green-dark); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--green) 36%, transparent); text-underline-offset: 3px; }
+.vault-mindmap-level { flex: 0 0 auto; color: var(--muted); font: 600 8px/1.4 ui-monospace, monospace; }
+.vault-mindmap-collapse { float: right; width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer; }
+.vault-mindmap-collapse:hover, .vault-mindmap-collapse:focus-visible { border-color: var(--green); color: var(--green-dark); }
+.vault-mindmap-body { margin-top: 7px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--line) 75%, transparent); }
+.vault-mindmap-body p, .vault-mindmap-lead p { margin: 3px 0 0; color: var(--ink-soft); font-size: 10px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vault-mindmap-lead { padding: 9px 11px; border: 1px dashed var(--line); border-radius: 8px; background: var(--canvas); }
+@media (prefers-reduced-motion: no-preference) {
+  .vault-note-view-layer { transition: opacity 180ms ease, transform 180ms ease, visibility 0s linear 180ms; }
+  .vault-note-view-layer.is-active { transition-delay: 0s; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vault-note-view-layer { transition: none; }
+}

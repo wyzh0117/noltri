@@ -67,6 +67,19 @@ export function findTreePath(nodes: readonly TreeNode[], id: string, parents: Tr
   return null;
 }
 
+export function contextualChapterPath(
+  nodes: readonly TreeNode[],
+  topicId: string,
+  chapterTitle: string,
+): string[] {
+  return [...(findTreePath(nodes, topicId)?.map((node) => node.title) ?? []), chapterTitle];
+}
+
+export function contextualChapterSelectionId(nodes: readonly TreeNode[], topicId: string, chapterId: string): string {
+  const canonicalTopicId = findTreePath(nodes, chapterId)?.slice().reverse().find((node) => node.nodeType === 'topic')?.id;
+  return canonicalTopicId === topicId ? chapterId : topicId;
+}
+
 export function graphChapterTitle(
   topicId: string,
   chapterId: string,
@@ -112,6 +125,11 @@ export function selectionForTreeNode(nodes: readonly TreeNode[], id: string): Tr
     return { path, scope: { kind: 'discipline', disciplineId }, content: { kind: 'cards', scope: { kind: 'discipline', disciplineId }, selectedNodeId: id } };
   }
   if (path.length === 2) {
+    const scope: GraphScope = { kind: 'subdiscipline', disciplineId, subdisciplineId: id };
+    return { path, scope, content: { kind: 'cards', scope, selectedNodeId: id } };
+  }
+
+  if (selected.nodeType === 'domain') {
     const scope: GraphScope = { kind: 'subdiscipline', disciplineId, subdisciplineId: id };
     return { path, scope, content: { kind: 'cards', scope, selectedNodeId: id } };
   }

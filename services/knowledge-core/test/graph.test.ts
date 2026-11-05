@@ -28,6 +28,10 @@ describe('topic and chapter graph', () => {
     });
 
     const whole = await harness.core.selectGraph({ kind: 'discipline', disciplineId: discipline.id }, harness.actor);
+    expect(whole.scopeGraphNodeId).toBe(discipline.id);
+    expect(whole.nodes.map((entry) => entry.id)).toEqual(expect.arrayContaining([discipline.id, firstBranch.id, secondBranch.id]));
+    expect(whole.edges).toContainEqual(expect.objectContaining({ fromNodeId: firstBranch.id, toNodeId: discipline.id }));
+    expect(whole.edges).toContainEqual(expect.objectContaining({ fromNodeId: topicA.id, toNodeId: firstBranch.id }));
     expect(whole.nodes.filter((entry) => entry.nodeType === 'topic').map((entry) => entry.id).sort()).toEqual(
       [topicA.id, topicB.id, topicC.id].sort(),
     );
@@ -39,13 +43,56 @@ describe('topic and chapter graph', () => {
     );
 
     const scoped = await harness.core.selectGraph({ kind: 'subdiscipline', disciplineId: discipline.id, subdisciplineId: firstBranch.id }, harness.actor);
+    expect(scoped.scopeGraphNodeId).toBe(firstBranch.id);
+    expect(scoped.nodes.map((entry) => entry.id)).toContain(firstBranch.id);
+    expect(scoped.edges).toContainEqual(expect.objectContaining({ fromNodeId: topicA.id, toNodeId: firstBranch.id }));
     expect(scoped.nodes.map((entry) => entry.id)).not.toContain(topicB.id);
     expect(scoped.nodes.map((entry) => entry.id)).not.toContain(secondBranchChapter.id);
 
     const local = await harness.core.selectGraph({ kind: 'topic', disciplineId: discipline.id, anchorTopicId: topicA.id }, harness.actor);
+    expect(local.scopeGraphNodeId).toBe(topicA.id);
+    expect(local.nodes.every((entry) => entry.nodeType === 'topic' || entry.nodeType === 'chapter')).toBe(true);
     expect(local.nodes.map((entry) => entry.id)).toEqual(expect.arrayContaining([topicA.id, topicC.id, shared.id]));
     expect(local.nodes.map((entry) => entry.id)).not.toContain(topicB.id);
     expect(local.nodes.map((entry) => entry.id)).not.toContain(privateChapter.id);
+  });
+
+  it('returns the complete API graph scope beyond the former 260-node window', async () => {
+    const harness = makeHarness();
+    const discipline = await node(harness, '图形学', 'discipline');
+    const branch = await node(harness, '渲染', 'subdiscipline', discipline.id);
+    for (let index = 0; index < 300; index += 1) {
+      await node(harness, `主题 ${String(index)}`, 'topic', branch.id);
+    }
+
+    const selection = await harness.core.selectGraph({ kind: 'discipline', disciplineId: discipline.id }, harness.actor);
+    expect(selection.nodes).toHaveLength(302);
+    expect(selection.nodes.filter((entry) => entry.nodeType === 'topic')).toHaveLength(300);
+    expect(selection.scopeGraphNodeId).toBe(discipline.id);
+  });
+
+  it('keeps legacy domain roots and deeper domain scopes at their requested depth', async () => {
+    const harness = makeHarness();
+    const legacyDiscipline = await node(harness, '旧一级', 'domain');
+    const legacySubdiscipline = await node(harness, '旧二级', 'domain', legacyDiscipline.id);
+    const deeperDomain = await node(harness, '更深领域', 'domain', legacySubdiscipline.id);
+    const topic = await node(harness, '领域主题', 'topic', deeperDomain.id);
+
+    const disciplineGraph = await harness.core.selectGraph({ kind: 'discipline', disciplineId: legacyDiscipline.id }, harness.actor);
+    expect(disciplineGraph.scopeGraphNodeId).toBe(legacyDiscipline.id);
+    expect(disciplineGraph.nodes.find((entry) => entry.id === legacyDiscipline.id)?.nodeType).toBe('discipline');
+    expect(disciplineGraph.nodes.find((entry) => entry.id === legacySubdiscipline.id)?.nodeType).toBe('subdiscipline');
+    expect(disciplineGraph.nodes.find((entry) => entry.id === deeperDomain.id)?.nodeType).toBe('domain');
+
+    const domainGraph = await harness.core.selectGraph({
+      kind: 'subdiscipline',
+      disciplineId: legacyDiscipline.id,
+      subdisciplineId: deeperDomain.id,
+    }, harness.actor);
+    expect(domainGraph.scopeGraphNodeId).toBe(deeperDomain.id);
+    expect(domainGraph.nodes.map((entry) => entry.id)).toEqual(expect.arrayContaining([deeperDomain.id, topic.id]));
+    expect(domainGraph.nodes.map((entry) => entry.id)).not.toContain(legacyDiscipline.id);
+    expect(domainGraph.nodes.map((entry) => entry.id)).not.toContain(legacySubdiscipline.id);
   });
 
   it('anchors a parentless chapter to its existing membership before linking or adapting scopes', async () => {

@@ -1,5 +1,29 @@
 .vault-notes { display: grid; grid-template-columns: minmax(205px, 238px) minmax(0, 1fr); width: 100%; height: 100%; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); color: var(--ink); box-shadow: 0 8px 28px #28332608; }
 .vault-notes-hidden { display: none; }
+.library-shell-notes { height: 100vh; min-height: 600px; overflow: hidden; background: var(--canvas); color: var(--ink); }
+.library-shell-notes.library-shell-graph-mini, .library-shell-notes.library-shell-graph-expanded { grid-template-columns: 246px minmax(0, 1fr) var(--graph-panel-width, 420px); }
+.notes-workspace-main { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: none; height: 100vh; min-height: 0; margin: 0; padding: 13px; overflow: hidden; }
+.notes-workspace-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 1px 4px 3px; }
+.notes-workspace-header > div { min-width: 0; }
+.notes-workspace-header h1 { overflow: hidden; margin: 4px 0 2px; color: var(--ink); font: 400 clamp(20px, 2vw, 27px) var(--serif); text-overflow: ellipsis; white-space: nowrap; }
+.notes-workspace-header p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.notes-workspace-header .button-primary { flex: 0 0 auto; min-height: 33px; padding-inline: 11px; font-size: 9px; }
+.notes-workspace-main > .vault-notes { flex: 1 1 auto; min-height: 0; }
+.library-shell-notes .graph-panel { display: flex; flex-direction: column; }
+.library-shell-notes .graph-panel-mini .workbench-graph { flex: 1 1 auto; height: auto; min-height: 0; }
+.graph-source-panel { display: grid; flex: 0 0 auto; gap: 6px; max-height: 32vh; min-height: 125px; padding: 10px 14px 12px; overflow: auto; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 52%, var(--paper)); scrollbar-width: thin; }
+.graph-source-panel header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; color: var(--ink-soft); font-size: 10px; }
+.graph-source-panel header span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.graph-source-panel .graph-source-title { color: var(--ink); font-size: 10px; font-weight: 600; }
+.graph-source-documents { display: grid; gap: 4px; padding-top: 3px; }
+.graph-source-documents > span { color: var(--muted); font-size: 8px; }
+.graph-source-documents button { width: fit-content; max-width: 100%; padding: 0; overflow: hidden; border: 0; background: transparent; color: var(--green); font-size: 8px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.graph-source-documents button:hover { text-decoration: underline; }
+.graph-source-path, .graph-source-count { overflow-wrap: anywhere; color: var(--muted); font-size: 8px; line-height: 1.45; }
+.graph-source-row { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; color: var(--ink-soft); font-size: 8px; line-height: 1.45; }
+.graph-source-row span:first-child { color: var(--muted); }
+.graph-source-panel a { width: fit-content; color: var(--green); font-size: 8px; text-decoration: none; }
+.graph-source-panel a:hover { text-decoration: underline; }
 .vault-file-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 14px 10px 10px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 75%, var(--paper)); }
 .vault-sidebar-top { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 4px 13px; }
 .vault-root-label { flex: 1; min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
@@ -71,6 +95,7 @@
 .vault-inline-form label { flex: 1; }.vault-inline-form button { min-height: 31px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink-soft); font-size: 9px; cursor: pointer; }
 .vault-inline-form .button-primary { color: white; background: var(--green); }
 .vault-editor-toolbar { display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 4px 12px; border-bottom: 1px solid var(--line); }
+.vault-editor-toolbar-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .vault-transition-status { color: var(--muted); font-size: 9px; }
 .vault-mode-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; border-radius: 7px; background: var(--canvas); }
 .vault-mode-tabs button, .vault-panel-toggle { min-height: 25px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 9px; cursor: pointer; }
@@ -81,12 +106,31 @@
 .vault-split-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); }
 .vault-split-column > header { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line); color: var(--ink-soft); font-size: 8px; }
 .vault-split-column > header button { border: 0; background: transparent; color: var(--muted); font-size: 8px; cursor: pointer; }
-.vault-editor-column { min-width: 0; min-height: 0; overflow: hidden; }
+.vault-editor-column { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.vault-editor-column:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.vault-wikilink-completions { position: absolute; z-index: 8; top: 8px; left: 14px; display: grid; width: min(360px, calc(100% - 28px)); max-height: min(310px, 45%); overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); box-shadow: 0 8px 26px #20272224; }
+.vault-wikilink-completions > span { padding: 4px 7px 6px; color: var(--muted); font-size: 9px; }
+.vault-wikilink-completions button { display: grid; gap: 2px; min-width: 0; padding: 6px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.vault-wikilink-completions button:hover, .vault-wikilink-completions button:focus-visible { outline: 0; background: var(--green-pale); }
+.vault-wikilink-completions button strong, .vault-wikilink-completions button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vault-wikilink-completions button strong { font-size: 10px; }
+.vault-wikilink-completions button small, .vault-wikilink-completions > small { color: var(--muted); font-size: 8px; }
 .vault-organize-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 34%, var(--paper)); }
 .vault-organize-tabs { display: flex; flex-wrap: wrap; gap: 3px; padding: 7px; border-bottom: 1px solid var(--line); }
 .vault-organize-tabs button { min-height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 8px; cursor: pointer; }
 .vault-organize-tabs button.is-active { background: var(--green-pale); color: var(--green-dark); font-weight: 600; }
 .vault-outline-list, .vault-tag-list, .vault-link-list, .vault-properties, .vault-history-panel { min-height: 0; flex: 1; overflow: auto; padding: 8px; scrollbar-width: thin; }
+.vault-interpretation-panel { min-height: 0; flex: 1; overflow: auto; padding: 9px; scrollbar-width: thin; }
+.vault-interpretation-disclosure { margin: 0 0 8px; }
+.vault-interpretation-actions, .vault-interpretation-result-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.vault-interpretation-actions button, .vault-interpretation-result-actions button { min-height: 27px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink-soft); font-size: 8px; cursor: pointer; }
+.vault-interpretation-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.vault-interpretation-result { display: grid; gap: 8px; margin-top: 12px; }
+.vault-interpretation-result > header { display: flex; justify-content: space-between; gap: 6px; align-items: center; color: var(--ink-soft); font-size: 9px; }
+.vault-interpretation-result > header small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 7px; }
+.vault-interpretation-result > pre, .vault-interpretation-result details pre { max-height: min(45vh, 480px); overflow: auto; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; font: 9px/1.6 ui-monospace, SFMono-Regular, monospace; }
+.vault-interpretation-result details summary { margin: 6px 0; color: var(--muted); font-size: 8px; cursor: pointer; }
+.vault-interpretation-result-actions { justify-content: space-between; }
 .vault-outline-list { display: grid; align-content: start; gap: 2px; }
 .vault-outline-list button { overflow: hidden; min-height: 27px; padding: 3px 5px 3px calc(5px + (var(--level, 1) - 1) * 11px); border: 0; border-radius: 5px; background: transparent; color: var(--ink-soft); text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; cursor: pointer; }
 .vault-outline-list button:hover, .vault-outline-list button.is-active { background: var(--green-pale); color: var(--green-dark); }
@@ -166,11 +210,16 @@
 .vault-live-editor .cm-live-math { font-family: var(--serif); }
 
 @media (max-width: 1080px) {
+  .library-shell-notes.library-shell-graph-mini, .library-shell-notes.library-shell-graph-expanded { grid-template-columns: 218px minmax(0, 1fr) var(--graph-panel-width, 420px); }
+  .library-shell-notes:not(.library-shell-graph-mini):not(.library-shell-graph-expanded) { grid-template-columns: 218px minmax(0, 1fr); }
   .vault-notes { grid-template-columns: 190px minmax(0, 1fr); }
   .vault-editor-layout { grid-template-columns: minmax(0, 1fr) 186px; }
   .vault-editor-layout.has-split { grid-template-columns: minmax(0, 1fr) minmax(0, .75fr) 186px; }
 }
 @media (max-width: 820px) {
+  .library-shell-notes.library-shell-graph-mini, .library-shell-notes.library-shell-graph-expanded { grid-template-columns: 176px minmax(0, 1fr) var(--graph-panel-width, 420px); }
+  .library-shell-notes:not(.library-shell-graph-mini):not(.library-shell-graph-expanded) { grid-template-columns: 176px minmax(0, 1fr); }
+  .notes-workspace-main { padding: 10px; }
   .vault-notes { grid-template-columns: 165px minmax(0, 1fr); }
   .vault-editor-layout, .vault-editor-layout.has-split { grid-template-columns: minmax(0, 1fr); }
   .vault-organize-panel { display: none; }
@@ -185,4 +234,38 @@
   .vault-file-row { font-size: 8px; }
   .vault-note-header { padding-inline: 7px; }.vault-note-breadcrumb { font-size: 8px; }.vault-save-indicator { display: none; }
   .vault-mode-tabs button, .vault-panel-toggle { font-size: 8px; }
+}
+@media (max-width: 670px) {
+  .library-shell-notes { display: block; height: auto; min-height: 100vh; overflow: visible; }
+  .library-shell-notes .library-sidebar { position: relative; height: auto; min-height: 0; }
+  .library-shell-notes .notes-workspace-main { height: 78vh; min-height: 620px; padding: 10px; overflow: hidden; }
+  .library-shell-notes .graph-panel { position: relative; width: 100%; height: min(74vh, 620px); border-top: 1px solid var(--line); border-left: 0; }
+  .library-shell-notes .graph-panel-expanded { height: 90vh; }
+  .graph-source-panel { max-height: 30vh; }
+}
+
+.vault-sidebar-sections { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border, #d8dce3); }
+.vault-sidebar-sections button { flex: 1; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; padding: 7px 10px; cursor: pointer; }
+.vault-sidebar-sections button.is-active { background: var(--accent-soft, #e8effc); border-color: var(--accent, #476fc7); font-weight: 600; }
+.vault-sidebar-sections button:focus-visible { outline: 2px solid var(--accent, #476fc7); outline-offset: 2px; }
+
+.notes-review-workspace { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.notes-review-workspace[hidden] { display: none; }
+
+
+/* The existing graph lives inside the relationship sidebar; its own mode and controls stay intact. */
+.vault-editor-layout.has-relations-graph, .vault-empty-layout.has-relations-graph { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, min(48%, var(--graph-panel-width, 420px))); }
+.vault-editor-layout.has-split.has-relations-graph { grid-template-columns: minmax(0, 1fr) minmax(0, .82fr) minmax(190px, min(48%, var(--graph-panel-width, 420px))); }
+.vault-empty-layout { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.vault-empty-layout > .vault-empty-note { flex: 1; min-width: 0; min-height: 0; }
+.vault-relations-graph { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; width: 100%; overflow: hidden; }
+.vault-relations-graph[hidden] { display: none; }
+.vault-notes .vault-relations-graph > .graph-panel { position: relative; top: auto; align-self: stretch; width: 100%; height: 100%; min-height: 0; border-left: 0; }
+.vault-notes .vault-relations-graph .workbench-graph { flex: 1 1 auto; min-height: 0; height: auto; }
+.vault-organize-tabs button:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+
+@media (max-width: 820px) {
+  .vault-editor-layout.has-relations-graph,
+  .vault-editor-layout.has-split.has-relations-graph,
+  .vault-empty-layout.has-relations-graph { grid-template-columns: minmax(0, 1fr); }
 }

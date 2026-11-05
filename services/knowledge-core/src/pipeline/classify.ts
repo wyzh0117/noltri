@@ -52,6 +52,7 @@ export interface ClassifyArgs {
   itemText: string;
   suggestedTitle: string;
   candidates: ClassificationCandidate[];
+  instructions?: string;
 }
 
 export async function classifyPoint(deps: CoreDeps, args: ClassifyArgs): Promise<ClassifyResult> {
@@ -59,6 +60,7 @@ export async function classifyPoint(deps: CoreDeps, args: ClassifyArgs): Promise
     itemText: args.itemText,
     suggestedTitle: args.suggestedTitle,
     candidates: args.candidates,
+    ...(args.instructions ? { instructions: args.instructions } : {}),
     attachThreshold: deps.config.thresholds.similarityAttachThreshold,
   };
   return await callProvider('classifyKnowledge', deps, () => deps.provider.classifyKnowledge(input));

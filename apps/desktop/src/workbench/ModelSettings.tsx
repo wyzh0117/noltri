@@ -1,8 +1,9 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 import { commands } from '../lib/tauri';
 import type { DesktopSettings, FetchAvailableModelsInput, ProviderDraft, ProviderModel, ProviderProtocol, ProviderView } from '../lib/tauri';
 import { describeError } from './api';
+import { GlobalShortcutsPanel } from './GlobalShortcutsPanel';
 
 type PresetId = 'deepseek' | 'openai' | 'anthropic';
 type Preset = { id: PresetId; name: string; protocol: ProviderProtocol; baseUrl: string; description: string };
@@ -76,12 +77,13 @@ export function createFetchModelsInput(draft: ProviderDraft, isNew: boolean): Fe
   };
 }
 
-export default function ModelSettings({ settings, outsideTauri, onSaved, onDone, welcome = false }: {
+export default function ModelSettings({ settings, outsideTauri, onSaved, onDone, welcome = false, onUpdateSafetyChange }: {
   settings: DesktopSettings;
   outsideTauri: boolean;
   onSaved: (models: Pick<DesktopSettings, 'providers' | 'activeProviderId' | 'activeModelId'>, runtimeStatus: DesktopSettings['runtimeStatus']) => void;
   onDone?: () => void;
   welcome?: boolean;
+  onUpdateSafetyChange?: (safe: boolean) => void;
 }): ReactElement {
   const prefix = useId();
   const [providers, setProviders] = useState<ProviderView[]>(() => settings.providers.map((provider) => ({ ...provider, models: provider.models.map((model) => ({ ...model, input: { ...model.input } })) })));
@@ -96,6 +98,7 @@ export default function ModelSettings({ settings, outsideTauri, onSaved, onDone,
   const [isNew, setIsNew] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [shortcutsSafe, setShortcutsSafe] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [candidates, setCandidates] = useState<ProviderModel[] | null>(null);
   const [candidateQuery, setCandidateQuery] = useState('');
@@ -110,6 +113,11 @@ export default function ModelSettings({ settings, outsideTauri, onSaved, onDone,
   const editorIsDirty = Boolean(draft && initialDraft && !isSameDraft(draft, initialDraft));
   const inactiveAddDraftIsDirty = Object.entries(addModeDrafts).some(([mode, saved]) => mode !== addMode && saved && !isSameDraft(saved.draft, saved.initial));
   const visibleCandidates = (candidates ?? []).filter((model) => `${model.id} ${model.name}`.toLocaleLowerCase().includes(candidateQuery.trim().toLocaleLowerCase()));
+  const settingsSafe = shortcutsSafe && !saving && !fetching && !editorIsDirty && !inactiveAddDraftIsDirty && !(isNew && draft !== null) && selectedCandidates.size === 0;
+
+  useLayoutEffect(() => {
+    onUpdateSafetyChange?.(settingsSafe);
+  }, [settingsSafe, onUpdateSafetyChange]);
 
   function clearFeedback(): void { setMessage(null); setError(null); }
 
@@ -501,7 +509,8 @@ export default function ModelSettings({ settings, outsideTauri, onSaved, onDone,
       {message && editorId === null ? <p className="model-feedback" role="status">{message}</p> : null}
     </div>
 
+    <GlobalShortcutsPanel outsideTauri={outsideTauri} onUpdateSafetyChange={setShortcutsSafe} />
     <p className="field-hint model-runtime-note">{canUseModel ? '配置与 API 密钥保存在此设备。“使用此模型”会保存配置并应用到本机服务。' : useModelUnavailableReason}</p>
-    <div className="dialog-actions model-settings-actions">{onDone ? <button type="button" className="button-soft" disabled={saving || fetching} onClick={onDone}>进入知识库 →</button> : null}</div>
+    <div className="dialog-actions model-settings-actions">{onDone ? <button type="button" className="button-soft" disabled={!settingsSafe} onClick={() => { if (settingsSafe) onDone(); }}>进入知识库 →</button> : null}</div>
   </section>;
 }

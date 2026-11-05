@@ -4,6 +4,7 @@
  *   pnpm --filter @noltri/desktop run build:runtime
  */
 import { build } from 'esbuild';
+import { prepareThirdPartyNotices } from './prepare-third-party-notices.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -12,7 +13,8 @@ import { execFileSync } from 'node:child_process';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../../..');
-const outDir = path.resolve(here, '../src-tauri/resources');
+const outDir = path.resolve(process.env.NOLTRI_RUNTIME_OUT_DIR ?? path.resolve(here, '../src-tauri/resources'));
+await mkdir(outDir, { recursive: true });
 
 // Pin the sidecar too: Node 24 supplies node:sqlite in the packaged Core.
 // Checksums are from https://nodejs.org/dist/v24.18.0/SHASUMS256.txt.
@@ -36,8 +38,9 @@ if (process.platform === 'darwin') {
     throw new Error(`Node checksum mismatch; remove ${archive} and retry`);
   }
   await writeFile(archive, bytes);
-  execFileSync('tar', ['-xzf', archive, '-C', binDir, `${name}/bin/node`]);
+  execFileSync('tar', ['-xzf', archive, '-C', binDir, `${name}/bin/node`, `${name}/LICENSE`]);
   await rename(path.join(binDir, name, 'bin/node'), path.join(binDir, `noltri-runtime-${target}`));
+  await writeFile(path.join(outDir, 'node-LICENSE.txt'), await readFile(path.join(binDir, name, 'LICENSE')));
   await rm(path.join(binDir, name), { recursive: true });
   console.log('verified Node 24.18.0 sidecar (arm64)');
 }
@@ -68,3 +71,6 @@ for (const [entry, outfile] of entries) {
   });
   console.log(`bundled ${entry} -> src-tauri/resources/${outfile}`);
 }
+
+const notices = await prepareThirdPartyNotices({ repo, outDir });
+console.log(`verified ${notices.files} locked third-party notice files`);

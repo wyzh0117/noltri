@@ -1,31 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, ReactElement, WheelEvent } from 'react';
-import type { NoteMatchesResponse, VaultGraph } from '@noltri/schema';
-import { buildGraphModel, graphQueryMatchFromResponse } from './workbench-graph-model';
+import type { GraphEdge, GraphNode } from '@noltri/schema';
+import { buildGraphModel, graphContextAnchorId, graphContextPathIds, graphStructureKey, selectGraphWindow } from './workbench-graph-model';
 import type { GraphModel, GraphQueryMatch, GraphViewNode } from './workbench-graph-model';
 import { DEFAULT_GRAPH_SETTINGS, createGraphGroup, graphColorInputValue } from './workbench-graph-settings';
 import type { GraphColorGroup, GraphSettings } from './workbench-graph-settings';
 import { graphStateScopeIdentity, readGraphState, writeGraphState } from './workbench-graph-state';
-import { cameraForFit, graphNodeAtPoint, graphNodeScreenRadius, graphPointFromScreen, graphPointToScreen, zoomCameraAt } from './workbench-graph-view-model';
+import { cameraForFit, cameraForInitialGraphFit, graphNodeAtPoint, graphNodeScreenRadius, graphPointFromScreen, graphPointToScreen, interpolateGraphCamera, zoomCameraAt } from './workbench-graph-view-model';
 import type { GraphCamera, GraphViewport } from './workbench-graph-view-model';
 import type { GraphForces, GraphPoint } from './workbench-graph-simulation';
-import { compositeGraphSnapshot, graphPaletteFromElement, WorkbenchGraphRenderer } from './workbench-graph-renderer';
+import { compositeGraphSnapshot, DEFAULT_GRAPH_PALETTE, graphPaletteFromElement, WorkbenchGraphRenderer } from './workbench-graph-renderer';
+import type { GraphPalette } from './workbench-graph-renderer';
 import './workbench-graph.css';
 
 export interface WorkbenchGraphProps {
-  readonly data: VaultGraph;
-  readonly vaultRoot: string;
-  readonly mode: 'global' | 'local';
-  readonly focusedPath: string | null;
-  readonly selectedPath: string | null;
-  readonly loading: boolean;
-  readonly error: string | null;
+  readonly nodes: readonly GraphNode[];
+  readonly edges: readonly GraphEdge[];
+  readonly scopeIdentity: string;
+  readonly contextNodeId: string;
+  readonly mode: 'mini' | 'expanded';
+  readonly selectedNodeId: string | null;
+  readonly loading?: boolean;
+  readonly error?: string | null;
   readonly onRefresh?: () => void;
-  readonly evaluateQuery: (query: string) => Promise<NoteMatchesResponse>;
-  readonly onModeChange?: (mode: 'global' | 'local') => void;
-  readonly onNodeOpen: (path: string, intent: GraphOpenIntent) => void;
-  readonly onTagOpen?: (tag: string, intent: GraphOpenIntent) => void;
-  readonly onNodeHover?: (path: string, anchor: DOMRect | null) => void;
+  readonly evaluateQuery: (query: string) => Promise<ReadonlySet<string>>;
+  readonly onModeChange: (mode: 'mini' | 'expanded') => void;
+  readonly onNodeOpen: (node: GraphNode, intent: GraphOpenIntent) => void;
+  readonly onNodeMore?: (node: GraphNode) => void;
+  readonly onNodeHover?: (node: GraphNode | null, anchor: DOMRect | null) => void;
 }
 
 export interface GraphOpenIntent {
@@ -34,7 +36,6 @@ export interface GraphOpenIntent {
 }
 
 interface QueryResult {
-  revision: number;
   match: GraphQueryMatch;
 }
 
@@ -43,6 +44,14 @@ interface WorkerTick {
   epoch: number;
   coordinates: Float32Array;
   alpha: number;
+  tickCount: number;
+  engine: 'wasm' | 'js';
+}
+
+interface WorkerLayout {
+  epoch: number;
+  nodeIds: string[];
+  layoutKey: string;
 }
 
 interface GraphDrag {
@@ -69,24 +78,6 @@ interface ContextMenu {
 const INITIAL_CAMERA: GraphCamera = { x: 0, y: 0, scale: 0.5 };
 const MATCH_DEBOUNCE_MS = 100;
 const SAVE_DEBOUNCE_MS = 700;
-
-function graphStructureKey(model: GraphModel): string {
-  let hash = 2166136261;
-  const feed = (value: string): void => {
-    for (let index = 0; index < value.length; index += 1) {
-      hash ^= value.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    hash ^= 0;
-    hash = Math.imul(hash, 16777619);
-  };
-  for (const node of model.nodes) feed(node.id);
-  for (const edge of model.edges) {
-    feed(edge.source);
-    feed(edge.target);
-  }
-  return `${model.nodes.length}:${model.edges.length}:${hash >>> 0}`;
-}
 
 function localPoint(event: { clientX: number; clientY: number }, element: HTMLElement): GraphPoint {
   const rect = element.getBoundingClientRect();
@@ -121,21 +112,22 @@ function RangeControl({ label, value, min, max, step, onChange, valueText }: {
 }
 
 export function WorkbenchGraph({
-  data,
-  vaultRoot,
+  nodes: semanticNodes,
+  edges: semanticEdges,
+  scopeIdentity,
+  contextNodeId,
   mode,
-  focusedPath,
-  selectedPath,
-  loading,
-  error,
+  selectedNodeId,
+  loading = false,
+  error = null,
   onRefresh,
   evaluateQuery,
   onModeChange,
   onNodeOpen,
-  onTagOpen,
+  onNodeMore,
   onNodeHover,
 }: WorkbenchGraphProps): ReactElement {
-  const scope = useMemo(() => graphStateScopeIdentity(vaultRoot, mode, focusedPath), [vaultRoot, mode, focusedPath]);
+  const scope = useMemo(() => graphStateScopeIdentity(scopeIdentity, mode), [scopeIdentity, mode]);
   const initialState = useMemo(() => readGraphState(scope), [scope]);
   const [settings, setSettingsState] = useState<GraphSettings>(initialState.settings);
   const settingsRef = useRef(settings);
@@ -143,7 +135,6 @@ export function WorkbenchGraph({
   const [queryResults, setQueryResults] = useState<Map<string, QueryResult>>(() => new Map());
   const [queryPending, setQueryPending] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
-  const queryCacheRef = useRef(new Map<string, GraphQueryMatch>());
   const queryEpochRef = useRef(0);
   const evaluateQueryRef = useRef(evaluateQuery);
   evaluateQueryRef.current = evaluateQuery;
@@ -153,8 +144,6 @@ export function WorkbenchGraph({
   const [rendererState, setRendererState] = useState<{ mode: 'webgl' | 'canvas' | 'error'; message: string | null }>({ mode: 'error', message: null });
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<GraphViewport>({ width: 0, height: 0 });
-  const [playing, setPlaying] = useState(false);
-  const [copiedPath, setCopiedPath] = useState(false);
 
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -163,27 +152,30 @@ export function WorkbenchGraph({
   const rendererRef = useRef<WorkbenchGraphRenderer | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const workerEpochRef = useRef(0);
-  const workerNodeIdsRef = useRef<string[]>([]);
+  const workerLayoutRef = useRef<WorkerLayout | null>(null);
   const positionsRef = useRef<Record<string, GraphPoint>>({ ...initialState.positions });
   const cameraRef = useRef<GraphCamera>(initialState.camera ?? INITIAL_CAMERA);
+  const targetCameraRef = useRef<GraphCamera>(initialState.camera ?? INITIAL_CAMERA);
   const viewportRef = useRef(viewport);
   const modelRef = useRef<GraphModel>({ nodes: [], edges: [] });
   const settingsScopeRef = useRef(scope);
+  const layoutKeyRef = useRef('');
+  const settledLayoutKeyRef = useRef<string | null>(null);
   const drawFrameRef = useRef<number | null>(null);
+  const cameraFrameRef = useRef<number | null>(null);
+  const cameraFrameTimeRef = useRef(0);
   const panFrameRef = useRef<number | null>(null);
   const drawRef = useRef<() => void>(() => undefined);
   const saveTimerRef = useRef<number | null>(null);
   const dragRef = useRef<GraphDrag | null>(null);
-  const hoveredNotePathRef = useRef<string | null>(null);
+  const hoveredNodeIdRef = useRef<string | null>(null);
+  const hoveredSemanticNodeRef = useRef<GraphNode | null>(null);
+  const paletteRef = useRef<GraphPalette>(DEFAULT_GRAPH_PALETTE);
   const onNodeHoverRef = useRef(onNodeHover);
   onNodeHoverRef.current = onNodeHover;
-  const timelineEdgesRef = useRef<GraphModel['edges']>([]);
-  const timelineProgressRef = useRef(settings.timelineProgress);
-  const animationFrameRef = useRef<number | null>(null);
-  const animationLastTimeRef = useRef(0);
-  const animationUiTimeRef = useRef(0);
   const autoFitPendingRef = useRef(false);
   const forceSettingsKey = forceKey(settings.forces);
+  const appliedForceSettingsKeyRef = useRef(forceSettingsKey);
 
   const currentQueries = useMemo(
     () => [...new Set([settings.filterQuery.trim(), ...settings.groups.map((group) => group.query.trim())].filter(Boolean))],
@@ -193,35 +185,18 @@ export function WorkbenchGraph({
   useEffect(() => {
     const epoch = ++queryEpochRef.current;
     let active = true;
-    const cached = new Map<string, QueryResult>();
-    const pendingQueries: string[] = [];
-    for (const query of currentQueries) {
-      const cacheKey = `${data.revision}\0${query}`;
-      const match = queryCacheRef.current.get(cacheKey);
-      if (match === undefined) pendingQueries.push(query);
-      else cached.set(query, { revision: match.revision, match });
-    }
-    setQueryResults(cached);
+    setQueryResults(new Map());
     setQueryError(null);
-    setQueryPending(pendingQueries.length > 0);
-    if (pendingQueries.length === 0) return () => { active = false; };
+    setQueryPending(currentQueries.length > 0);
+    if (currentQueries.length === 0) return () => { active = false; };
 
     const timer = window.setTimeout(() => {
-      void Promise.all(pendingQueries.map(async (query) => {
-        const response = await evaluateQueryRef.current(query);
-        const match = graphQueryMatchFromResponse(response);
-        if (match.revision !== data.revision) throw new Error('图谱数据已更新，请刷新后重新匹配');
-        return [query, match] as const;
+      void Promise.all(currentQueries.map(async (query) => {
+        const nodeIds = await evaluateQueryRef.current(query);
+        return [query, { nodeIds: new Set(nodeIds) }] as const;
       })).then((results) => {
         if (!active || queryEpochRef.current !== epoch) return;
-        const next = new Map(cached);
-        for (const [query, match] of results) {
-          const cacheKey = `${data.revision}\0${query}`;
-          queryCacheRef.current.set(cacheKey, match);
-          if (queryCacheRef.current.size > 128) queryCacheRef.current.delete(queryCacheRef.current.keys().next().value as string);
-          next.set(query, { revision: match.revision, match });
-        }
-        setQueryResults(next);
+        setQueryResults(new Map(results.map(([query, match]) => [query, { match }])));
         setQueryPending(false);
       }).catch((cause: unknown) => {
         if (!active || queryEpochRef.current !== epoch) return;
@@ -234,46 +209,41 @@ export function WorkbenchGraph({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [currentQueries, data.revision]);
+  }, [currentQueries, scopeIdentity, semanticNodes, semanticEdges]);
 
   const filterResult = queryResults.get(settings.filterQuery.trim());
-  const filterMatch = settings.filterQuery.trim() === '' || filterResult?.revision !== data.revision ? null : filterResult.match;
+  const filterMatch = settings.filterQuery.trim() === '' ? null : filterResult?.match ?? null;
   const groupMatches = useMemo(() => settings.groups.flatMap((group) => {
     const query = group.query.trim();
     const result = queryResults.get(query);
-    return query !== '' && result?.revision === data.revision ? [{ query, color: group.color, match: result.match }] : [];
-  }), [data.revision, queryResults, settings.groups]);
+    return query !== '' && result !== undefined ? [{ query, color: group.color, match: result.match }] : [];
+  }), [queryResults, settings.groups]);
 
+  const contextAnchorId = useMemo(() => graphContextAnchorId(contextNodeId, semanticNodes), [contextNodeId, semanticNodes]);
+  const preserveNodeIds = useMemo(() => graphContextPathIds(contextAnchorId ?? contextNodeId, selectedNodeId, semanticNodes), [contextAnchorId, contextNodeId, selectedNodeId, semanticNodes]);
   const modelOptions = useMemo(() => ({
-    mode,
-    focusPath: focusedPath,
-    depth: settings.depth,
-    showOutgoing: settings.showOutgoing,
-    showIncoming: settings.showIncoming,
-    neighborLinks: settings.neighborLinks,
-    showTags: settings.showTags,
-    showAttachments: settings.showAttachments,
-    existingFilesOnly: settings.existingFilesOnly,
     showOrphans: settings.showOrphans,
     nodeSizeMultiplier: settings.nodeSizeMultiplier,
     lineSizeMultiplier: settings.lineSizeMultiplier,
-  }), [mode, focusedPath, settings.depth, settings.showOutgoing, settings.showIncoming, settings.neighborLinks,
-    settings.showTags, settings.showAttachments, settings.existingFilesOnly, settings.showOrphans,
-    settings.nodeSizeMultiplier, settings.lineSizeMultiplier]);
-  const model = useMemo(() => buildGraphModel(data, modelOptions, { filter: filterMatch, groups: groupMatches }), [data, modelOptions, filterMatch, groupMatches]);
+    preserveNodeIds,
+  }), [settings.showOrphans, settings.nodeSizeMultiplier, settings.lineSizeMultiplier, preserveNodeIds]);
+  const fullModel = useMemo(() => buildGraphModel(semanticNodes, semanticEdges, modelOptions, { filter: filterMatch, groups: groupMatches }), [semanticNodes, semanticEdges, modelOptions, filterMatch, groupMatches]);
+  const miniWindow = useMemo(() => selectGraphWindow(fullModel, contextAnchorId ?? contextNodeId, selectedNodeId, semanticNodes, 40), [fullModel, contextAnchorId, contextNodeId, selectedNodeId, semanticNodes]);
+  const model = useMemo<GraphModel>(() => mode === 'mini' ? { nodes: miniWindow.nodes, edges: miniWindow.edges } : fullModel, [mode, miniWindow, fullModel]);
   const structureKey = useMemo(() => graphStructureKey(model), [model]);
+  const layoutKey = `${scope}\0${structureKey}`;
+  layoutKeyRef.current = layoutKey;
 
   settingsRef.current = settings;
   modelRef.current = model;
   viewportRef.current = viewport;
-  timelineProgressRef.current = settings.timelineProgress;
-  timelineEdgesRef.current = [...model.edges].sort((left, right) => (left.mtime ?? 0) - (right.mtime ?? 0) || left.id.localeCompare(right.id));
 
   const persistNow = useCallback((targetScope = settingsScopeRef.current): void => {
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
     writeGraphState(targetScope, {
-      camera: cameraRef.current,
+      camera: autoFitPendingRef.current ? null : targetCameraRef.current,
+      cameraReady: !autoFitPendingRef.current,
       positions: positionsRef.current,
       settings: settingsRef.current,
     });
@@ -285,7 +255,8 @@ export function WorkbenchGraph({
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
       writeGraphState(capturedScope, {
-        camera: cameraRef.current,
+        camera: autoFitPendingRef.current ? null : targetCameraRef.current,
+        cameraReady: !autoFitPendingRef.current,
         positions: positionsRef.current,
         settings: settingsRef.current,
       });
@@ -300,29 +271,52 @@ export function WorkbenchGraph({
     });
   }, []);
 
+  const fitInitialGraphIfReady = useCallback((): void => {
+    if (!autoFitPendingRef.current) return;
+    const camera = cameraForInitialGraphFit(modelRef.current.nodes, positionsRef.current, viewportRef.current, settledLayoutKeyRef.current === layoutKeyRef.current);
+    if (camera === null) return;
+    autoFitPendingRef.current = false;
+    cameraRef.current = camera;
+    targetCameraRef.current = camera;
+    schedulePersist();
+    scheduleDraw();
+  }, [scheduleDraw, schedulePersist]);
+
+  const animateCamera = useCallback((): void => {
+    if (cameraFrameRef.current !== null) return;
+    const tick = (time: number): void => {
+      const elapsed = cameraFrameTimeRef.current === 0 ? 1000 / 60 : Math.min(50, time - cameraFrameTimeRef.current);
+      cameraFrameTimeRef.current = time;
+      cameraRef.current = interpolateGraphCamera(cameraRef.current, targetCameraRef.current, elapsed);
+      scheduleDraw();
+      if (cameraRef.current === targetCameraRef.current) {
+        cameraFrameRef.current = null;
+        cameraFrameTimeRef.current = 0;
+        schedulePersist();
+      } else cameraFrameRef.current = window.requestAnimationFrame(tick);
+    };
+    cameraFrameRef.current = window.requestAnimationFrame(tick);
+  }, [scheduleDraw, schedulePersist]);
+
   const drawGraph = useCallback((): void => {
     const renderer = rendererRef.current;
     const surface = surfaceRef.current;
     const currentModel = modelRef.current;
     const currentViewport = viewportRef.current;
     if (renderer === null || surface === null || currentViewport.width <= 0 || currentViewport.height <= 0) return;
-    const allTimelineEdges = timelineEdgesRef.current;
-    const progress = timelineProgressRef.current;
-    const visibleCount = progress >= 1 ? allTimelineEdges.length : Math.ceil(progress * allTimelineEdges.length);
-    const visibleEdges = progress >= 1 ? currentModel.edges : allTimelineEdges.slice(0, visibleCount);
     renderer.draw({
-      model: progress >= 1 ? currentModel : { nodes: currentModel.nodes, edges: visibleEdges },
+      model: currentModel,
       positions: positionsRef.current,
       camera: cameraRef.current,
       viewport: currentViewport,
-      palette: graphPaletteFromElement(surface),
-      selectedId: selectedPath,
-      focusedId: focusedPath,
+      palette: paletteRef.current,
+      selectedId: selectedNodeId,
+      focusedId: contextAnchorId,
       hoveredId,
       labelMode: settingsRef.current.labelMode,
       showArrows: settingsRef.current.showArrows,
     });
-  }, [focusedPath, hoveredId, selectedPath]);
+  }, [contextAnchorId, hoveredId, selectedNodeId]);
 
   drawRef.current = drawGraph;
 
@@ -330,7 +324,6 @@ export function WorkbenchGraph({
     setSettingsState((current) => {
       const next = typeof change === 'function' ? change(current) : { ...current, ...change };
       settingsRef.current = next;
-      timelineProgressRef.current = next.timelineProgress;
       return next;
     });
     schedulePersist();
@@ -341,7 +334,20 @@ export function WorkbenchGraph({
     if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
     panFrameRef.current = null;
     autoFitPendingRef.current = false;
+    targetCameraRef.current = camera;
+    animateCamera();
+    if (persist) schedulePersist();
+  }, [animateCamera, schedulePersist]);
+
+  const setCameraImmediately = useCallback((camera: GraphCamera, persist = false): void => {
+    if (cameraFrameRef.current !== null) window.cancelAnimationFrame(cameraFrameRef.current);
+    cameraFrameRef.current = null;
+    cameraFrameTimeRef.current = 0;
+    if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
+    panFrameRef.current = null;
+    autoFitPendingRef.current = false;
     cameraRef.current = camera;
+    targetCameraRef.current = camera;
     scheduleDraw();
     if (persist) schedulePersist();
   }, [scheduleDraw, schedulePersist]);
@@ -362,6 +368,7 @@ export function WorkbenchGraph({
         x: cameraRef.current.x + xVelocity * elapsed,
         y: cameraRef.current.y + yVelocity * elapsed,
       };
+      targetCameraRef.current = cameraRef.current;
       scheduleDraw();
       const decay = Math.exp(-elapsed / 180);
       xVelocity *= decay;
@@ -377,25 +384,31 @@ export function WorkbenchGraph({
 
   useEffect(() => {
     const state = readGraphState(scope);
+    if (cameraFrameRef.current !== null) window.cancelAnimationFrame(cameraFrameRef.current);
+    cameraFrameRef.current = null;
+    cameraFrameTimeRef.current = 0;
     settingsScopeRef.current = scope;
     positionsRef.current = state.positions;
     cameraRef.current = state.camera ?? INITIAL_CAMERA;
-    autoFitPendingRef.current = state.camera === null;
+    targetCameraRef.current = cameraRef.current;
+    autoFitPendingRef.current = !state.cameraReady;
     settingsRef.current = state.settings;
-    timelineProgressRef.current = state.settings.timelineProgress;
     setSettingsState(state.settings);
     setHoveredId(null);
     setKeyboardFocusId(null);
     setContextMenu(null);
+    fitInitialGraphIfReady();
     scheduleDraw();
     return () => persistNow(scope);
-  }, [scope, persistNow, scheduleDraw]);
+  }, [scope, fitInitialGraphIfReady, persistNow, scheduleDraw]);
 
   useEffect(() => {
     if (surfaceRef.current === null || webglCanvasRef.current === null || fallbackCanvasRef.current === null || labelCanvasRef.current === null) return;
     try {
       const renderer = new WorkbenchGraphRenderer(webglCanvasRef.current, fallbackCanvasRef.current, labelCanvasRef.current);
       rendererRef.current = renderer;
+      const surface = surfaceRef.current;
+      if (surface !== null) paletteRef.current = graphPaletteFromElement(surface);
       setRendererState({ mode: renderer.mode, message: renderer.fallbackReason });
       renderer.resize(viewportRef.current);
       scheduleDraw();
@@ -414,166 +427,160 @@ export function WorkbenchGraph({
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
       if (rect === undefined) return;
-      const next = { width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+      const next = { width: Math.max(0, rect.width), height: Math.max(0, rect.height) };
       viewportRef.current = next;
       setViewport(next);
       rendererRef.current?.resize(next);
+      fitInitialGraphIfReady();
       scheduleDraw();
     });
     observer.observe(surface);
     return () => observer.disconnect();
-  }, [scheduleDraw]);
+  }, [fitInitialGraphIfReady, scheduleDraw]);
 
   useEffect(() => {
     const themeRoot = surfaceRef.current?.closest('[data-theme]');
     if (themeRoot === null || themeRoot === undefined) return;
-    const observer = new MutationObserver(() => scheduleDraw());
+    const observer = new MutationObserver(() => {
+      const surface = surfaceRef.current;
+      if (surface !== null) paletteRef.current = graphPaletteFromElement(surface);
+      scheduleDraw();
+    });
     observer.observe(themeRoot, { attributes: true, attributeFilter: ['data-theme'] });
     return () => observer.disconnect();
   }, [scheduleDraw]);
 
   useEffect(() => {
-    const workerIds = model.nodes.map((node) => node.id);
-    workerNodeIdsRef.current = workerIds;
     if (typeof Worker === 'undefined') {
       setLayoutError('此环境无法创建图谱布局 Worker。');
       return;
     }
-    const epoch = ++workerEpochRef.current;
     let worker: Worker;
     try {
-      worker = new Worker(new URL('./workbench-graph.worker.ts', import.meta.url), { type: 'module', name: 'Vault Graph Worker' });
+      worker = new Worker(new URL('./workbench-graph.worker.ts', import.meta.url), { type: 'module', name: 'Knowledge Graph Worker' });
     } catch (cause) {
       setLayoutError(cause instanceof Error ? cause.message : '图谱布局 Worker 启动失败');
       return;
     }
     workerRef.current = worker;
-    setLayoutError(null);
     worker.onmessage = (event: MessageEvent<WorkerTick>) => {
       const message = event.data;
-      if (message.type !== 'tick' || message.epoch !== epoch || message.coordinates.length !== workerIds.length * 2) return;
-      for (let index = 0; index < workerIds.length; index += 1) {
+      const layout = workerLayoutRef.current;
+      if (message.type !== 'tick' || layout === null || message.epoch !== layout.epoch || message.coordinates.length !== layout.nodeIds.length * 2) return;
+      for (let index = 0; index < layout.nodeIds.length; index += 1) {
         const x = message.coordinates[index * 2]!;
         const y = message.coordinates[index * 2 + 1]!;
-        if (Number.isFinite(x) && Number.isFinite(y)) positionsRef.current[workerIds[index]!] = { x, y };
-      }
-      if (autoFitPendingRef.current && viewportRef.current.width > 0 && viewportRef.current.height > 0) {
-        cameraRef.current = cameraForFit(modelRef.current.nodes, positionsRef.current, viewportRef.current);
-        if (message.alpha <= 0.001) {
-          autoFitPendingRef.current = false;
-          schedulePersist();
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const nodeId = layout.nodeIds[index]!;
+        const point = positionsRef.current[nodeId];
+        if (point === undefined) positionsRef.current[nodeId] = { x, y };
+        else {
+          point.x = x;
+          point.y = y;
         }
       }
+      if (message.alpha <= 0.001) {
+        settledLayoutKeyRef.current = layout.layoutKey;
+        fitInitialGraphIfReady();
+        if (!autoFitPendingRef.current) schedulePersist();
+      }
       scheduleDraw();
-      if (message.alpha <= 0.001) schedulePersist();
     };
     worker.onerror = (event) => setLayoutError(event.message || '图谱布局 Worker 出错');
-    const nodes = model.nodes.map((node) => ({ id: node.id, ...positionsRef.current[node.id] }));
-    worker.postMessage({ type: 'init', epoch, nodes, links: uniqueSimulationLinks(model), forces: settingsRef.current.forces });
-    scheduleDraw();
     return () => {
-      worker.postMessage({ type: 'stop', epoch });
+      const layout = workerLayoutRef.current;
+      if (layout !== null) worker.postMessage({ type: 'stop', epoch: layout.epoch });
+      if (workerRef.current === worker) {
+        workerRef.current = null;
+        workerLayoutRef.current = null;
+      }
       worker.terminate();
-      if (workerRef.current === worker) workerRef.current = null;
     };
-  }, [structureKey, scheduleDraw, schedulePersist]);
+  }, [fitInitialGraphIfReady, scheduleDraw, schedulePersist]);
 
   useEffect(() => {
     const worker = workerRef.current;
     if (worker === null) return;
+    const currentModel = modelRef.current;
+    const epoch = ++workerEpochRef.current;
+    const nodeIds = currentModel.nodes.map((node) => node.id);
+    workerLayoutRef.current = { epoch, nodeIds, layoutKey };
+    settledLayoutKeyRef.current = null;
+    setLayoutError(null);
+    appliedForceSettingsKeyRef.current = forceKey(settingsRef.current.forces);
+    const nodes = currentModel.nodes.map((node) => ({ id: node.id, ...positionsRef.current[node.id] }));
+    worker.postMessage({ type: 'init', epoch, nodes, links: uniqueSimulationLinks(currentModel), forces: settingsRef.current.forces });
+    scheduleDraw();
+    return () => {
+      if (workerRef.current !== worker || workerLayoutRef.current?.epoch !== epoch) return;
+      workerLayoutRef.current = null;
+      worker.postMessage({ type: 'stop', epoch });
+    };
+  }, [layoutKey, scheduleDraw]);
+
+  useEffect(() => {
+    if (appliedForceSettingsKeyRef.current === forceSettingsKey) return;
+    appliedForceSettingsKeyRef.current = forceSettingsKey;
+    const worker = workerRef.current;
+    if (worker === null) return;
     worker.postMessage({ type: 'forces', epoch: workerEpochRef.current, forces: settings.forces });
     schedulePersist();
-  }, [forceSettingsKey, structureKey, settings.forces, schedulePersist]);
+  }, [forceSettingsKey, settings.forces, schedulePersist]);
 
   useEffect(() => {
     scheduleDraw();
-  }, [model, scheduleDraw, selectedPath, focusedPath, hoveredId, settings.labelMode, settings.showArrows]);
-
-  useEffect(() => {
-    if (!playing) return;
-    const tick = (time: number): void => {
-      if (animationLastTimeRef.current === 0) animationLastTimeRef.current = time;
-      const elapsed = Math.min(100, Math.max(0, time - animationLastTimeRef.current));
-      animationLastTimeRef.current = time;
-      const count = timelineEdgesRef.current.length;
-      if (count === 0) {
-        setPlaying(false);
-        return;
-      }
-      const linksPerSecond = Math.min(100, Math.max(5, 0.5 * Math.sqrt(count)));
-      const next = Math.min(1, timelineProgressRef.current + elapsed * linksPerSecond / (count * 1000));
-      timelineProgressRef.current = next;
-      scheduleDraw();
-      if (time - animationUiTimeRef.current > 160 || next === 1) {
-        animationUiTimeRef.current = time;
-        updateSettings({ timelineProgress: next });
-      }
-      if (next >= 1) {
-        setPlaying(false);
-        schedulePersist();
-        return;
-      }
-      animationFrameRef.current = window.requestAnimationFrame(tick);
-    };
-    animationLastTimeRef.current = 0;
-    animationUiTimeRef.current = 0;
-    animationFrameRef.current = window.requestAnimationFrame(tick);
-    return () => {
-      if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    };
-  }, [playing, scheduleDraw, schedulePersist, updateSettings]);
-
-  useEffect(() => {
-    if (!playing) scheduleDraw();
-  }, [settings.timelineProgress, playing, scheduleDraw]);
+  }, [model, scheduleDraw, selectedNodeId, contextAnchorId, hoveredId, settings.labelMode, settings.showArrows]);
 
   useEffect(() => () => {
     persistNow();
     if (drawFrameRef.current !== null) window.cancelAnimationFrame(drawFrameRef.current);
+    if (cameraFrameRef.current !== null) window.cancelAnimationFrame(cameraFrameRef.current);
     if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
-    if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
   }, [persistNow]);
 
-  const openNode = useCallback((node: GraphViewNode, intent: GraphOpenIntent = { newTab: false, split: false }): void => {
-    if (node.type === 'tag') {
-      onTagOpen?.(node.basename, intent);
-      return;
-    }
-    if (node.path !== null) onNodeOpen(node.path, intent);
-  }, [onNodeOpen, onTagOpen]);
-
   const nodeById = useMemo(() => new Map(model.nodes.map((node) => [node.id, node])), [model.nodes]);
+  const semanticNodeById = useMemo(() => new Map(semanticNodes.map((node) => [node.id, node])), [semanticNodes]);
+
+  const openNode = useCallback((node: GraphViewNode, intent: GraphOpenIntent = { newTab: false, split: false }): void => {
+    const semanticNode = semanticNodeById.get(node.id);
+    if (semanticNode !== undefined) onNodeOpen(semanticNode, intent);
+  }, [onNodeOpen, semanticNodeById]);
 
   const notifyNodeHover = useCallback((node: GraphViewNode | null): void => {
-    const nextPath = node?.type === 'note' ? node.path : null;
-    const previousPath = hoveredNotePathRef.current;
-    if (previousPath !== nextPath) {
-      if (previousPath !== null) onNodeHover?.(previousPath, null);
-      hoveredNotePathRef.current = nextPath;
+    const nextId = node?.id ?? null;
+    const previousId = hoveredNodeIdRef.current;
+    if (previousId !== nextId) {
+      if (previousId !== null) onNodeHoverRef.current?.(hoveredSemanticNodeRef.current, null);
+      hoveredNodeIdRef.current = nextId;
     }
-    if (nextPath === null || node === null) return;
+    if (node === null || nextId === null) {
+      hoveredSemanticNodeRef.current = null;
+      return;
+    }
+    const semanticNode = semanticNodeById.get(nextId);
+    if (semanticNode === undefined) return;
+    hoveredSemanticNodeRef.current = semanticNode;
     const surface = surfaceRef.current;
     const position = positionsRef.current[node.id];
     if (surface === null || position === undefined) return;
     const center = graphPointToScreen(position, cameraRef.current, viewportRef.current);
     const radius = graphNodeScreenRadius(node, cameraRef.current.scale);
     const bounds = surface.getBoundingClientRect();
-    onNodeHover?.(nextPath, new DOMRect(bounds.left + center.x - radius, bounds.top + center.y - radius, radius * 2, radius * 2));
-  }, [onNodeHover]);
+    onNodeHoverRef.current?.(semanticNode, new DOMRect(bounds.left + center.x - radius, bounds.top + center.y - radius, radius * 2, radius * 2));
+  }, [semanticNodeById]);
 
   useEffect(() => () => {
-    const path = hoveredNotePathRef.current;
-    if (path !== null) onNodeHoverRef.current?.(path, null);
+    if (hoveredNodeIdRef.current !== null) onNodeHoverRef.current?.(hoveredSemanticNodeRef.current, null);
   }, []);
 
   useEffect(() => {
-    const path = hoveredNotePathRef.current;
-    if (path !== null && !model.nodes.some((node) => node.path === path && node.type === 'note')) {
-      onNodeHover?.(path, null);
-      hoveredNotePathRef.current = null;
+    const id = hoveredNodeIdRef.current;
+    if (id !== null && !model.nodes.some((node) => node.id === id)) {
+      onNodeHoverRef.current?.(hoveredSemanticNodeRef.current, null);
+      hoveredNodeIdRef.current = null;
+      hoveredSemanticNodeRef.current = null;
     }
-  }, [model.nodes, onNodeHover]);
+  }, [model.nodes, semanticNodeById]);
 
   const fitGraph = useCallback((): void => {
     updateCamera(cameraForFit(modelRef.current.nodes, positionsRef.current, viewportRef.current));
@@ -582,6 +589,7 @@ export function WorkbenchGraph({
   const takeScreenshot = useCallback(async (): Promise<void> => {
     const canvases = [webglCanvasRef.current, fallbackCanvasRef.current, labelCanvasRef.current].filter((canvas): canvas is HTMLCanvasElement => canvas !== null);
     try {
+      drawRef.current();
       const url = compositeGraphSnapshot(canvases);
       if (typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard?.write === 'function') {
         try {
@@ -624,7 +632,7 @@ export function WorkbenchGraph({
         drag.lastClientY = event.clientY;
         drag.lastMoveTime = event.timeStamp;
         drag.moved = movement >= 1 || drag.moved;
-        updateCamera({
+        setCameraImmediately({
           ...drag.startCamera,
           x: drag.startCamera.x + point.x - drag.startScreen.x,
           y: drag.startCamera.y + point.y - drag.startScreen.y,
@@ -637,7 +645,7 @@ export function WorkbenchGraph({
     setHoveredId(node?.id ?? null);
     setKeyboardFocusId(null);
     notifyNodeHover(node);
-  }, [notifyNodeHover, scheduleDraw, updateCamera]);
+  }, [notifyNodeHover, scheduleDraw, setCameraImmediately]);
 
   const endPointer = useCallback((event: PointerEvent<HTMLDivElement>, canceled = false): void => {
     const drag = dragRef.current;
@@ -660,6 +668,10 @@ export function WorkbenchGraph({
   const handlePointerDown = useCallback((event: PointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0) return;
     setContextMenu(null);
+    if (cameraFrameRef.current !== null) window.cancelAnimationFrame(cameraFrameRef.current);
+    cameraFrameRef.current = null;
+    cameraFrameTimeRef.current = 0;
+    targetCameraRef.current = cameraRef.current;
     const surface = surfaceRef.current;
     if (surface === null) return;
     if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current);
@@ -686,10 +698,10 @@ export function WorkbenchGraph({
 
   const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>): void => {
     event.preventDefault();
-  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewportRef.current.height : 1;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewportRef.current.height : 1;
     const delta = event.deltaY * unit;
     const anchor = delta > 0 ? { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 } : localPoint(event, event.currentTarget);
-    updateCamera(zoomCameraAt(cameraRef.current, cameraRef.current.scale * 1.5 ** (-delta / 120), anchor, viewportRef.current));
+    updateCamera(zoomCameraAt(targetCameraRef.current, targetCameraRef.current.scale * 1.5 ** (-delta / 120), anchor, viewportRef.current));
   }, [updateCamera]);
 
   const handleContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>): void => {
@@ -707,6 +719,7 @@ export function WorkbenchGraph({
       setContextMenu(null);
       setKeyboardFocusId(null);
       setHoveredId(null);
+      notifyNodeHover(null);
       scheduleDraw();
       return;
     }
@@ -716,11 +729,11 @@ export function WorkbenchGraph({
       return;
     }
     if (event.key === '+' || event.key === '=') {
-      updateCamera(zoomCameraAt(cameraRef.current, cameraRef.current.scale * 1.2, { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 }, viewportRef.current));
+      updateCamera(zoomCameraAt(targetCameraRef.current, targetCameraRef.current.scale * 1.2, { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 }, viewportRef.current));
       return;
     }
     if (event.key === '-') {
-      updateCamera(zoomCameraAt(cameraRef.current, cameraRef.current.scale / 1.2, { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 }, viewportRef.current));
+      updateCamera(zoomCameraAt(targetCameraRef.current, targetCameraRef.current.scale / 1.2, { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 }, viewportRef.current));
       return;
     }
     const nodes = modelRef.current.nodes;
@@ -731,18 +744,20 @@ export function WorkbenchGraph({
       const next = nodes[(index + 1) % nodes.length]!;
       setKeyboardFocusId(next.id);
       setHoveredId(next.id);
+      notifyNodeHover(next);
       scheduleDraw();
     } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
       event.preventDefault();
       const next = nodes[(index - 1 + nodes.length) % nodes.length]!;
       setKeyboardFocusId(next.id);
       setHoveredId(next.id);
+      notifyNodeHover(next);
       scheduleDraw();
     } else if (event.key === 'Enter') {
       const node = nodes[index];
       if (node !== undefined) openNode(node);
     }
-  }, [fitGraph, hoveredId, keyboardFocusId, openNode, scheduleDraw, updateCamera]);
+  }, [fitGraph, hoveredId, keyboardFocusId, notifyNodeHover, openNode, scheduleDraw, updateCamera]);
 
   const updateForce = (key: keyof GraphForces, value: number): void => updateSettings((current) => ({
     ...current,
@@ -750,46 +765,40 @@ export function WorkbenchGraph({
   }));
 
   const contextNode = contextMenu === null ? null : nodeById.get(contextMenu.nodeId) ?? null;
+  const fullNodeCount = fullModel.nodes.length;
 
   return <section className="workbench-graph" aria-label="笔记关系图谱">
     <div className="workbench-graph-toolbar">
       <div className="workbench-graph-mode" role="group" aria-label="图谱范围">
-        <button type="button" aria-pressed={mode === 'global'} onClick={() => onModeChange?.('global')}>全局</button>
-        <button type="button" aria-pressed={mode === 'local'} onClick={() => onModeChange?.('local')}>局部</button>
+        <button type="button" aria-pressed={mode === 'mini'} onClick={() => onModeChange('mini')}>小图</button>
+        <button type="button" aria-pressed={mode === 'expanded'} onClick={() => onModeChange('expanded')}>展开</button>
       </div>
-      <button type="button" className="workbench-graph-control" aria-label="适配全部节点" title="适配全部节点" onClick={fitGraph}>适配</button>
-          <button type="button" className="workbench-graph-control" aria-label="复制或下载图谱截图" title="复制截图；剪贴板不可用时下载" onClick={takeScreenshot}>截图</button>
+      <button type="button" className="workbench-graph-control" aria-label="适配当前图谱窗口" title="适配当前图谱窗口" onClick={fitGraph}>适配</button>
+      <button type="button" className="workbench-graph-control" aria-label="复制或下载图谱截图" title="复制截图；剪贴板不可用时下载" onClick={takeScreenshot}>截图</button>
       {onRefresh !== undefined ? <button type="button" className="workbench-graph-control" aria-label="刷新图谱" title="刷新图谱" onClick={onRefresh}>刷新</button> : null}
       <details className="workbench-graph-options">
         <summary aria-label="图谱设置">⚙</summary>
         <div className="workbench-graph-options-menu">
           <section aria-labelledby="graph-filters-heading">
-            <h3 id="graph-filters-heading">Filters</h3>
+            <h3 id="graph-filters-heading">筛选</h3>
             <label className="workbench-graph-query"><span>查询</span><input value={settings.filterQuery} maxLength={2000} placeholder="path:项目 tag:方法" onChange={(event) => updateSettings({ filterQuery: event.currentTarget.value })} /></label>
             {queryPending ? <span className="workbench-graph-query-status" role="status">正在匹配…</span> : null}
             {queryError !== null ? <span className="workbench-graph-query-error" role="status">匹配失败：{queryError}</span> : null}
             <div className="workbench-graph-toggles">
-              <ControlToggle label="标签节点" checked={settings.showTags} onChange={(showTags) => updateSettings({ showTags })} />
-              <ControlToggle label="附件节点" checked={settings.showAttachments} onChange={(showAttachments) => updateSettings({ showAttachments })} />
-              <ControlToggle label="仅现存文件" checked={settings.existingFilesOnly} onChange={(existingFilesOnly) => updateSettings({ existingFilesOnly })} />
               <ControlToggle label="孤立节点" checked={settings.showOrphans} onChange={(showOrphans) => updateSettings({ showOrphans })} />
             </div>
           </section>
           <section aria-labelledby="graph-display-heading">
-            <h3 id="graph-display-heading">Display</h3>
+            <h3 id="graph-display-heading">显示</h3>
             <div className="workbench-graph-toggles">
               <ControlToggle label="箭头" checked={settings.showArrows} onChange={(showArrows) => updateSettings({ showArrows })} />
-              <ControlToggle label="出链" checked={settings.showOutgoing} onChange={(showOutgoing) => updateSettings({ showOutgoing })} />
-              <ControlToggle label="入链" checked={settings.showIncoming} onChange={(showIncoming) => updateSettings({ showIncoming })} />
-              {mode === 'local' ? <ControlToggle label="邻居互连" checked={settings.neighborLinks} onChange={(neighborLinks) => updateSettings({ neighborLinks })} /> : null}
             </div>
-            {mode === 'local' ? <RangeControl label="Depth" value={settings.depth} min={1} max={5} step={1} onChange={(depth) => updateSettings({ depth })} /> : null}
             <label className="workbench-graph-select"><span>标签密度</span><select value={settings.labelMode} onChange={(event) => updateSettings({ labelMode: event.currentTarget.value as GraphSettings['labelMode'] })}><option value="auto">自动</option><option value="show">全部</option><option value="hide">隐藏</option></select></label>
             <RangeControl label="节点大小" value={settings.nodeSizeMultiplier} min={0.1} max={5} step={0.1} valueText={settings.nodeSizeMultiplier.toFixed(1)} onChange={(nodeSizeMultiplier) => updateSettings({ nodeSizeMultiplier })} />
             <RangeControl label="连线粗细" value={settings.lineSizeMultiplier} min={0.1} max={5} step={0.1} valueText={settings.lineSizeMultiplier.toFixed(1)} onChange={(lineSizeMultiplier) => updateSettings({ lineSizeMultiplier })} />
           </section>
           <section aria-labelledby="graph-groups-heading">
-            <div className="workbench-graph-section-heading"><h3 id="graph-groups-heading">Groups</h3><button type="button" onClick={() => updateSettings((current) => ({ ...current, groups: [...current.groups, createGraphGroup(current.groups.length)] }))}>添加</button></div>
+            <div className="workbench-graph-section-heading"><h3 id="graph-groups-heading">分组</h3><button type="button" onClick={() => updateSettings((current) => ({ ...current, groups: [...current.groups, createGraphGroup(current.groups.length)] }))}>添加</button></div>
             {settings.groups.length === 0 ? <p className="workbench-graph-muted">分组只着色，不会过滤节点。</p> : null}
             {settings.groups.map((group, index) => <div className="workbench-graph-group" key={group.id}>
               <input aria-label={`分组 ${index + 1} 查询`} value={group.query} maxLength={2000} placeholder="查询" onChange={(event) => {
@@ -804,7 +813,7 @@ export function WorkbenchGraph({
             </div>)}
           </section>
           <section aria-labelledby="graph-forces-heading">
-            <h3 id="graph-forces-heading">Forces</h3>
+            <h3 id="graph-forces-heading">布局</h3>
             <RangeControl label="向心力" value={settings.forces.centerStrength} min={0} max={1} step={0.01} valueText={settings.forces.centerStrength.toFixed(2)} onChange={(value) => updateForce('centerStrength', value)} />
             <RangeControl label="斥力" value={settings.forces.repelStrength} min={0} max={20} step={0.1} valueText={settings.forces.repelStrength.toFixed(1)} onChange={(value) => updateForce('repelStrength', value)} />
             <RangeControl label="弹簧力" value={settings.forces.linkStrength} min={0} max={1} step={0.01} valueText={settings.forces.linkStrength.toFixed(2)} onChange={(value) => updateForce('linkStrength', value)} />
@@ -819,7 +828,7 @@ export function WorkbenchGraph({
       ref={surfaceRef}
       className="workbench-graph-surface"
       role="application"
-      aria-label={`${mode === 'global' ? '全局' : '局部'}笔记关系图。方向键选择节点，回车打开，Home 适配画布。`}
+      aria-label={`${mode === 'mini' ? '小图' : '完整'}笔记关系图。方向键选择节点，回车打开，Home 适配画布。`}
       tabIndex={0}
       onPointerDown={handlePointerDown}
       onPointerMove={updatePointer}
@@ -833,7 +842,7 @@ export function WorkbenchGraph({
       <canvas ref={webglCanvasRef} className="workbench-graph-layer workbench-graph-webgl" aria-hidden="true" />
       <canvas ref={fallbackCanvasRef} className="workbench-graph-layer workbench-graph-fallback" aria-hidden="true" />
       <canvas ref={labelCanvasRef} className="workbench-graph-layer workbench-graph-labels" aria-hidden="true" />
-      {model.nodes.length === 0 && !loading ? <div className="workbench-graph-empty" role="status">{error !== null ? '图谱暂不可用' : mode === 'local' && focusedPath === null ? '打开一篇笔记以查看局部图' : '没有符合条件的节点'}</div> : null}
+      {model.nodes.length === 0 && !loading ? <div className="workbench-graph-empty" role="status">{error !== null ? '图谱暂不可用' : '当前范围没有符合条件的节点'}</div> : null}
       {loading ? <span className="workbench-graph-loading" role="status">正在刷新图谱…</span> : null}
       {error !== null ? <span className="workbench-graph-error" role="alert">{error}</span> : null}
       {rendererState.mode === 'canvas' ? <span className="workbench-graph-fallback-note" role="status">WebGL2 不可用，已切换到 Canvas 2D。</span> : null}
@@ -841,30 +850,13 @@ export function WorkbenchGraph({
       {layoutError !== null ? <span className="workbench-graph-error" role="alert">{layoutError}</span> : null}
       {contextMenu !== null && contextNode !== null ? <div className="workbench-graph-context" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
         <button type="button" role="menuitem" onClick={() => { openNode(contextNode); setContextMenu(null); }}>打开 {contextNode.title}</button>
-        {contextNode.path !== null ? <button type="button" role="menuitem" onClick={() => {
-          void navigator.clipboard?.writeText(contextNode.path!).then(() => setCopiedPath(true)).catch(() => setCopiedPath(false));
+        {onNodeMore !== undefined ? <button type="button" role="menuitem" onClick={() => {
+          const semanticNode = semanticNodeById.get(contextNode.id);
+          if (semanticNode !== undefined) onNodeMore(semanticNode);
           setContextMenu(null);
-        }}>复制路径</button> : null}
+        }}>更多操作</button> : null}
       </div> : null}
-      {copiedPath ? <span className="workbench-graph-copy-status" role="status" onAnimationEnd={() => setCopiedPath(false)}>路径已复制</span> : null}
-      {layoutError === null && rendererState.mode !== 'error' ? <span className="workbench-graph-count" aria-live="polite">{model.nodes.length} 个节点 · {model.edges.length} 条连接</span> : null}
-    </div>
-
-    <div className="workbench-graph-timeline" aria-label="按文件修改时间回放图谱连接">
-      <button type="button" onClick={() => {
-        if (playing) setPlaying(false);
-        else {
-          if (settings.timelineProgress >= 1) updateSettings({ timelineProgress: 0 });
-          setPlaying(true);
-        }
-      }} disabled={model.edges.length === 0}>{playing ? '停止回放' : '按修改时间回放'}</button>
-      <input aria-label="修改时间回放进度" type="range" min={0} max={1} step={0.01} value={settings.timelineProgress} onChange={(event) => {
-        const value = Number(event.currentTarget.value);
-        setPlaying(false);
-        updateSettings({ timelineProgress: value });
-      }} />
-      <span>{Math.round(settings.timelineProgress * 100)}%</span>
-      <span className="workbench-graph-timeline-note">按文件修改时间排序；不是历史快照</span>
+      {layoutError === null && rendererState.mode !== 'error' ? <span className="workbench-graph-count" aria-live="polite">{model.nodes.length} / {fullNodeCount} 个节点 · {model.edges.length} 条连接{mode === 'mini' && miniWindow.hiddenCount > 0 ? ` · 还有 ${miniWindow.hiddenCount} 个` : ''}</span> : null}
     </div>
   </section>;
 }

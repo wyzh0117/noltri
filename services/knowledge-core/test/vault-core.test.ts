@@ -24,6 +24,52 @@ describe('vault paths and metadata', () => {
     expect(() => normalizeVaultPath(input)).toThrow();
   });
 
+  it('keeps normalized physical paths readable while a filesystem refresh is scanning', async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), 'noltri-vault-path-refresh-'));
+    roots.push(base);
+    const rootPath = path.join(base, 'vault');
+    const physicalDirectory = 'Space\u00a0Dir';
+    await mkdir(path.join(rootPath, physicalDirectory), { recursive: true });
+    await writeFile(path.join(rootPath, physicalDirectory, 'Access.md'), '# readable during refresh');
+    const repository = createInMemoryRepository();
+    const vault = new VaultService({ rootPath, dataDir: path.join(base, 'data'), repository, userId: 'vault-path-refresh-test' });
+    const internals = vault as unknown as {
+      refresh: (force: boolean) => Promise<void>;
+      scanDirectory: (...args: unknown[]) => Promise<void>;
+    };
+    try {
+      await vault.initialize();
+      const originalScan = internals.scanDirectory.bind(vault);
+      let releaseScan!: () => void;
+      let enterScan!: () => void;
+      const scanGate = new Promise<void>((resolve) => { releaseScan = resolve; });
+      const scanStarted = new Promise<void>((resolve) => { enterScan = resolve; });
+      let pauseFirstScan = true;
+      internals.scanDirectory = async (...args: unknown[]) => {
+        if (pauseFirstScan) {
+          pauseFirstScan = false;
+          enterScan();
+          await scanGate;
+        }
+        await originalScan(...args);
+      };
+
+      const refresh = internals.refresh(true);
+      await scanStarted;
+      const read = await vault.getFile('Space Dir/Access.md').then(
+        (file) => ({ file, error: undefined }),
+        (error: unknown) => ({ file: undefined, error }),
+      );
+      releaseScan();
+      await refresh;
+      expect(read.error).toBeUndefined();
+      expect(read.file?.content).toBe('# readable during refresh');
+    } finally {
+      await vault.close();
+      await (repository as { close?: () => Promise<void> }).close?.();
+    }
+  });
+
   it('indexes YAML links, aliases, headings, list items, blocks, footnotes and reference links', () => {
     const content = [
       '---',
@@ -68,6 +114,38 @@ describe('vault paths and metadata', () => {
     expect(resolveSubpath(content, metadata, 'Coverage 100%25')).toEqual(metadata.headings?.[3]?.position);
     expect(resolveSubpath(content, metadata, '%5EBLOCK-ID')).toEqual(metadata.blocks?.['Block-ID']?.position);
     expect(resolveSubpath(content, metadata, 'bad%XXfragment')).toBeNull();
+  });
+
+  it('indexes the paragraph associated with a standalone block marker', () => {
+    const content = '# Start\n\nDistinctive paragraph text\ncontinues on this line.\n^paragraph-id\n\n# Next\nOther text';
+    const parsed = parseMarkdown(content);
+    const block = parsed.metadata.blocks?.['paragraph-id'];
+    expect(block).toBeDefined();
+    expect(content.slice(block!.position.start.offset, block!.position.end.offset)).toContain('Distinctive paragraph text');
+  });
+
+  it('resolves standalone block subpaths to the associated paragraph', () => {
+    const content = '# Start\n\nDistinctive paragraph text\ncontinues on this line.\n^paragraph-id\n\n# Next\nOther text';
+    const parsed = parseMarkdown(content);
+    const block = parsed.metadata.blocks?.['paragraph-id'];
+    const position = resolveSubpath(content, parsed.metadata, '^paragraph-id');
+    expect(block).toBeDefined();
+    expect(position).toEqual(block!.position);
+    expect(position).not.toBeNull();
+    expect(content.slice(position!.start.offset, position!.end.offset)).toContain('Distinctive paragraph text');
+  });
+
+  it('searches the paragraph associated with a standalone block marker', () => {
+    const content = '# Start\n\nDistinctive paragraph text\ncontinues on this line.\n^paragraph-id\n\n# Next\nOther text';
+    const metadata = parseMarkdown(content).metadata;
+    expect(searchNotes('block:Distinctive', [{ path: 'Target.md', title: 'Target', content, metadata }]).map(({ path }) => path)).toEqual(['Target.md']);
+  });
+
+  it('searches nested heading sections, including their lower-level headings', () => {
+    const content = '# Parent\nintro-only phrase\n## Child\nchild-only phrase\n### Grandchild\nnested-only phrase\n## Sibling\nsibling-only phrase';
+    const metadata = parseMarkdown(content).metadata;
+    const file = { path: 'Sections.md', title: 'Sections', content, metadata };
+    expect(searchNotes('section:nested-only', [file]).map(({ path }) => path)).toEqual(['Sections.md']);
   });
 
   it('rewrites only YAML values by their nested key path and preserves comments and body text', () => {
@@ -350,9 +428,13 @@ describe('vault links, file safety, and optimistic writes', () => {
     await mkdir(path.join(rootPath, 'deep'), { recursive: true });
     await mkdir(path.join(rootPath, 'x'), { recursive: true });
     await mkdir(path.join(rootPath, 'very', 'long', 'path'), { recursive: true });
-    await writeFile(path.join(rootPath, 'Folder', 'Source.md'), '[[Note]]\n[[Quick Name]]\n[[../Elsewhere/Note]]\n[[/Elsewhere/Note.md]]\n[[]]\n[[Unique]]\n[[Shortest]]\n[[CreatedLater]]');
+    await writeFile(path.join(rootPath, 'Folder', 'Source.md'), '[[Note]]\n[[Quick Name]]\n[[../Elsewhere/Note]]\n[[./..//Elsewhere/Note]]\n[[./Extensionless]]\n[[/Elsewhere/Note.md]]\n[[]]\n[[Unique]]\n[[Shortest]]\n[[Collision]]\n[[CreatedLater]]');
     await writeFile(path.join(rootPath, 'Folder', 'Note.md'), '# same-folder');
+    await writeFile(path.join(rootPath, 'Folder', 'Extensionless.md'), '# extension fallback');
     await writeFile(path.join(rootPath, 'Elsewhere', 'Note.md'), '# other-folder');
+    await mkdir(path.join(rootPath, 'a'), { recursive: true });
+    await writeFile(path.join(rootPath, 'a', 'Collision.md'), '# short candidate');
+    await writeFile(path.join(rootPath, 'very', 'long', 'path', 'Collision.md'), '# long candidate');
     await writeFile(path.join(rootPath, 'Folder', 'First.md'), '---\naliases: [Unique]\n---\n# First');
     await writeFile(path.join(rootPath, 'deep', 'Longer.md'), '---\naliases: [Unique]\n---\n# Longer');
     await writeFile(path.join(rootPath, 'x', 'One.md'), '---\naliases: [Shortest]\n---\n# One');
@@ -364,13 +446,21 @@ describe('vault links, file safety, and optimistic writes', () => {
     const vault = new VaultService({ rootPath, dataDir, repository, userId: 'vault-test' });
     try {
       await vault.initialize();
-      expect(await vault.resolveLink('Note', 'Folder/Source.md')).toBe('Folder/Note.md');
-      expect(await vault.resolveLink('Quick Name', 'Folder/Source.md')).toBe('Folder/Alias.md');
-      expect(await vault.resolveLink('../Elsewhere/Note', 'Folder/Source.md')).toBe('Elsewhere/Note.md');
-      expect(await vault.resolveLink('/Elsewhere/Note.md', 'Folder/Source.md')).toBe('Elsewhere/Note.md');
-      expect(await vault.resolveLink('', 'Folder/Source.md')).toBe('Folder/Source.md');
-      expect(await vault.resolveLink('Unique', 'Folder/Source.md')).toBe('Folder/First.md');
-      expect(await vault.resolveLink('Shortest', 'Folder/Source.md')).toBe('x/One.md');
+      const linkCases = [
+        ['Note', 'Folder/Note.md'],
+        ['Quick Name', 'Folder/Alias.md'],
+        ['../Elsewhere/Note', 'Elsewhere/Note.md'],
+        ['./..//Elsewhere/Note', 'Elsewhere/Note.md'],
+        ['./Extensionless', 'Folder/Extensionless.md'],
+        ['/Elsewhere/Note.md', 'Elsewhere/Note.md'],
+        ['', 'Folder/Source.md'],
+        ['Unique', 'Folder/First.md'],
+        ['Shortest', 'x/One.md'],
+        ['Collision', 'a/Collision.md'],
+      ] as const;
+      for (const [linkpath, expectedPath] of linkCases) {
+        expect(await vault.resolveLink(linkpath, 'Folder/Source.md'), linkpath).toBe(expectedPath);
+      }
       expect((await vault.getLinks()).unresolvedLinks['Folder/Source.md']?.CreatedLater).toBe(1);
       await expect(vault.getFile('../outside.md')).rejects.toThrow();
       await expect(vault.getFile('escape/outside.md')).rejects.toThrow();
@@ -486,7 +576,7 @@ describe('vault links, file safety, and optimistic writes', () => {
     const reopened = new VaultService(options);
     try {
       await reopened.initialize();
-      expect(await reopened.getSettings()).toEqual({ newLinkFormat });
+      expect(await reopened.getSettings()).toMatchObject({ newLinkFormat });
     } finally {
       await reopened.close();
       await (repository as { close?: () => Promise<void> }).close?.();
@@ -529,18 +619,18 @@ describe('vault links, file safety, and optimistic writes', () => {
     await vault.initialize();
     await vault.updateSettings({ newLinkFormat: 'relative' });
     await vault.openVault(rootB);
-    expect(await vault.getSettings()).toEqual({ newLinkFormat: 'shortest' });
+    expect(await vault.getSettings()).toMatchObject({ newLinkFormat: 'shortest' });
     await vault.updateSettings({ newLinkFormat: 'absolute' });
     await vault.openVault(rootA);
-    expect(await vault.getSettings()).toEqual({ newLinkFormat: 'relative' });
+    expect(await vault.getSettings()).toMatchObject({ newLinkFormat: 'relative' });
     await vault.close();
 
     const reopened = new VaultService(options);
     try {
       await reopened.initialize();
-      expect(await reopened.getSettings()).toEqual({ newLinkFormat: 'relative' });
+      expect(await reopened.getSettings()).toMatchObject({ newLinkFormat: 'relative' });
       await reopened.openVault(rootB);
-      expect(await reopened.getSettings()).toEqual({ newLinkFormat: 'absolute' });
+      expect(await reopened.getSettings()).toMatchObject({ newLinkFormat: 'absolute' });
     } finally {
       await reopened.close();
       await (repository as { close?: () => Promise<void> }).close?.();
@@ -551,14 +641,15 @@ describe('vault links, file safety, and optimistic writes', () => {
 
 describe('vault search grammar', () => {
   const content = [
-    '---', 'rating: 5', '---', '# Section', 'needle and phrase', '#tag', '- [ ] todo needle', '- [x] done needle', 'block text ^block1', '',
+    '---', 'rating: 5', '---', '# Section', 'needle and phrase', '#tag/child', '#tagalong', '- [ ] todo needle', '- [x] done needle', 'block text ^block1', '',
   ].join('\n');
   const file = { path: 'Folder/Fixture.md', title: 'Fixture', content, metadata: parseMarkdown(content).metadata };
   const queries = [
     ['needle phrase', true], ['needle OR absent', true], ['needle -absent', true], ['[rating>=3]', true],
     ['[rating>4]', true], ['[rating<6]', true], ['[rating<=5]', true], ['[rating!=4]', true], ['[rating=5]', true],
     ['[rating!=5]', false], ['[rating>=6]', false],
-    ['/needl[e]/', true], ['tag:tag', true], ['line:todo', true], ['task-todo:todo', true], ['task-done:done', true],
+    ['/needl[e]/', true], ['tag:tag', true], ['tag:tag/child', true], ['tag:tagalong', true], ['tag:tagalong/child', false],
+    ['line:todo', true], ['task:done', true], ['task-todo:todo', true], ['task-done:done', true], ['content:phrase', true],
     ['block:block1', true], ['section:Section', true], ['path:Folder', true], ['file:Fixture', true], ['"needle and phrase"', true],
   ] as const;
   it.each(queries)('evaluates %s', (query, expected) => expect(searchNotes(query, [file]).length > 0).toBe(expected));
@@ -569,6 +660,11 @@ describe('vault search grammar', () => {
     const propertyHit = searchNotes('[rating=5]', [file])[0];
     expect(propertyHit?.matches[0]?.field).toBe('frontmatter');
     expect(fuzzyScore('abc', 'abc')).toBeGreaterThan(fuzzyScore('abc', 'a--b--c') ?? -Infinity);
+  });
+
+  it('combines property comparisons with content, task, tag, and path predicates', () => {
+    expect(searchNotes('[rating>=5] content:needle task-todo:todo tag:tag/child path:Folder', [file])).toHaveLength(1);
+    expect(searchNotes('[rating>5] content:needle task-todo:todo tag:tag/child path:Folder', [file])).toHaveLength(0);
   });
 
   it('returns exact title and excerpt ranges from the query evaluation', () => {

@@ -29,8 +29,8 @@ export const CORE_PACKAGE_NAME = '@noltri/knowledge-core';
 
 /** Fallbacks for knobs that belong to Core itself (not to the frozen Thresholds contract). */
 export const CORE_DEFAULTS = {
-  version: '0.2.0',
-  port: 8787,
+  version: '3.0.0',
+  port: 18887,
   corsOrigin: '*',
   devUser: 'local-dev-user',
   maxItemsPerCapture: 6,
@@ -42,7 +42,7 @@ export const CORE_DEFAULTS = {
   treeDefaultDepth: 6,
   searchDefaultLimit: 10,
   /** Relative file names are always resolved against this, never against the current directory. */
-  dataDirname: '.noltri',
+  dataDirname: '.noltri-notes',
   sqliteFilename: 'noltri.sqlite',
   /** Default home of the 本地客户端授权 store, under the same data directory as the profile database. */
   grantFilename: 'grants.json',
@@ -50,7 +50,7 @@ export const CORE_DEFAULTS = {
 
 /**
  * The profile database location, in order of precedence: an explicit file, an explicit data directory,
- * then `~/.noltri/data`. A desktop shell will hand its own app-data path in through `NOLTRI_DATA_DIR`;
+ * then `~/.noltri-notes/data`. A desktop shell will hand its own app-data path in through `NOLTRI_DATA_DIR`;
  * until it does, this is the one place that decides where local knowledge lives, and it never writes
  * into the repository the code was checked out from.
  */
@@ -101,6 +101,8 @@ export interface CoreConfig {
   readonly storage: RepositoryOptions;
   /** AI provider selection handed to `createProvider`. */
   readonly ai: AiProviderConfig;
+  /** Explicit nonsecret opt-in; absent keeps image recognition unavailable. */
+  readonly imageRecognitionModel?: string;
   readonly thresholds: Thresholds;
   readonly scopeBudgets: ScopeTokenBudget;
   readonly devUser: string;
@@ -121,7 +123,6 @@ export interface CoreConfig {
   readonly searchDefaultLimit: number;
   /** Absolute path of the local profile database, whichever driver is configured. */
   readonly sqliteFile: string;
-  /** Default Markdown Vault, stored beside the profile unless explicitly overridden. */
   readonly dataDir: string;
   readonly vaultDir: string;
   /**
@@ -136,6 +137,10 @@ const positive = (value: number, fallback: number): number =>
 
 export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
   const ai = loadAiConfig(env);
+  const imageRecognitionModel = envString(env, 'AI_IMAGE_RECOGNITION_MODEL').trim();
+  if (imageRecognitionModel.length > 200 || /[\x00-\x1f\x7f]/.test(imageRecognitionModel)) {
+    throw new Error('AI_IMAGE_RECOGNITION_MODEL must be at most 200 characters without control characters');
+  }
   const driver = loadStorageDriver(env);
   const inputTokenLimit = aiInputTokenLimit(ai);
   const budget = (value: number) => inputTokenLimit === null ? value : Math.max(0, Math.min(value, inputTokenLimit));
@@ -157,6 +162,7 @@ export function loadCoreConfig(env: EnvSource = currentEnv()): CoreConfig {
   return {
     storage,
     ai,
+    ...(imageRecognitionModel.length === 0 ? {} : { imageRecognitionModel }),
     thresholds: loadThresholds(env),
     scopeBudgets,
     devUser: envString(env, 'NOLTRI_DEV_USER_ID', CORE_DEFAULTS.devUser),

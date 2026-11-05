@@ -1,0 +1,35 @@
+#!/bin/bash
+set -euo pipefail
+
+readonly PROBE_PATH=__NOLTRI_PROBE_PATH__
+readonly PROBE_SHA256=__NOLTRI_PROBE_SHA256__
+readonly FIXTURE_PATH=__NOLTRI_FIXTURE_PATH__
+readonly FIXTURE_SHA256=__NOLTRI_FIXTURE_SHA256__
+
+fail_closed() {
+  printf 'P0 synthetic handoff refused: %s\n' "$1" >&2
+  exit 64
+}
+
+verify_pinned_binary() {
+  local label="$1"
+  local path="$2"
+  local expected_sha256="$3"
+  local actual_sha256
+
+  [[ "$path" == /* ]] || fail_closed "$label path is not absolute"
+  [[ "$expected_sha256" =~ ^[[:xdigit:]]{64}$ ]] || fail_closed "$label SHA-256 pin is invalid"
+  [[ -f "$path" && -x "$path" && ! -L "$path" ]] || fail_closed "$label is missing, not executable, or is a symlink"
+  actual_sha256=$(/usr/bin/shasum -a 256 "$path" | /usr/bin/awk '{ print $1 }') || fail_closed "$label hash could not be read"
+  [[ "$actual_sha256" == "$expected_sha256" ]] || fail_closed "$label SHA-256 does not match the approved pair"
+}
+
+[[ "$(/usr/bin/dirname "$PROBE_PATH")" == "$(/usr/bin/dirname "$FIXTURE_PATH")" ]] || fail_closed "probe and fixture are not siblings"
+[[ "$(/usr/bin/basename "$PROBE_PATH")" == "noltri-ax-p0-probe" ]] || fail_closed "probe filename is not approved"
+[[ "$(/usr/bin/basename "$FIXTURE_PATH")" == "noltri-ax-p0-fixture" ]] || fail_closed "fixture filename is not approved"
+
+# Verify both members before starting either process. The probe will start this
+# exact sibling as its direct child and derive the AX PID from Process itself.
+verify_pinned_binary "probe" "$PROBE_PATH" "$PROBE_SHA256"
+verify_pinned_binary "fixture" "$FIXTURE_PATH" "$FIXTURE_SHA256"
+exec "$PROBE_PATH" --exercise

@@ -234,7 +234,7 @@ describe('classification', () => {
     const manualLeaf = await harness.repository.findNodeByTitle(harness.actor.userId, manualPath[1]!, manualRoot?.id);
     expect(manualRoot?.nodeType).toBe('discipline');
     expect(manualLeaf?.nodeType).toBe('topic');
-    const retried = await harness.core.retryCapture(item.id, harness.actor);
+    const retried = await harness.core.reanalyzeCapture(item.id, harness.actor);
     expect(retried.items.every((entry) => entry.nodePath.join('/') === manualPath.join('/'))).toBe(true);
     expect(harness.provider.classifyInputs).toHaveLength(1);
     expect((await readLibraryItem(harness.core, harness.actor, item.id)).subjectPath).toEqual(manualPath);

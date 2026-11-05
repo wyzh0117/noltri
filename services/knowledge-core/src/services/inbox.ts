@@ -8,6 +8,9 @@
  */
 import {
   processingStatusSchema,
+  reviewSourceRequestSchema,
+  type ReviewSourceRequest,
+  type ReviewSourceResponse,
   type AssignSourceRequest,
   type AssignSourceResponse,
   type InboxCounts,
@@ -41,7 +44,9 @@ function toEntry(source: RawSource, actor: ActorContext): InboxEntry {
     sourceUrl: source.sourceUrl,
     capturedAt: source.capturedAt,
     processingStatus: source.processingStatus,
-    errorReason: source.errorReason,
+    reviewStatus: source.reviewStatus,
+    reviewRevision: source.reviewRevision,
+    errorReason: source.errorReason === null ? null : capText(actor, source.errorReason),
     textPreview: previewOf(source.rawText, actor),
     rawTextLength: source.rawText.length,
   };
@@ -71,19 +76,29 @@ export async function listInbox(deps: CoreDeps, actor: ActorContext, query: Inbo
   const statuses = statusesOf(query.status);
   const limit = query.limit ?? DEFAULT_PAGE;
   const offset = query.offset ?? 0;
-  const [rows, counts] = await Promise.all([
-    deps.repository.listInbox({ userId: actor.userId, statuses, limit, offset }),
+  const [rows, counts, reviewCounts] = await Promise.all([
+    deps.repository.listInbox({ userId: actor.userId, statuses, reviewStatus: query.reviewStatus, limit, offset }),
     deps.repository.countInboxByStatus(actor.userId),
+    deps.repository.countInboxByReviewStatus(actor.userId),
   ]);
-  return { entries: rows.map((row) => toEntry(row, actor)), counts: counts satisfies InboxCounts, limit, offset };
+  return { entries: rows.map((row) => toEntry(row, actor)), counts: counts satisfies InboxCounts, reviewCounts, limit, offset };
 }
 
-/** Full text for one capture, for the triage view. Ownership is the only filter, so a miss is null. */
+/** Owned capture projected for this actor; a missing source remains null. */
 export async function readRawSource(deps: CoreDeps, actor: ActorContext, id: string): Promise<RawSource | null> {
   const source = await deps.repository.findRawSource(id, actor.userId);
+  if (source === null) return null;
+  const confirmation = source.reviewStatus === 'confirmed'
+    ? await deps.repository.readReviewConfirmation(id, actor.userId, source.reviewRevision) : null;
   // §435: 原文 is the widest single read a client has, so the cap has to cover it too — otherwise
   // 「限制返回片段」 would hold everywhere except the one call that returns the whole document.
-  return source === null ? null : { ...source, rawText: capText(actor, source.rawText) };
+  return {
+    ...source,
+    reviewConfirmation: confirmation === null ? null : { ...confirmation, text: capText(actor, confirmation.text) },
+    rawText: capText(actor, source.rawText),
+    surroundingContext: source.surroundingContext === null ? null : capText(actor, source.surroundingContext),
+    errorReason: source.errorReason === null ? null : capText(actor, source.errorReason),
+  };
 }
 
 /**
@@ -133,6 +148,31 @@ export async function assignSource(
     confidence: 1,
   });
   await deps.repository.updateRawSourceProcessing(source.id, actor.userId, 'done');
+  await deps.repository.markRawSourceConfirmed(source.id, actor.userId, false);
+  await deps.vault?.syncSource(source.id, actor.userId);
 
-  return { item, path: await deps.repository.nodePath(actor.userId, node.id) };
+  return {
+    item: {
+      ...item,
+      normalizedText: capText(actor, item.normalizedText),
+      summary: item.summary === null ? null : capText(actor, item.summary),
+    },
+    path: await deps.repository.nodePath(actor.userId, node.id),
+  };
+}
+
+export async function reviewSource(deps: CoreDeps, actor: ActorContext, id: string, request: ReviewSourceRequest): Promise<ReviewSourceResponse> {
+  const parsed = reviewSourceRequestSchema.safeParse(request);
+  if (!parsed.success) throw knowledgeError('invalid_request', 'Invalid review action', parsed.error.issues);
+  const result = await deps.repository.reviewSource(id, actor.userId, parsed.data);
+  if (result.item) await deps.vault?.syncSource(id, actor.userId);
+  // Project stored text for this actor on both first commit and replay; keep the durable response whole.
+  return result.item === undefined ? result : {
+    ...result,
+    item: {
+      ...result.item,
+      normalizedText: capText(actor, result.item.normalizedText),
+      summary: result.item.summary === null ? null : capText(actor, result.item.summary),
+    },
+  };
 }

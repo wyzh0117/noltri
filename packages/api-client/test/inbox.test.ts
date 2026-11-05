@@ -39,6 +39,8 @@ const ENTRY = {
   sourceUrl: null,
   capturedAt: '2026-03-01T08:00:00.000Z',
   processingStatus: 'pending',
+  reviewStatus: 'needs_review',
+  reviewRevision: 0,
   errorReason: null,
   textPreview: '元组一旦创建就不能修改。',
   rawTextLength: 12,
@@ -57,6 +59,8 @@ const RAW_SOURCE = {
   capturedAt: '2026-10-05T08:00:00.000Z',
   metadata: {},
   processingStatus: 'pending',
+  reviewStatus: 'needs_review',
+  reviewRevision: 0,
   errorReason: null,
   requestId: 'req-inbox-test-0001',
   clientId: 'desktop',
@@ -84,7 +88,7 @@ describe('ApiClient inbox calls', () => {
   it('sends the feed query with the bearer token and the client hint', async () => {
     const { calls, fetchImpl } = stub({
       status: 200,
-      payload: { entries: [ENTRY], counts: { pending: 1, processing: 0, done: 0, failed: 0 }, limit: 5, offset: 10 },
+      payload: { entries: [ENTRY], counts: { pending: 1, processing: 0, done: 0, failed: 0 }, reviewCounts: { needs_review: 1, confirmed: 0, deferred: 0, rejected: 0 }, limit: 5, offset: 10 },
     });
 
     const result = await clientFor(fetchImpl).inbox({ status: 'pending,failed', limit: 5, offset: 10 });
@@ -99,7 +103,7 @@ describe('ApiClient inbox calls', () => {
   it('omits an empty query string when no filter is asked for', async () => {
     const { calls, fetchImpl } = stub({
       status: 200,
-      payload: { entries: [], counts: { pending: 0, processing: 0, done: 0, failed: 0 }, limit: 50, offset: 0 },
+      payload: { entries: [], counts: { pending: 0, processing: 0, done: 0, failed: 0 }, reviewCounts: { needs_review: 0, confirmed: 0, deferred: 0, rejected: 0 }, limit: 50, offset: 0 },
     });
     await clientFor(fetchImpl).inbox();
     expect(calls[0]?.url).toBe(`http://127.0.0.1:8787${apiRoutes.inbox}`);
@@ -110,6 +114,19 @@ describe('ApiClient inbox calls', () => {
     const source = await clientFor(fetchImpl).rawSource('src 1');
     expect(calls[0]?.url).toBe(`http://127.0.0.1:8787${apiRoutes.inboxSource('src 1')}`);
     expect(source.rawText).toContain('完整原文');
+  });
+
+  it('reads the saved human confirmation without replacing the original or requiring a mutation', async () => {
+    const reviewConfirmation = {
+      rawSourceId: RAW_SOURCE.id, reviewRevision: 1, knowledgeItemId: ITEM.id,
+      text: 'Human-reviewed canonical text', targetNodeId: 'n-1', path: [{ id: 'n-1', title: 'Saved destination' }],
+    };
+    const payload = { ...RAW_SOURCE, reviewStatus: 'confirmed', reviewRevision: 1, reviewConfirmation };
+    const { calls, fetchImpl } = stub({ status: 200, payload });
+    expect(await clientFor(fetchImpl).rawSource(RAW_SOURCE.id)).toEqual(payload);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('GET');
+    expect(calls[0]?.body).toBeUndefined();
   });
 
   it('files a capture and returns the created item with its path', async () => {

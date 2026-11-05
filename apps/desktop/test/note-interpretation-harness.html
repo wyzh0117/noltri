@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:1420; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>Noltri Note Interpretation Synthetic Harness</title>
+    <style>
+      :root { --paper: #fffefb; --canvas: #f3f1e9; --ink: #202722; --ink-soft: #445149; --muted: #79847d; --green: #4d8067; --green-dark: #315742; --green-pale: #e7eee8; --line: #d9ded7; --serif: Georgia, serif; }
+      * { box-sizing: border-box; }
+      html, body, #root { width: 100%; height: 100%; margin: 0; }
+      body { background: var(--paper); color: var(--ink); font: 13px/1.5 system-ui, sans-serif; }
+      .sidebar-harness { display: flex; flex-direction: column; width: min(1160px, 100vw); height: min(820px, 100vh); margin: 0 auto; }
+      .sidebar-harness-controls { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+      .sidebar-harness-controls button { padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); }
+      .sidebar-harness-status { margin-left: auto; color: var(--muted); font: 10px ui-monospace, monospace; }
+      .sidebar-harness-main { flex: 1; min-height: 0; }
+      .sidebar-harness-main > * { height: 100%; }
+      #replay-output { max-height: 180px; overflow: auto; margin: 0; padding: 5px 10px; border-top: 1px solid var(--line); color: var(--ink-soft); font: 10px/1.4 ui-monospace, monospace; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./note-interpretation-harness.tsx"></script>
+  </body>
+</html>

@@ -22,11 +22,8 @@ describe('capture pipeline', () => {
     const firstProviderCall = harness.timeline.findIndex((entry) => entry.kind === 'ai');
     expect(firstProviderCall).toBeGreaterThan(rawSourceWrite);
 
-    // …and the status bookkeeping sits between them.
-    expect(harness.timeline.slice(rawSourceWrite, firstProviderCall).map((entry) => entry.call)).toEqual([
-      'createRawSource',
-      'updateRawSourceProcessing',
-    ]);
+    // Durable rules and the source claim must precede every provider call.
+    expect(harness.timeline.slice(rawSourceWrite, firstProviderCall).map((entry) => entry.call)).toContain('reserveCaptureProcessingPlan');
 
     const stored = await harness.repository.findRawSource(result.rawSourceId, harness.actor.userId);
     expect(stored?.rawText).toBe(CHINESE_TEXT);

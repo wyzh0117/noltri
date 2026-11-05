@@ -1,0 +1,4 @@
+.native-update-panel { padding: 16px; border: 1px solid var(--border, #d9dde3); border-radius: 10px; }
+.native-update-panel p { line-height: 1.6; }
+.native-update-panel pre { white-space: pre-wrap; max-height: 200px; overflow: auto; font: inherit; }
+.native-update-panel > div { display: flex; flex-wrap: wrap; gap: 8px; }

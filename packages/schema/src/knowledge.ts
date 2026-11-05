@@ -8,6 +8,7 @@ import {
   masteryLevelSchema,
   nodeStatusSchema,
   processingStatusSchema,
+  reviewStatusSchema,
   sourceTypeSchema,
   structureOperationSchema,
   versionedEntitySchema,
@@ -15,6 +16,17 @@ import {
 
 export const jsonValueSchema = z.record(z.string(), z.unknown());
 export type JsonValue = Record<string, unknown>;
+
+/** The immutable human confirmation captured by a successful review action, when available. */
+export const rawSourceReviewConfirmationSchema = z.object({
+  rawSourceId: z.string(),
+  reviewRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  knowledgeItemId: z.string(),
+  text: z.string(),
+  targetNodeId: z.string(),
+  path: z.array(z.object({ id: z.string(), title: z.string() })).min(1),
+});
+export type RawSourceReviewConfirmation = z.infer<typeof rawSourceReviewConfirmationSchema>;
 
 export const rawSourceSchema = z.object({
   id: z.string(),
@@ -29,6 +41,9 @@ export const rawSourceSchema = z.object({
   capturedAt: z.string(),
   metadata: jsonValueSchema,
   processingStatus: processingStatusSchema,
+  reviewStatus: reviewStatusSchema,
+  reviewRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  reviewConfirmation: rawSourceReviewConfirmationSchema.nullable().optional(),
   errorReason: z.string().nullable(),
   createdAt: z.string(),
   /** Idempotency pair: null for every capture written before P3 and for any caller that states no key. */

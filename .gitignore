@@ -19,6 +19,7 @@ coverage/
 apps/extension/.output/
 apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/resources/
+apps/desktop/src/workbench/workbench-graph-force.wasm
 
 # Local databases and generated application state.
 *.sqlite
@@ -45,3 +46,6 @@ docs/*baseline-and-recovery.md
 docs/research-contract.md
 docs/*DECISION*.md
 docs/PATCH_*.md
+
+# User-private planning and approval documents
+docs/private/

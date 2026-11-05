@@ -187,12 +187,14 @@ export function parseMarkdown(content: string): ParsedMarkdown {
   const footnotes: Record<string, { id: string; position: NotePosition }> = {};
   const footnoteRefs: Array<{ id: string; position: NotePosition }> = [];
   const referenceLinks: Record<string, { link: string; original: string; position: NotePosition }> = {};
+  const bodyLines: Array<{ text: string; start: number; end: number }> = [];
   let cursor = bodyOffset;
   for (const lineMatch of body.matchAll(/.*(?:\n|$)/g)) {
     const line = lineMatch[0] ?? '';
     if (line.length === 0) continue;
     const start = cursor;
     const end = start + line.replace(/\r?\n$/, '').length;
+    bodyLines.push({ text: line, start, end });
     if (!inRanges(start, end, codeRanges)) {
       const heading = HEADING.exec(line.trimEnd());
       if (heading !== null) {
@@ -212,8 +214,22 @@ export function parseMarkdown(content: string): ParsedMarkdown {
           ...(listItem[4] === undefined ? {} : { id: listItem[4] }),
         });
       }
-      const block = /\^([A-Za-z0-9-]+)\s*$/.exec(line.trimEnd());
-      if (block !== null) blocks[block[1] ?? ''] = { id: block[1] ?? '', position: positionOf(content, start, end) };
+      const standaloneBlock = /^\s*\^([A-Za-z0-9-]+)\s*$/.exec(line.trimEnd());
+      const block = standaloneBlock ?? /\^([A-Za-z0-9-]+)\s*$/.exec(line.trimEnd());
+      if (block !== null) {
+        let blockStart = start;
+        if (standaloneBlock !== null) {
+          let previous = bodyLines.length - 2;
+          if (previous >= 0 && bodyLines[previous]!.text.trim() !== '') {
+            blockStart = bodyLines[previous]!.start;
+            while (previous > 0 && bodyLines[previous - 1]!.text.trim() !== '') {
+              previous -= 1;
+              blockStart = bodyLines[previous]!.start;
+            }
+          }
+        }
+        blocks[block[1] ?? ''] = { id: block[1] ?? '', position: positionOf(content, blockStart, end) };
+      }
       const footnote = /^\s*\[\^([^\]]+)\]:\s*/.exec(line);
       if (footnote !== null) footnotes[footnote[1] ?? ''] = { id: footnote[1] ?? '', position: positionOf(content, start, end) };
       const reference = footnote === null ? /^\s*\[([^\]]+)\]:\s*(\S+)/.exec(line) : null;
@@ -225,6 +241,17 @@ export function parseMarkdown(content: string): ParsedMarkdown {
       }
     }
     cursor += line.length;
+  }
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index]!;
+    let sectionEnd = content.length;
+    for (let next = index + 1; next < headings.length; next += 1) {
+      if (headings[next]!.level <= heading.level) {
+        sectionEnd = headings[next]!.position.start.offset;
+        break;
+      }
+    }
+    heading.position = positionOf(content, heading.position.start.offset, sectionEnd);
   }
   const tags: Array<{ tag: string; position: NotePosition; field?: 'content' | 'frontmatter' }> = fm === null ? [] : frontmatterTags(fm.raw, fm.rawStart, content);
   for (const match of body.matchAll(TAG)) {

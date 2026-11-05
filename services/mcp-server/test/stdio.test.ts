@@ -39,7 +39,7 @@ describe('the stdio entry refuses before it advertises tools (§7.6, §11)', () 
     expect(outcome).toMatchObject({ served: true });
     expect(probed).toBe(1);
     expect(lines.join('\n')).toContain('serving over stdio');
-    expect(loadMcpConfig({ KNOWLEDGE_API_URL: ' ' }).apiBaseUrl).toBe('http://127.0.0.1:8787');
+    expect(loadMcpConfig({ KNOWLEDGE_API_URL: ' ' }).apiBaseUrl).toBe('http://127.0.0.1:18887');
   });
 
   it('retries a cold Core briefly before serving', async () => {

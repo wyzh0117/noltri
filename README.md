@@ -1,113 +1,84 @@
 <div align="center">
-  <h1>知序 Noltri</h1>
-  <p>把网页、Agent 与论文摘录，收进一棵自己的知识树。</p>
+  <h1>知序 Noltri · Notes 3.0</h1>
+  <p>用本地 Markdown 写作和阅读，把收集的原件留在自己手中。</p>
 </div>
 
 [English](README.en.md)
 
-## 项目介绍
+## 当前版本
 
-知序是一款本机运行的个人知识库。你可以从网页、Agent 对话和论文中收集片段，再按学科整理、搜索和对比。资料默认保存在自己的电脑上。
+当前源码版本为 **3.0.0**，以 Markdown Notes 为主线。安装包、签名更新工件和生产更新清单以正式 Release 为准；[Releases](https://github.com/wyzh0117/noltri/releases) 中的历史版本仍保留为历史记录。
 
-## 快速开始
+旧课程产品线不再维护，也不提供课程工作区迁移或兼容承诺。历史版本、已验证工件和原有数据均保留，不会因本轮版本调整而删除。
 
-知序 0.2.0 面向 Apple Silicon（arm64），要求 macOS 13.5 或更新版本。下载 [macOS 安装包](https://github.com/wyzh0117/noltri/releases/latest)，打开磁盘映像后把“知序”拖到“Applications”文件夹。
+## 从源码开始
 
-0.2.0 新增以本地 Markdown Vault 为正文真相的 Notes 工作台、CodeMirror Live Preview 与阅读视图、搜索/属性/历史和共享 Vault Graph；功能与限制见[发布说明](docs/releases/0.2.0.md)及[验收记录](docs/testing/vault-notes-graph/acceptance.md)。本版本仍采用 ad-hoc 签名，**尚未通过 Apple Developer ID 签名和公证**，macOS 可能拦截首次打开。请先对照 Releases 中的 `SHA256SUMS.txt` 校验下载文件，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)进入“系统设置”→“隐私与安全性”→“仍要打开”。
-
-若系统仍显示“已损坏”，确认下载来源和校验值后，可仅为此应用解除下载隔离：
-
-```bash
-codesign --verify --deep --strict "/Applications/知序.app"
-xattr -dr com.apple.quarantine "/Applications/知序.app"
-open "/Applications/知序.app"
-```
-
-只有第一条验签成功后才执行后两条。正式免拦截分发仍需 Developer ID 证书和 Apple 公证，详见 [Tauri macOS 签名文档](https://v2.tauri.app/distribute/sign/macos/)。
-
-### 从源码运行
-
-从源码运行需要 Node.js 20.19+ 或 22.12+、pnpm 11、Rust 工具链和 Xcode Command Line Tools。
+需要 Node.js 24（本轮验证 24.18.0）、pnpm 11、Rust 和 Xcode Command Line Tools。桌面目标为 Apple Silicon macOS 13.5 或更新版本。
 
 ```bash
 pnpm install
-cp .env.example .env.local
-pnpm dev
+cp -n .env.example .env.local
 ```
 
-知序桌面窗口会自动打开。进入 Provider 管理后，可添加服务商配置，拉取候选模型或手动添加模型，再 Apply 保存。模型配置支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages；选择“使用此模型”可在处理资料前设定全局活动模型。API 密钥仅保存在本机设置中。模型管理可随时从知识库设置中打开。
+先在 `.env.local` 中将 `NOLTRI_DEV_TOKEN` 与 `NOLTRI_ACCESS_TOKEN` 填为同一非空本机令牌，并在启动桌面的终端显式导出同值的 `NOLTRI_ACCESS_TOKEN`。Rust 不解析 dotenv；Core/MCP 只读取明确选择的环境文件，且不覆盖已有进程环境。然后运行：
 
-安装版保存设置后会自动重启由应用管理的本机服务。使用外部服务或从源码开发时，页面会提示重启服务，需将相同设置写入 `.env.local`：
-
-```dotenv
-AI_PROVIDER=openai
-AI_API_KEY=填入你自己的密钥
-AI_BASE_URL=https://api.deepseek.com
-AI_CHAT_MODEL=deepseek-flash
-AI_EMBEDDINGS_ENABLED=false
+```bash
+NOLTRI_ENV_FILE="$PWD/.env.local" pnpm dev
 ```
 
-Provider 配置保存在 macOS 的 `~/Library/Application Support/com.noltri.companion/settings.json`。自动知识体系分类需要选择活动模型；未配置或调用失败时保留原文，供稍后重试与人工整理。
+Notes 以本地 Markdown Vault 为正文来源，提供编辑、阅读、标题思维导图、搜索、属性和历史。关系页查看图谱与链接；解读页只有明确点击翻译、解释或提问时才发送当前正文快照，结果临时显示，不覆盖原文。
 
-### 安装浏览器扩展
+快速收集支持文字、图片和桌面截图入口。待确认资料保留原件，将处理状态与人工审核分开；编辑整理文本不会修改原文。 已确认资料单独显示确认时保存的人工稿和归档方向；缺失人工确认记录时明确提示，原文仍可查看。图片识别需要明确配置支持图像的模型，离线保存不等于完成识别或分类。规则与处理记录在独立窗口中管理，保存规则草稿不会自动生效。详见[模块说明](docs/modules.md)。
 
-从 [Releases](https://github.com/wyzh0117/noltri/releases/latest) 下载并解压 `noltri-extension.zip`。也可以从源码构建：
+
+Core 默认端口为 **18887**，MCP 为 **18890**。未指定 `NOLTRI_ENV_FILE` 时，仅探测 `~/.noltri-notes/.env.local`、`.env` 及显式 `NOLTRI_DATA_DIR` 中的同名文件；不向上查找项目配置。指定文件即为独占选择，缺失也不回退。桌面默认不复用已运行的外部服务；仅明确设置 `NOLTRI_USE_EXTERNAL_RUNTIME=1`、提供一致令牌并通过服务验证后才可连接。
+
+## 独立的 Notes profile
+
+3.x 保持同一 Notes 命名空间，后续 3.x 升级继续使用该 profile：
+
+| 运行方式 | 默认位置 |
+| --- | --- |
+| macOS 安装版 | `~/Library/Application Support/com.noltri.notes/`，包括 `settings.json` 和本机数据 |
+| 从源码运行 Core | `~/.noltri-notes/data/`，数据库为 `noltri.sqlite`，默认 Vault 为 `vault/` |
+
+新默认位置与旧产品线分离，不自动导入旧库。`NOLTRI_DATA_DIR`、`NOLTRI_SQLITE_FILE`、`NOLTRI_NOTES_DIR` 和桌面的 `NOLTRI_SETTINGS_DIR` 显式设置继续有效；指定路径前请确认数据归属，不兼容数据库仍会被拒绝而不自动改写。连接外部 Core 时应先核对服务与 profile，独立的桌面目录不能替代对外部连接的确认。
+
+## 模型与收集入口
+
+Provider 管理支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages。添加服务商与模型后明确保存，再选择“使用此模型”。密钥仅保存在本机设置中；未配置或请求失败时保留原件，供稍后重试或人工整理。
+
+安装版会重启由应用管理的服务以应用模型配置；外部／开发服务需要维护对应环境配置并自行重启。`.env.example` 只提供空白模板，真实密钥不要提交到仓库。
+
+桌面设置可配置截图与收集窗的全局快捷键，冲突或保存失败时保留旧配置。同一配置目录只允许一个宿主启动服务；显式隔离的配置目录可独立运行。规则调试窗可刷新本应用及自有 Core/MCP 的进程诊断。详见[模块说明](docs/modules.md)。
+
+浏览器扩展可从当前源码构建：
 
 ```bash
 pnpm --filter @noltri/extension build
 ```
 
-在 Chrome 打开 `chrome://extensions`，开启「开发者模式」，选择「加载已解压的扩展程序」，再选解压后的文件夹（从源码构建时选择 `apps/extension/.output`）。浏览网页时右键选择“收集选中内容到知序”“收集此网页到知序”或“收集此图片到知序”，即可连同来源一并保存。
+在 Chrome 的 `chrome://extensions` 中开启开发者模式，加载 `apps/extension/.output`。通过右键菜单收集选中文字、网页或图片。Agent 可以连接应用设置页提供的本机 MCP 入口；默认开发地址为 `http://127.0.0.1:18890/mcp`，授权范围仍由本机服务控制。
 
-### 连接 Codex 或其他 Agent
+## 更新与首次打开
 
-打开知序桌面应用或运行 `pnpm dev` 后，在 Codex 的 MCP 设置中添加本地 Streamable HTTP 服务；也可以写入 `~/.codex/config.toml`：
+应用内更新需明确检查、下载验证、安装和重启。更新前保存草稿、等待在途工作结束并关闭规则调试窗，详见[应用内更新](docs/application-updates.md)。隔离测试包已完成正常升级和安装失败后的人工恢复。3.0.0 的隔离迭代验收已用合成资料验证实体文字／截图采集、原件保存与正常重开回读；当前发行候选另已验证人工归档稿、方向及审核页在完整重开后正确回填。模型未配置，未验证 AI 整理或 OCR。生产工件已完成项目更新签名与版本核验，下载和更新清单以正式 Release 为准；旧构建的截图权限结论不替代当前候选的系统授权。
 
-```toml
-[mcp_servers.zhixu]
-url = "http://127.0.0.1:8790/mcp"
-```
+将来下载发行工件时，请先核对发布来源、校验值及签名说明。macOS 首次打开受阻时，请遵循 [Apple 官方安全打开应用指引](https://support.apple.com/en-us/102445)。更新包验签与 Apple Developer ID 签名、公证及系统授权是不同机制。
 
-保存后重启 Codex。其他 Agent 也可以使用知序设置页提供的入口地址。若客户端只支持 stdio，可从仓库根目录启动：
+## 开发验证
 
-```toml
-[mcp_servers.zhixu]
-command = "pnpm"
-args = ["--filter", "@noltri/mcp-server", "exec", "tsx", "src/stdio.ts"]
-cwd = "/你的知序仓库绝对路径"
-env = { KNOWLEDGE_API_URL = "http://127.0.0.1:8787" }
-```
-
-可参考 [Codex MCP 设置说明](https://developers.openai.com/codex/mcp)。
-
-## 工作方式
-
-每条资料都会保留原文和来源。配置模型后，AI 根据片段内容判断知识体系和分层学科路径，并生成摘要。你可以在资料详情中修改内容、标题、分类和研究点；手动指定的分类优先保留。调用失败时保留原文，不把摘录标题冒充 AI 分类。你还可以搜索资料，并把相关内容并排对读。
-
-## 可以做什么
-
-- 从网页选中文字，连同标题和链接一起收进资料库；
-- 收集时可输入“社会科学 / 经济学 / 因果推断”这样的路径，直接创建学科树并完成归类；
-- 让 Codex 等 Agent 通过 MCP 保存回答或研究线索；
-- 收集论文段落，记录引用和研究方向；
-- 按知识树浏览、搜索、整理和比较资料。
-
-## 示例
-
-读论文时收集两篇文章关于同一研究问题的段落。知序会保留各自的来源，放进相应学科下；之后打开并排比较，就能快速查看两种方法和结论的异同。
-
-## 验证与构建
-
-0.2.0 新增 Markdown Vault 笔记编辑、渐进阅读、查询和 Worker/WebGL 关系图。当前代码检查为 Core 224、Desktop 107、API client 33、MCP 19 项测试通过；Notes 长测的数据完整性检查通过，但 raw runner 收尾状态仍标 invalid，`beforeinput→rAF` p95 与 Graph 5k 布局收敛预算未达。详见[发布说明](docs/releases/0.2.0.md)和[验收矩阵](docs/testing/vault-notes-graph/acceptance.md)。0.1.1–0.1.3 的历史验收见[测试说明](docs/testing/README.md)、[Graph v3.1 验收记录](docs/testing/graph-v3.1/acceptance.md)和对应发布说明。本地测试资料不随安装包分发。
+安装 Rust 的 `wasm32-unknown-unknown` 目标；前端浏览器测试还需要本机 Chrome/Chromium，可通过 `CHROME_BIN` 指定可执行文件。先构建忽略的 WASM 产物，再做检查。
 
 ```bash
+rustup target add wasm32-unknown-unknown
+pnpm --filter @noltri/desktop build:graph-wasm
 pnpm typecheck
 pnpm test
-pnpm --filter @noltri/desktop release:mac
 ```
 
-构建脚本校验固定版本 Node 24 运行时的 SHA256，生成应用后检查资源封印、DMG 完整性、随包 SQLite 与 JIT。具备签名和公证凭据的正式分发还需通过 `pnpm --filter @noltri/desktop verify:mac --require-notarization`。
+构建、项目更新签名及限定平台验收已有记录。当前验证范围与剩余限制记录在 [3.0.0 版本说明](docs/releases/3.0.0.md)；历史测试数字不作为当前版本通过声明。随包 Node 运行时保持固定版本和校验，不分发内部计划、测试资料或用户配置。
 
 ## License
 
-仓库当前没有提供 LICENSE 文件，使用、修改和再发布的授权方式尚未声明。
+仓库当前没有提供 LICENSE 文件，使用、修改和再发布的授权方式尚未声明。依赖信息见[第三方声明](THIRD_PARTY_NOTICES.md)。

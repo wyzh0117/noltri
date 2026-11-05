@@ -13,13 +13,13 @@ import type {
   CaptureAction,
   CaptureResultItem,
   ItemLinkRelation,
-  JsonValue,
   KnowledgeItem,
   KnowledgeNode,
   NodeStatus,
 } from '@noltri/schema';
 import { tierForConfidence } from '@noltri/schema';
 import { knowledgeError, truncate } from '@noltri/shared';
+import type { CapturePlanPointStatus, CaptureReviewAuthority } from '@noltri/storage';
 import type { ActorContext, CoreDeps } from '../types';
 import { nodeTypeForPath } from '../node-taxonomy';
 import { MAX_NODE_PATH_DEPTH, roundConfidence } from '../types';
@@ -67,6 +67,7 @@ export async function resolveNodeChain(
   titles: readonly string[],
   seed: EmbedSeed,
   confidence: number,
+  captureAuthority: CaptureReviewAuthority,
 ): Promise<ResolvedNode> {
   if (titles.length === 0) {
     throw knowledgeError('provider_error', '分类结果没有可用的节点路径 / classification returned an empty node path');
@@ -89,6 +90,7 @@ export async function resolveNodeChain(
     }
 
     const created = await deps.repository.createNode({
+      captureAuthority,
       userId: actor.userId,
       title,
       summary: null,
@@ -100,28 +102,7 @@ export async function resolveNodeChain(
       embeddingStatus: seed.embedding === undefined ? 'none' : 'ready',
     });
 
-    if (parentId !== null) {
-      await deps.repository.createEdge({
-        userId: actor.userId,
-        fromNodeId: created.id,
-        toNodeId: parentId,
-        relationType: 'part_of',
-        confidence: 1,
-        source: 'tree_structure',
-      });
-    }
-
-    const before: JsonValue = {};
-    const after: JsonValue = { title: created.title, parentId: created.parentId, nodeType: created.nodeType };
-    await deps.repository.createVersionRecord({
-      userId: actor.userId,
-      entityType: 'knowledge_node',
-      entityId: created.id,
-      operation: 'create',
-      before,
-      after,
-      actor: actor.actor,
-    });
+    // Storage commits node + parent edge + audit version atomically under source review authority.
 
     createdNodeIds.push(created.id);
     if (isLeaf) {
@@ -138,9 +119,21 @@ export async function pathTitlesFor(deps: CoreDeps, actor: ActorContext, nodeId:
   return path.map((segment) => segment.title);
 }
 
+export interface PersistPointProgress {
+  readonly status: Extract<CapturePlanPointStatus, 'placement_saved' | 'item_saved' | 'linked'>;
+  readonly knowledgeItemId: string | null;
+  readonly onItemSaved: (knowledgeItemId: string) => Promise<void>;
+  readonly onLinked: () => Promise<void>;
+  readonly onComplete: () => Promise<void>;
+}
+
 export interface PersistArgs {
+  readonly captureAuthority: CaptureReviewAuthority;
   readonly rawSourceId: string;
+  readonly capturePointIndex: number;
+  readonly captureAnalysisVersion: number;
   readonly point: NormalizedPoint;
+  readonly progress: PersistPointProgress;
   readonly embedding?: number[];
   readonly targetNodeId: string;
   readonly action: CaptureAction;
@@ -164,29 +157,50 @@ export async function persistPoint(
   const { config } = deps;
   const confidence = roundConfidence(args.linkConfidence);
 
-  const item = await deps.repository.createKnowledgeItem({
-    userId: actor.userId,
-    rawSourceId: args.rawSourceId,
-    normalizedText: args.point.text,
-    summary: args.point.summary,
-    confidence: args.point.confidence,
-    ...(args.embedding === undefined ? {} : { embedding: args.embedding }),
-    ...(args.embedding === undefined ? {} : { embeddingModel: config.ai.embedModel }),
-    embeddingStatus: args.embedding === undefined ? 'none' : 'ready',
-    isAiDerived: true,
-  });
+  let item: KnowledgeItem;
+  if (args.progress.status === 'placement_saved') {
+    item = await deps.repository.createKnowledgeItem({
+      captureAuthority: args.captureAuthority,
+      userId: actor.userId,
+      rawSourceId: args.rawSourceId,
+      capturePointIndex: args.capturePointIndex,
+      captureAnalysisVersion: args.captureAnalysisVersion,
+      normalizedText: args.point.text,
+      summary: args.point.summary,
+      confidence: args.point.confidence,
+      ...(args.embedding === undefined ? {} : { embedding: args.embedding }),
+      ...(args.embedding === undefined ? {} : { embeddingModel: config.ai.embedModel }),
+      embeddingStatus: args.embedding === undefined ? 'none' : 'ready',
+      isAiDerived: true,
+    });
+    await args.progress.onItemSaved(item.id);
+  } else {
+    if (args.progress.knowledgeItemId === null) {
+      throw knowledgeError('storage_error', '冻结计划缺少已保存知识条目 ID / capture plan has no saved KnowledgeItem ID');
+    }
+    const existing = await deps.repository.findKnowledgeItem(args.progress.knowledgeItemId, actor.userId);
+    if (existing === null) {
+      throw knowledgeError('storage_error', '冻结计划引用的知识条目不存在 / capture plan KnowledgeItem is missing');
+    }
+    item = existing;
+  }
 
-  const relationType: ItemLinkRelation = args.action === 'merged' ? 'supports' : 'primary';
-  await deps.repository.linkItemToNode({
-    userId: actor.userId,
-    itemId: item.id,
-    nodeId: args.targetNodeId,
-    relationType,
-    confidence,
-  });
+  if (args.progress.status !== 'linked') {
+    const relationType: ItemLinkRelation = args.action === 'merged' ? 'supports' : 'primary';
+    await deps.repository.linkItemToNode({
+      captureAuthority: args.captureAuthority,
+      userId: actor.userId,
+      itemId: item.id,
+      nodeId: args.targetNodeId,
+      relationType,
+      confidence,
+    });
+    await args.progress.onLinked();
+  }
 
-  await writeEdge(deps, actor, args.targetNodeId, args.provenanceNodeId, 'derived_from', confidence);
-  await writeEdge(deps, actor, args.targetNodeId, args.relatedNodeId, 'similar_to', confidence);
+  await writeEdge(deps, actor, args.targetNodeId, args.provenanceNodeId, 'derived_from', confidence, args.captureAuthority);
+  await writeEdge(deps, actor, args.targetNodeId, args.relatedNodeId, 'similar_to', confidence, args.captureAuthority);
+  await args.progress.onComplete();
 
   return {
     item,
@@ -210,11 +224,13 @@ async function writeEdge(
   toNodeId: string | null,
   relationType: 'derived_from' | 'similar_to',
   confidence: number,
+  captureAuthority: CaptureReviewAuthority,
 ): Promise<void> {
   if (toNodeId === null || toNodeId === fromNodeId) return;
   const target = await deps.repository.findNode(toNodeId, actor.userId);
   if (target === null || target.status !== 'active') return;
   await deps.repository.createEdge({
+    captureAuthority,
     userId: actor.userId,
     fromNodeId,
     toNodeId,

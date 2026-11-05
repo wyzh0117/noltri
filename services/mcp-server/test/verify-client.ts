@@ -3,7 +3,7 @@
  * start the MCP app (pointing at a running Knowledge Core), connect with the SDK's
  * StreamableHTTPClientTransport, then initialize → tools/list → tools/call.
  *
- * Usage: KNOWLEDGE_API_URL=http://127.0.0.1:8787 [NOLTRI_ACCESS_TOKEN=...] pnpm verify
+ * Usage: KNOWLEDGE_API_URL=http://127.0.0.1:18887 [NOLTRI_ACCESS_TOKEN=...] pnpm verify
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -24,7 +24,7 @@ async function main(): Promise<void> {
     if (process.env[key] !== undefined) env[key] = process.env[key] as string;
   }
   if (env['KNOWLEDGE_API_URL'] === undefined) {
-    env['KNOWLEDGE_API_URL'] = 'http://127.0.0.1:8787';
+    env['KNOWLEDGE_API_URL'] = 'http://127.0.0.1:18887';
   }
   const config: McpHttpConfig = loadMcpConfig(env);
   const app = createMcpApp(config, log);

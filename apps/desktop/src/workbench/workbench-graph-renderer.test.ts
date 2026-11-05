@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { uniqueGraphLineEdges } from './workbench-graph-renderer';
 import type { GraphViewEdge } from './workbench-graph-model';
+import { uniqueGraphLineEdges } from './workbench-graph-renderer';
 
 const edge = (source: string, target: string, width = 1): GraphViewEdge => ({
-  id: `${source}\0${target}`, source, target, count: 1, resolved: true, width,
+  id: `${source}\0${target}`, source, target, count: 1, relationType: 'wikilink', width,
 });
 
 describe('graph edge rendering', () => {
-  it('draws reciprocal links as one shared stroke while leaving directed arrows to the caller', () => {
+  it('draws reciprocal links as one shared stroke', () => {
     const directed = [edge('a', 'b'), edge('b', 'a'), edge('b', 'c')];
     expect(uniqueGraphLineEdges(directed)).toEqual([directed[0], directed[2]]);
     expect(directed).toHaveLength(3);

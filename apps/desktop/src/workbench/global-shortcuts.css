@@ -1,0 +1,11 @@
+.global-shortcuts { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border, #deded6); }
+.global-shortcuts h2 { margin: 0 0 8px; font-size: 18px; }
+.shortcut-current { display: grid; gap: 5px; margin: 14px 0; }
+.shortcut-selectors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.shortcut-selectors fieldset { margin: 0; padding: 12px; min-width: 0; border: 1px solid var(--border, #deded6); border-radius: 8px; }
+.shortcut-selectors legend { font-weight: 600; }
+.shortcut-selectors select { width: auto; min-width: 65px; margin-left: 8px; }
+.shortcut-modifiers, .shortcut-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.shortcut-modifiers label { display: flex; align-items: center; gap: 4px; }
+.shortcut-modifiers input { width: auto; }
+@media (max-width: 620px) { .shortcut-selectors { grid-template-columns: 1fr; } }

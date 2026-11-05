@@ -4,6 +4,7 @@
  */
 
 import type { ChatMessage, ClassificationCandidate } from './types';
+import { knowledgeError } from '@noltri/shared';
 
 export const NODE_CONTEXT_LABEL = '节点上下文';
 
@@ -21,8 +22,8 @@ export const JSON_ONLY_REMINDER =
   '不要任何解释文字。You may wrap the JSON in a ```json fenced block, but add nothing else. ' +
   '必须严格遵守上述输出契约 / obey the output contract exactly.';
 
-export function extractSystemPrompt(maxItems: number): string {
-  return (
+export function extractSystemPrompt(maxItems: number, instructions?: string): string {
+  return withProcessingInstructions(
     '你是「知序 Noltri」的知识提取引擎 / You are the knowledge-extraction engine of Noltri.\n' +
     '任务：把用户选中的原文切分成若干条原子、自足的知识点。\n' +
     'Task: split the user\'s selected text into atomic, self-contained knowledge points.\n' +
@@ -45,7 +46,9 @@ export function extractSystemPrompt(maxItems: number): string {
     '8. 「参考上下文」只用于理解术语与指代，绝不能作为抽取来源，也不得复制进 text。\n' +
     '   Reference context is for disambiguation only and must never become extracted text.\n' +
     '9. 只输出 JSON / Output JSON only, matching exactly:\n' +
-    OUTPUT_CONTRACT_EXTRACT
+    OUTPUT_CONTRACT_EXTRACT,
+    instructions,
+    'EXTRACTION',
   );
 }
 
@@ -79,8 +82,8 @@ export function buildExtractUserPrompt(fields: {
   return blocks.join('\n');
 }
 
-export function classifySystemPrompt(attachThreshold: number): string {
-  return (
+export function classifySystemPrompt(attachThreshold: number, instructions?: string): string {
+  return withProcessingInstructions(
     '你是「知序 Noltri」的知识归档引擎 / You are the classification engine of Noltri.\n' +
     '任务：判断这条知识点应当挂到已有节点（attach），还是新建节点（create）。\n' +
     'Task: decide whether this item should attach to an existing node or create a new one.\n' +
@@ -101,7 +104,9 @@ export function classifySystemPrompt(attachThreshold: number): string {
     '7. 只输出 JSON / Output JSON only, exactly one of:\n' +
     OUTPUT_CONTRACT_ATTACH +
     '\n或 / or\n' +
-    OUTPUT_CONTRACT_CREATE
+    OUTPUT_CONTRACT_CREATE,
+    instructions,
+    'CLASSIFICATION',
   );
 }
 
@@ -148,4 +153,23 @@ export function withJsonOnlyReminder(messages: ChatMessage[]): ChatMessage[] {
     return [{ role: 'system', content: `${first.content}\n\n${JSON_ONLY_REMINDER}` }, ...rest];
   }
   return [{ role: 'system', content: JSON_ONLY_REMINDER }, ...messages];
+}
+
+/** Preserve the frozen rule text exactly; empty rules keep the original request unchanged. */
+export function validateProcessingInstructions(instructions: unknown): string | undefined {
+  if (instructions === undefined) return undefined;
+  if (typeof instructions !== 'string' || instructions.length > 4_000) {
+    throw knowledgeError('invalid_request', 'Processing instructions must be a string of at most 4,000 characters');
+  }
+  return instructions.trim().length === 0 ? undefined : instructions;
+}
+
+function withProcessingInstructions(base: string, instructions: string | undefined, stage: 'EXTRACTION' | 'CLASSIFICATION'): string {
+  const validated = validateProcessingInstructions(instructions);
+  if (validated === undefined) return base;
+  const label = stage === 'EXTRACTION' ? '提取' : '分类';
+  return `${base}\n\n【已应用${label}规则 / APPLIED ${stage} RULES】\n` +
+    '以下规则只调整处理偏好，不得覆盖唯一原文来源、禁止编造事实、JSON 输出契约、条数上限、候选节点 ID 或归档阈值。\n' +
+    'Apply these preferences within the original source, output contract, item limit, candidate IDs and attachThreshold constraints.\n' +
+    `${validated}\n【已应用规则结束 / END APPLIED RULES】`;
 }

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { watch as watchDirectory, type FSWatcher } from 'node:fs';
 import { link, mkdir, open, readFile, readdir, realpath, rename as renameFile, rm, rmdir, stat, lstat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { parseDocument, stringify as stringifyYaml } from 'yaml';
 import type {
   CachedNoteMetadata,
   RenameVaultBlockResponse,
@@ -17,10 +18,14 @@ import type {
   VaultGraph,
   VaultSnapshot,
   VaultSettings,
+  VaultPropertyTypes,
   NotePosition,
   VaultAsset,
   VaultDiagnostics,
   NoteLink,
+  KnowledgeItem,
+  KnowledgeNode,
+  RawSource,
 } from '@noltri/schema';
 import { knowledgeError } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
@@ -49,13 +54,26 @@ interface VaultOptions {
   repository: KnowledgeRepository;
   userId: string;
 }
+interface VaultWatchEvent {
+  relativeDirectory: string;
+  eventType: string;
+  fileName: string | Buffer | null;
+}
+
+export interface SemanticNoteFile {
+  path: string;
+  frontmatter: Record<string, unknown>;
+  title: string;
+  summary: string | null;
+  links: string[];
+}
 
 const HISTORY_LIMIT = 50;
 const HISTORY_DAYS = 30;
 const HISTORY_THROTTLE_MS = 60_000;
 const HASH_CACHE_TTL_MS = 600_000;
 const CHANGE_LIMIT = 2000;
-const IGNORED_DIRECTORY_NAMES = new Set(['.git', 'node_modules', '.obsidian']);
+const IGNORED_DIRECTORY_NAMES = new Set(['.git', 'node_modules', '.obsidian', '.noltri']);
 const idKey = (topicId: string, chapterId: string | null) => `${topicId}\u0000${chapterId ?? ''}`;
 const sha256 = (content: string | Buffer) => createHash('sha256').update(content).digest('hex');
 const missing = (error: unknown) => ['ENOENT', 'ENOTDIR', 'not_found'].includes((error as NodeJS.ErrnoException).code ?? '');
@@ -67,6 +85,9 @@ const positionIn = (content: string, start: number, end: number): NotePosition =
   return { start: point(start), end: point(end) };
 };
 const isHistoryId = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const markdownBody = (content: string): string => content.replace(/^---\r?\n[\s\S]*?\r?\n---(?=\r?\n|$)\r?\n?/, '');
+const stringArray = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+const libraryMapKey = (kind: 'source' | 'item', id: string): string => `library:${kind}\u0000${id}`;
 const parseHistoryVersion = (value: unknown, fileName: string, rootPath: string): SavedVersion | null => {
   if (value === null || typeof value !== 'object') return null;
   const record = value as Partial<SavedVersion>;
@@ -94,6 +115,9 @@ const parseHistoryVersion = (value: unknown, fileName: string, rootPath: string)
 export class VaultService {
   private rootPath: string;
   private newLinkFormat: VaultSettings['newLinkFormat'] = 'shortest';
+  private propertyTypes: VaultPropertyTypes = {};
+  private propertyTypesConfig: Record<string, unknown> = {};
+  private propertyTypesMalformed = false;
   private readonly settingsByRoot = new Map<string, VaultSettings['newLinkFormat']>();
   private readonly configuredRoot: string;
   private readonly dataDir: string;
@@ -107,6 +131,8 @@ export class VaultService {
   private initializing: Promise<void> | null = null;
   private entries: VaultEntry[] = [];
   private cache = new Map<string, CachedFile>();
+  private libraryPathByKey = new Map<string, string>();
+  private semanticNotePathByKey = new Map<string, string>();
   private physicalPaths = new Map<string, string>();
   private metadataByHash = new Map<string, ReturnType<typeof parseMarkdown>>();
   private resolvedLinks: Record<string, Record<string, number>> = {};
@@ -117,9 +143,12 @@ export class VaultService {
   private readonly historyIndex = new Map<string, SavedVersion[]>();
   private historyIndexLoaded = false;
   private watchers = new Map<string, FSWatcher>();
+  private watcherGeneration = 0;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshQueue: Promise<void> = Promise.resolve();
+  private pendingWatchEvents: VaultWatchEvent[] = [];
   private legacyMap: LegacyMap = {};
+  private migratingLibrary = false;
   private parser: MetadataParserWorker | null = null;
   private readonly hashLastUsed = new Map<string, number>();
   private readonly failedFiles = new Map<string, { path: string; error: string; at: string }>();
@@ -196,6 +225,7 @@ export class VaultService {
     if (savedFormat !== undefined) this.newLinkFormat = savedFormat;
     else if (this.settingsByRoot.size > 0) this.newLinkFormat = 'shortest';
     this.settingsByRoot.set(sha256(this.rootPath), this.newLinkFormat);
+    await this.loadPropertyTypes();
     this.legacyMapFile = this.mapFileFor(this.rootPath);
     await this.loadLegacyMap();
     await this.loadHashCache(this.rootPath);
@@ -203,6 +233,7 @@ export class VaultService {
     this.hashGcTimer = setInterval(() => { void this.collectHashCache().catch(() => undefined); }, 60_000);
     await this.refresh(true);
     await this.migrateLegacyNotes();
+    await this.migrateLegacyLibrary();
     await this.refresh(true);
     this.attachWatchers();
     this.ready = true;
@@ -210,7 +241,10 @@ export class VaultService {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.watcherGeneration += 1;
     if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+    this.pendingWatchEvents = [];
     if (this.hashGcTimer !== null) clearInterval(this.hashGcTimer);
     await this.mutationQueue.catch(() => undefined);
     await this.refreshQueue.catch(() => undefined);
@@ -288,45 +322,395 @@ export class VaultService {
 
   private async migrateLegacyNotes(): Promise<void> {
     const nodes = await this.repository.listNodes(this.userId, { includeArchived: true });
-    let changed = false;
-    for (const node of nodes) {
-      if (node.nodeType !== 'topic') continue;
-      const indexes = await this.repository.listKnowledgeNotes(this.userId, node.id);
+    const topics = nodes.filter((node) => node.nodeType === 'topic');
+    const chapters = new Map(nodes.filter((node) => node.nodeType === 'chapter').map((node) => [node.id, node]));
+    const memberships = (await this.repository.listEdges(this.userId))
+      .filter((edge) => edge.relationType === 'part_of' && chapters.has(edge.fromNodeId))
+      .map((edge) => ({ topicId: edge.toNodeId, chapterId: edge.fromNodeId }));
+    let mapChanged = false;
+
+    for (const topic of topics) {
+      const indexes = await this.repository.listKnowledgeNotes(this.userId, topic.id);
+      const contentByKey = new Map<string, string>();
       for (const index of indexes) {
         const note = await this.repository.getKnowledgeNote(this.userId, index.topicId, index.chapterId);
-        if (note === null) continue;
-        const key = idKey(note.topicId, note.chapterId);
-        const mapped = this.legacyMap[key];
-        // A persisted mapping is also a tombstone: deleting a migrated Markdown file is a
-        // user action and must never silently resurrect its archived SQLite copy.
-        if (mapped !== undefined) continue;
-        const base = this.defaultLegacyPath(note.topicId, note.chapterId);
+        if (note !== null) contentByKey.set(idKey(index.topicId, index.chapterId), note.content);
+      }
+      const targets = [
+        { chapterId: null, title: topic.title },
+        ...memberships.filter((entry) => entry.topicId === topic.id).map((entry) => ({ chapterId: entry.chapterId, title: chapters.get(entry.chapterId)?.title ?? entry.chapterId })),
+        ...indexes.flatMap((entry) => entry.chapterId === null ? [] : [{ chapterId: entry.chapterId, title: chapters.get(entry.chapterId)?.title ?? entry.chapterId }]),
+      ];
+      const uniqueTargets = new Map(targets.map((target) => [idKey(topic.id, target.chapterId), target]));
+      for (const [key, target] of uniqueTargets) {
+        if (this.legacyMap[key] !== undefined) continue;
+        const indexedPath = this.semanticNotePathByKey.get(key);
+        if (indexedPath !== undefined) {
+          this.legacyMap[key] = indexedPath;
+          mapChanged = true;
+          continue;
+        }
+        const base = this.defaultLegacyPath(topic.id, target.chapterId);
         let candidate = base;
         for (let collision = 1; await this.pathExists(candidate); collision += 1) {
-          const existing = await this.getFileInternal(candidate).catch((error) => {
-            if (missing(error)) return null;
-            throw error;
-          });
-          if (existing?.content === note.content) break;
           const ext = path.posix.extname(base);
           candidate = `${base.slice(0, -ext.length)}-${String(collision)}${ext}`;
         }
-        const current = await this.getFileInternal(candidate).catch((error) => {
+        const body = contentByKey.get(key) ?? `# ${target.title}\n`;
+        const noteType = target.chapterId === null ? 'topic' : 'chapter';
+        const frontmatter = {
+          id: target.chapterId ?? topic.id,
+          noteType,
+          topicId: topic.id,
+          chapterId: target.chapterId,
+          title: target.title,
+        };
+        await this.writeFileInternal(candidate, this.documentWithFrontmatter(body, frontmatter), undefined, false);
+        this.legacyMap[key] = candidate;
+        this.semanticNotePathByKey.set(key, candidate);
+        mapChanged = true;
+      }
+    }
+
+    // Existing legacy maps can point at notes written before frontmatter support. Add IDs in place,
+    // retaining their Markdown body and every user-authored field.
+    for (const topic of topics) {
+      const indexes = await this.repository.listKnowledgeNotes(this.userId, topic.id);
+      const chapterIds = new Set([
+        ...memberships.filter((entry) => entry.topicId === topic.id).map((entry) => entry.chapterId),
+        ...indexes.map((entry) => entry.chapterId).filter((id): id is string => id !== null),
+      ]);
+      for (const chapterId of [null, ...chapterIds]) {
+        const key = idKey(topic.id, chapterId);
+        let notePath = this.legacyMap[key];
+        if (notePath === undefined) continue;
+        try {
+          const current = await this.getFileInternal(notePath);
+          const noteType = chapterId === null ? 'topic' : 'chapter';
+          const title = chapterId === null ? topic.title : chapters.get(chapterId)?.title ?? chapterId;
+          const next = this.documentWithFrontmatter(current.content, {
+            id: chapterId ?? topic.id, noteType, topicId: topic.id, chapterId, title,
+          });
+          if (next !== current.content) await this.writeFileInternal(notePath, next, current.etag, false);
+        } catch (error) {
+          if (!missing(error)) throw error;
+        }
+      }
+    }
+    if (mapChanged) await this.saveLegacyMap();
+  }
+
+  private documentWithFrontmatter(content: string, updates: Record<string, unknown>): string {
+    const parsed = parseFrontmatterValue(content);
+    const match = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(content);
+    if (match !== null && parseDocument(match[1] ?? '', { uniqueKeys: false }).errors.length > 0) {
+      throw knowledgeError('invalid_request', 'Frontmatter YAML 无法解析；已停止更新元数据以保留原文');
+    }
+    const merged = { ...parsed, ...updates };
+    const serialized = stringifyYaml(merged, { lineWidth: 0 }).trimEnd();
+    if (match !== null) return `---\n${serialized}\n---${content.slice(match[0].length)}`;
+    return `---\n${serialized}\n---\n${content}`;
+  }
+
+  private async pathForLibraryDocument(kind: 'source' | 'item', id: string): Promise<string | null> {
+    const key = libraryMapKey(kind, id);
+    const indexed = this.libraryPathByKey.get(key);
+    if (indexed !== undefined) {
+      if (this.legacyMap[key] !== indexed) {
+        this.legacyMap[key] = indexed;
+        if (!this.migratingLibrary) await this.saveLegacyMap();
+      }
+      return indexed;
+    }
+    const mapped = this.legacyMap[key];
+    if (mapped !== undefined) return await this.pathExists(mapped) ? mapped : null;
+    const base = this.defaultLibraryPath(kind, id);
+    let candidate = base;
+    for (let collision = 1; await this.pathExists(candidate); collision += 1) {
+      const suffix = `-${sha256(id).slice(0, 8)}${collision === 1 ? '' : `-${String(collision)}`}`;
+      const ext = path.posix.extname(base);
+      candidate = `${base.slice(0, -ext.length)}${suffix}${ext}`;
+    }
+    return candidate;
+  }
+
+  private async writeLibraryDocument(
+    kind: 'source' | 'item',
+    id: string,
+    frontmatter: Record<string, unknown>,
+    initialBody: string,
+  ): Promise<string | null> {
+    const key = libraryMapKey(kind, id);
+    const notePath = await this.pathForLibraryDocument(kind, id);
+    if (notePath === null) return null; // persisted mapping is a deletion tombstone
+    const current = await this.getFileInternal(notePath).catch((error) => {
+      if (missing(error)) return null;
+      throw error;
+    });
+    if (current === null) {
+      await this.writeFileInternal(notePath, this.documentWithFrontmatter(initialBody, frontmatter), undefined, false);
+    } else {
+      const next = this.documentWithFrontmatter(current.content, frontmatter);
+      if (next !== current.content) await this.writeFileInternal(notePath, next, current.etag, false);
+    }
+    this.legacyMap[key] = notePath;
+    this.libraryPathByKey.set(key, notePath);
+    return notePath;
+  }
+
+  private async topicAndChapterIds(items: readonly KnowledgeItem[], userId: string): Promise<{ topicIds: string[]; chapterIds: string[] }> {
+    if (items.length === 0) return { topicIds: [], chapterIds: [] };
+    const nodes = await this.repository.listNodes(userId, { includeArchived: true });
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const topics = new Set<string>();
+    const chapters = new Set<string>();
+    for (const item of items) {
+      for (const link of await this.repository.listLinksForItem(item.id, userId)) {
+        for (const segment of await this.repository.nodePath(userId, link.nodeId)) {
+          const node = byId.get(segment.id);
+          if (node?.nodeType === 'topic') topics.add(node.id);
+          if (node?.nodeType === 'chapter') chapters.add(node.id);
+        }
+      }
+    }
+    return { topicIds: [...topics].sort(), chapterIds: [...chapters].sort() };
+  }
+
+  private async syncSourceDocuments(source: RawSource, userId: string): Promise<string[]> {
+    const items = await this.repository.listKnowledgeItemsForSource(source.id, userId);
+    const notePaths: string[] = [];
+    const library = source.metadata.library !== null && typeof source.metadata.library === 'object' && !Array.isArray(source.metadata.library)
+      ? source.metadata.library as Record<string, unknown>
+      : {};
+    const ids = await this.topicAndChapterIds(items, userId);
+    const sourceFrontmatter = {
+      id: source.id,
+      noteType: 'source',
+      sourceIds: [source.id],
+      itemIds: items.map((item) => item.id),
+      topicIds: ids.topicIds,
+      chapterIds: ids.chapterIds,
+      topicId: ids.topicIds[0] ?? null,
+      chapterId: ids.chapterIds[0] ?? null,
+      sourceType: source.sourceType,
+      sourceTitle: source.sourceTitle,
+      sourceUrl: source.sourceUrl,
+      sourcePlatform: source.sourcePlatform,
+      sourceApp: source.sourceApp,
+      capturedAt: source.capturedAt,
+      citation: library.citation ?? null,
+      page: library.page ?? null,
+      author: library.author ?? null,
+      doi: library.doi ?? null,
+      sourceMetadata: source.metadata,
+      surroundingContext: source.surroundingContext,
+      processingStatus: source.processingStatus,
+      errorReason: source.errorReason,
+      createdAt: source.createdAt,
+      requestId: source.requestId,
+      clientId: source.clientId,
+      archived: typeof library.archivedAt === 'string' && library.archivedAt.length > 0,
+      aiStatus: source.processingStatus,
+    };
+    const sourcePath = await this.writeLibraryDocument('source', source.id, sourceFrontmatter, source.rawText);
+    if (sourcePath !== null) notePaths.push(sourcePath);
+
+    for (const item of items) {
+      const itemIds = await this.topicAndChapterIds([item], userId);
+      const itemPath = await this.writeLibraryDocument('item', item.id, {
+        id: item.id,
+        noteType: 'item',
+        itemIds: [item.id],
+        sourceIds: [source.id],
+        topicIds: itemIds.topicIds,
+        chapterIds: itemIds.chapterIds,
+        topicId: itemIds.topicIds[0] ?? null,
+        chapterId: itemIds.chapterIds[0] ?? null,
+        title: source.sourceTitle ?? item.id,
+        sourceType: source.sourceType,
+        sourceTitle: source.sourceTitle,
+        sourceUrl: source.sourceUrl,
+        sourcePlatform: source.sourcePlatform,
+        sourceApp: source.sourceApp,
+        capturedAt: source.capturedAt,
+        citation: library.citation ?? null,
+        page: library.page ?? null,
+        author: library.author ?? null,
+        doi: library.doi ?? null,
+        summary: item.summary,
+        confidence: item.confidence,
+        itemStatus: item.status,
+        isAiDerived: item.isAiDerived,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        archived: typeof library.archivedAt === 'string' && library.archivedAt.length > 0,
+        aiStatus: source.processingStatus,
+      }, item.normalizedText);
+      if (itemPath !== null) notePaths.push(itemPath);
+    }
+    return notePaths;
+  }
+
+  private async migrateLegacyLibrary(): Promise<void> {
+    this.migratingLibrary = true;
+    try {
+      let offset = 0;
+      const limit = 200;
+      while (true) {
+        const sources = await this.repository.listInbox({ userId: this.userId, limit, offset });
+        // ponytail: bounded writes keep per-file fsync durability without serializing 1k-note migration.
+        for (let index = 0; index < sources.length; index += 24) {
+          await Promise.all(sources.slice(index, index + 24).map((source) => this.syncSourceDocuments(source, this.userId)));
+        }
+        offset += sources.length;
+        if (sources.length < limit) break;
+      }
+    } finally {
+      this.migratingLibrary = false;
+    }
+    await this.saveLegacyMap();
+  }
+
+  async syncSource(rawSourceId: string, userId = this.userId): Promise<void> {
+    await this.ensureReady();
+    const expectedRoot = this.rootPath;
+    await this.serializeMutation(async () => {
+      const source = await this.repository.findRawSource(rawSourceId, userId);
+      if (source === null) return;
+      const notePaths = await this.syncSourceDocuments(source, userId);
+      await this.saveLegacyMap();
+      await this.refreshKnownPaths(notePaths);
+    }, expectedRoot);
+  }
+
+  async sourceBody(rawSourceId: string): Promise<string | null> {
+    await this.ensureReady();
+    const notePath = await this.pathForLibraryDocument('source', rawSourceId);
+    if (notePath === null) return null;
+    const file = this.cache.get(notePath);
+    return file === undefined ? null : markdownBody(file.content);
+  }
+
+  /** An explicit library edit updates its source note and human-authored item projections. */
+  async replaceLibraryContent(rawSourceId: string, body: string, userId = this.userId): Promise<void> {
+    await this.ensureReady();
+    const expectedRoot = this.rootPath;
+    await this.serializeMutation(async () => {
+      const source = await this.repository.findRawSource(rawSourceId, userId);
+      if (source === null) return;
+      const items = await this.repository.listKnowledgeItemsForSource(rawSourceId, userId);
+      const writes: Array<{ kind: 'source' | 'item'; id: string }> = [
+        { kind: 'source', id: rawSourceId },
+        ...items.filter((item) => !item.isAiDerived).map((item) => ({ kind: 'item' as const, id: item.id })),
+      ];
+      const notePaths: string[] = [];
+      for (const entry of writes) {
+        const notePath = await this.pathForLibraryDocument(entry.kind, entry.id);
+        if (notePath === null) continue;
+        const current = await this.getFileInternal(notePath).catch((error) => {
           if (missing(error)) return null;
           throw error;
         });
-        if (current === null) await this.writeFileInternal(candidate, note.content, undefined, false);
-        this.legacyMap[key] = candidate;
-        changed = true;
+        if (current === null) continue;
+        const prefix = /^---\r?\n[\s\S]*?\r?\n---(?=\r?\n|$)\r?\n?/.exec(current.content)?.[0] ?? '';
+        const next = `${prefix}${body}`;
+        if (next !== current.content) {
+          await this.writeFileInternal(notePath, next, current.etag, false);
+          notePaths.push(notePath);
+        }
+      }
+      await this.refreshKnownPaths(notePaths);
+    }, expectedRoot);
+  }
+
+  async semanticFileIndex(): Promise<SemanticNoteFile[]> {
+    await this.ensureReady();
+    return [...this.cache.values()].map((file) => {
+      const frontmatter = file.metadata.frontmatter ?? {};
+      const firstHeading = file.metadata.headings?.[0]?.heading;
+      const title = typeof frontmatter.title === 'string' ? frontmatter.title : firstHeading ?? basenameWithoutExtension(file.path);
+      return {
+        path: file.path,
+        frontmatter,
+        title,
+        summary: typeof frontmatter.summary === 'string' ? frontmatter.summary : null,
+        links: Object.keys(this.resolvedLinks[file.path] ?? {}),
+      };
+    });
+  }
+
+  private async syncSqlProjection(filePath: string): Promise<void> {
+    const file = this.cache.get(filePath);
+    const frontmatter = file?.metadata.frontmatter;
+    if (file === undefined || frontmatter?.noteType !== 'item' || typeof frontmatter.id !== 'string') return;
+    const item = await this.repository.findKnowledgeItem(frontmatter.id, this.userId);
+    if (item === null) return;
+    const body = markdownBody(file.content);
+    const summary = typeof frontmatter.summary === 'string' ? frontmatter.summary : null;
+    if (item.normalizedText !== body || item.summary !== summary) {
+      await this.repository.updateKnowledgeItem(item.id, this.userId, { normalizedText: body, summary });
+    }
+    await this.syncItemLinksFromFrontmatter(item, frontmatter);
+  }
+
+  private async syncItemLinksFromFrontmatter(item: KnowledgeItem, frontmatter: Record<string, unknown>): Promise<void> {
+    const hasRelations = ['topicId', 'topicIds', 'chapterId', 'chapterIds'].some((key) => key in frontmatter);
+    if (!hasRelations) return;
+    const topicIds = [...new Set([
+      ...(typeof frontmatter.topicId === 'string' ? [frontmatter.topicId] : []),
+      ...stringArray(frontmatter.topicIds),
+    ])];
+    const chapterIds = [...new Set([
+      ...(typeof frontmatter.chapterId === 'string' ? [frontmatter.chapterId] : []),
+      ...stringArray(frontmatter.chapterIds),
+    ])];
+    const desiredIds = new Set(chapterIds);
+    for (const topicId of topicIds) {
+      let coveredByChapter = false;
+      for (const chapterId of chapterIds) {
+        const chapterPath = await this.repository.nodePath(this.userId, chapterId);
+        if (chapterPath.some((segment) => segment.id === topicId)) { coveredByChapter = true; break; }
+      }
+      if (!coveredByChapter) desiredIds.add(topicId);
+    }
+    const desired: Array<{ id: string; node: KnowledgeNode }> = [];
+    for (const id of desiredIds) {
+      const node = await this.repository.findNode(id, this.userId);
+      const expectedType = chapterIds.includes(id) ? 'chapter' : 'topic';
+      if (node === null || node.nodeType !== expectedType || node.status === 'archived') return;
+      desired.push({ id, node });
+    }
+    const existing = await this.repository.listLinksForItem(item.id, this.userId);
+    if (desired.length === 0 && existing.length > 0) {
+      for (const link of existing) {
+        const node = await this.repository.findNode(link.nodeId, this.userId);
+        if (node?.nodeType !== 'topic' && node?.nodeType !== 'chapter') return;
       }
     }
-    if (changed) await this.saveLegacyMap();
+    const existingIds = new Set(existing.map((link) => link.nodeId));
+    if (existingIds.size === desired.length && desired.every(({ id }) => existingIds.has(id))) return;
+    await this.repository.unlinkItemFromNodes(item.id, this.userId);
+    const fallback = existing[0];
+    for (const { id } of desired) {
+      const prior = existing.find((link) => link.nodeId === id) ?? fallback;
+      await this.repository.linkItemToNode({
+        userId: this.userId,
+        itemId: item.id,
+        nodeId: id,
+        relationType: prior?.relationType ?? 'primary',
+        confidence: prior?.confidence ?? item.confidence,
+      });
+    }
   }
 
   private defaultLegacyPath(topicId: string, chapterId: string | null): string {
     const topic = encodeURIComponent(topicId);
     const chapter = chapterId === null ? 'topic' : encodeURIComponent(chapterId);
     return `_legacy/${topic}/${chapter}.md`;
+  }
+
+  private defaultLibraryPath(kind: 'source' | 'item', id: string): string {
+    return `_library/${kind === 'source' ? 'Sources' : 'Items'}/${encodeURIComponent(id)}.md`;
   }
 
   private async pathExists(relative: string): Promise<boolean> {
@@ -337,7 +721,7 @@ export class VaultService {
     }
   }
 
-  private async safePath(relativeInput: string, allowMissing = true): Promise<string> {
+  private async safePath(relativeInput: string, allowMissing = true, physicalPaths = this.physicalPaths): Promise<string> {
     const relative = normalizeVaultPath(relativeInput);
     if (relative === '') throw knowledgeError('invalid_request', 'Vault 文件路径不能为空');
     const absolute = path.resolve(this.rootPath, ...relative.split('/'));
@@ -349,7 +733,7 @@ export class VaultService {
     const parts = relative.split('/');
     for (const part of parts) {
       prefix = prefix === '' ? part : `${prefix}/${part}`;
-      cursor = this.physicalPaths.get(prefix) ?? path.join(cursor, part);
+      cursor = physicalPaths.get(prefix) ?? path.join(cursor, part);
       try {
         const info = await lstat(cursor);
         if (info.isSymbolicLink()) throw knowledgeError('invalid_request', 'Vault 不跟随符号链接');
@@ -375,7 +759,12 @@ export class VaultService {
         if (info.isSymbolicLink() || !info.isDirectory()) throw knowledgeError('invalid_request', 'Vault 目录不安全');
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        await mkdir(cursor);
+        try { await mkdir(cursor); }
+        catch (createError) {
+          if ((createError as NodeJS.ErrnoException).code !== 'EEXIST') throw createError;
+        }
+        const created = await lstat(cursor);
+        if (created.isSymbolicLink() || !created.isDirectory()) throw knowledgeError('invalid_request', 'Vault 目录不安全');
       }
     }
     return path.join(cursor, fileName);
@@ -475,7 +864,7 @@ export class VaultService {
     }
   }
 
-  private async scanDirectory(directory: string, relative: string, folders: VaultEntry[], files: VaultEntry[]): Promise<void> {
+  private async scanDirectory(directory: string, relative: string, folders: VaultEntry[], files: VaultEntry[], physicalPaths = this.physicalPaths): Promise<void> {
     const children = await readdir(directory, { withFileTypes: true });
     for (const child of children) {
       if (child.name.startsWith('.noltri-tmp-') || child.name.startsWith('.noltri-trash-') || child.isSymbolicLink()) continue;
@@ -485,29 +874,281 @@ export class VaultService {
       if (child.isDirectory()) {
         if (IGNORED_DIRECTORY_NAMES.has(child.name)) continue;
         const info = await stat(absolute);
-        this.physicalPaths.set(childPath, absolute);
+        physicalPaths.set(childPath, absolute);
         folders.push({ path: childPath, name: child.name, kind: 'folder', mtime: info.mtimeMs, ctime: info.ctimeMs });
-        await this.scanDirectory(absolute, childPath, folders, files);
+        await this.scanDirectory(absolute, childPath, folders, files, physicalPaths);
       } else if (child.isFile()) {
         const info = await stat(absolute);
-        this.physicalPaths.set(childPath, absolute);
+        physicalPaths.set(childPath, absolute);
         files.push({ path: childPath, name: child.name, kind: 'file', extension: extensionOf(child.name), mtime: info.mtimeMs, ctime: info.ctimeMs, size: info.size });
       }
     }
   }
 
-  private async refresh(force: boolean): Promise<void> {
-    this.refreshQueue = this.refreshQueue.catch(() => undefined).then(() => this.refreshOnce(force));
+  private async refresh(force: boolean, watchEvents?: VaultWatchEvent[]): Promise<void> {
+    this.refreshQueue = this.refreshQueue.catch(() => undefined).then(() => this.refreshOnce(force, watchEvents));
     return await this.refreshQueue;
   }
 
-  private async refreshOnce(force: boolean): Promise<void> {
+  private async refreshKnownPaths(paths: readonly string[]): Promise<void> {
+    const uniquePaths = [...new Set(paths.map((filePath) => normalizeVaultPath(filePath)))];
+    if (uniquePaths.length === 0) return;
+    if (uniquePaths.length > 512) return await this.refresh(true);
+    const events = uniquePaths.map((filePath) => {
+      const parent = path.posix.dirname(filePath);
+      return {
+        relativeDirectory: parent === '.' ? '' : parent,
+        eventType: 'change',
+        fileName: path.posix.basename(filePath),
+      };
+    });
+    await this.refresh(true, events);
+  }
+
+  private async refreshWatchEvents(events: VaultWatchEvent[]): Promise<boolean> {
+    if (events.length === 0) return false;
+    // ponytail: batches above 512 events use a full scan; bulk-import indexing can become incremental later.
+    if (events.length > 512) return false;
+    const entriesByKey = new Map(this.entries.map((entry) => [pathKey(entry.path), entry]));
+    const changes = new Map<string, { path: string; oldEntry: VaultEntry | null; entry: VaultEntry | null; absolute: string | null }>();
+    const reconciledParents = new Set<string>();
+    const reconcileParent = async (relativeDirectory: string, absoluteDirectory: string): Promise<boolean> => {
+      const parentKey = pathKey(relativeDirectory);
+      if (reconciledParents.has(parentKey)) return true;
+      let children: import('node:fs').Dirent[];
+      try { children = await readdir(absoluteDirectory, { withFileTypes: true }); }
+      catch { return false; }
+      const oldChildren = this.entries.filter((entry) => {
+        const directory = path.posix.dirname(entry.path);
+        return pathKey(directory === '.' ? '' : directory) === parentKey;
+      });
+      const diskKeys = new Set<string>();
+      const seenNames = new Map<string, string>();
+      for (const child of children) {
+        if (child.name.startsWith('.noltri-tmp-') || child.name.startsWith('.noltri-trash-') || child.isSymbolicLink()) continue;
+        if (child.isDirectory() && IGNORED_DIRECTORY_NAMES.has(child.name)) continue;
+        let name: string;
+        try { name = normalizeVaultPathComponent(child.name); }
+        catch { return false; }
+        const relativePath = relativeDirectory === '' ? name : `${relativeDirectory}/${name}`;
+        const key = pathKey(relativePath);
+        const previousName = seenNames.get(key);
+        if (previousName !== undefined && previousName !== child.name) {
+          throw knowledgeError('conflict', `Vault 存在大小写或 Unicode 路径冲突：${previousName} / ${child.name}`);
+        }
+        seenNames.set(key, child.name);
+        const oldEntry = entriesByKey.get(key) ?? null;
+        if (oldEntry !== null && oldEntry.path !== relativePath) return false;
+        const absolute = path.join(absoluteDirectory, child.name);
+        if (child.isDirectory()) {
+          if (oldEntry?.kind !== 'folder') return false;
+          let info;
+          try { info = await lstat(absolute); }
+          catch { return false; }
+          if (!info.isDirectory() || oldEntry.mtime !== info.mtimeMs || oldEntry.ctime !== info.ctimeMs) return false;
+          diskKeys.add(key);
+          continue;
+        }
+        if (!child.isFile() || oldEntry?.kind === 'folder') return false;
+        let info;
+        try { info = await lstat(absolute); }
+        catch { return false; }
+        if (info.isSymbolicLink() || !info.isFile()) return false;
+        diskKeys.add(key);
+        if (oldEntry === null) {
+          const entry: VaultEntry = { path: relativePath, name: child.name, kind: 'file', extension: extensionOf(child.name), mtime: info.mtimeMs, ctime: info.ctimeMs, size: info.size };
+          const previous = changes.get(key);
+          if (previous !== undefined && (previous.path !== relativePath || previous.absolute !== absolute)) return false;
+          changes.set(key, { path: relativePath, oldEntry: null, entry, absolute });
+        }
+      }
+      for (const oldEntry of oldChildren) {
+        const key = pathKey(oldEntry.path);
+        if (diskKeys.has(key)) continue;
+        if (oldEntry.kind === 'folder') return false;
+        changes.set(key, { path: oldEntry.path, oldEntry, entry: null, absolute: null });
+      }
+      reconciledParents.add(parentKey);
+      return true;
+    };
+    for (const event of events) {
+      if (event.fileName === null || event.eventType !== 'change' && event.eventType !== 'rename') return false;
+      const rawName = Buffer.isBuffer(event.fileName) ? event.fileName.toString() : event.fileName;
+      if (rawName === '' || rawName.includes('/') || rawName.includes('\\')) return false;
+      if (rawName.startsWith('.noltri-tmp-') || rawName.startsWith('.noltri-trash-')) continue;
+      let name: string;
+      try { name = normalizeVaultPathComponent(rawName); }
+      catch { return false; }
+      if (name === '' || name.trim() === '' || name === '.' || name === '..') return false;
+      let relativeDirectory: string;
+      try { relativeDirectory = normalizeVaultPath(event.relativeDirectory); }
+      catch { return false; }
+      if (relativeDirectory !== event.relativeDirectory) return false;
+      const parentEntry = relativeDirectory === '' ? null : entriesByKey.get(pathKey(relativeDirectory));
+      if (relativeDirectory !== '' && (parentEntry?.kind !== 'folder' || parentEntry.path !== relativeDirectory)) return false;
+      let absoluteDirectory: string;
+      try {
+        absoluteDirectory = relativeDirectory === '' ? this.rootPath : await this.safePath(relativeDirectory, false);
+        if (!(await lstat(absoluteDirectory)).isDirectory()) return false;
+      } catch { return false; }
+      if (event.eventType === 'rename') {
+        let physicalNames: string[];
+        try { physicalNames = await readdir(absoluteDirectory); }
+        catch { return false; }
+        const canonicalMatches = physicalNames.filter((physicalName) => pathKey(physicalName) === pathKey(rawName));
+        if (canonicalMatches.length > 1 || (canonicalMatches.length === 1 && canonicalMatches[0] !== rawName)) return false;
+      }
+
+      const relativePath = relativeDirectory === '' ? name : `${relativeDirectory}/${name}`;
+      const key = pathKey(relativePath);
+      const oldEntry = entriesByKey.get(key) ?? null;
+      if (oldEntry?.kind === 'folder') return false;
+      const previous = changes.get(key);
+      if (previous !== undefined && previous.path !== relativePath) return false;
+      const mappedAbsolute = oldEntry === null ? null : this.physicalPaths.get(oldEntry.path) ?? null;
+      if (mappedAbsolute !== null && path.basename(mappedAbsolute) !== rawName) return false;
+      let absolute = mappedAbsolute ?? path.join(absoluteDirectory, rawName);
+      if (oldEntry !== null) {
+        try { absolute = await this.safePath(oldEntry.path, false); }
+        catch (error) {
+          if (!missing(error) || !(await reconcileParent(relativeDirectory, absoluteDirectory))) return false;
+          continue;
+        }
+      }
+      let info;
+      try { info = await lstat(absolute); }
+      catch (error) {
+        if (oldEntry !== null && missing(error)) {
+          if (!(await reconcileParent(relativeDirectory, absoluteDirectory))) return false;
+          continue;
+        }
+        if (oldEntry === null && missing(error)) return false;
+        return false;
+      }
+      if (info.isSymbolicLink() || !info.isFile()) return false;
+      const entry: VaultEntry = {
+        path: oldEntry?.path ?? relativePath,
+        name: path.basename(absolute),
+        kind: 'file',
+        extension: extensionOf(path.basename(absolute)),
+        mtime: info.mtimeMs,
+        ctime: info.ctimeMs,
+        size: info.size,
+      };
+      if (previous !== undefined && previous.absolute !== absolute) return false;
+      changes.set(key, { path: entry.path, oldEntry, entry, absolute });
+    }
+    if (changes.size === 0) return true;
+
+    const changedKeys = new Set(changes.keys());
+    const nextEntries = this.entries.filter((entry) => !changedKeys.has(pathKey(entry.path)));
+    const nextPhysicalPaths = new Map(this.physicalPaths);
+    for (const change of changes.values()) {
+      if (change.oldEntry !== null) nextPhysicalPaths.delete(change.oldEntry.path);
+      if (change.entry !== null && change.absolute !== null) {
+        nextEntries.push(change.entry);
+        nextPhysicalPaths.set(change.entry.path, change.absolute);
+      }
+    }
+    nextEntries.sort((a, b) => a.path.localeCompare(b.path));
+
+    const nextCache = new Map(this.cache);
+    const deletedPaths: string[] = [];
+    const historyWrites: Array<{ path: string; file: CachedFile }> = [];
+    const changedPaths: string[] = [];
+    const failureUpdates = new Map<string, { path: string; error: string; at: string } | null>();
+    for (const change of changes.values()) {
+      const filePath = change.path;
+      const old = this.cache.get(filePath);
+      if (change.entry === null) {
+        if (old !== undefined) {
+          historyWrites.push({ path: filePath, file: old });
+          nextCache.delete(filePath);
+          deletedPaths.push(filePath);
+        }
+        failureUpdates.set(filePath, null);
+        continue;
+      }
+      const entry = change.entry;
+      if (!isMarkdownPath(entry.path)) continue;
+      if (change.absolute === null) return false;
+      try {
+        const absolute = await this.safePath(entry.path, false, nextPhysicalPaths);
+        const content = await readFile(absolute, 'utf8');
+        const etag = sha256(content);
+        let result = this.metadataByHash.get(etag);
+        if (result === undefined) {
+          if (this.parser === null) throw new Error('Markdown parser worker is not initialized');
+          result = await this.parser.parse(content);
+          this.metadataByHash.set(etag, result);
+        }
+        const indexed: CachedFile = {
+          path: entry.path, mtime: entry.mtime ?? 0, size: entry.size ?? 0, etag, content, metadata: result.metadata,
+          codeRanges: result.codeRanges, frontmatterRange: result.frontmatterRange,
+        };
+        if (old !== undefined && old.etag !== etag) historyWrites.push({ path: entry.path, file: old });
+        nextCache.set(entry.path, indexed);
+        if (old?.etag !== etag) changedPaths.push(entry.path);
+        failureUpdates.set(entry.path, null);
+        this.hashLastUsed.set(etag, Date.now());
+      } catch (error) {
+        if (missing(error)) return false;
+        failureUpdates.set(entry.path, { path: entry.path, error: error instanceof Error ? error.message : String(error), at: new Date().toISOString() });
+        if (old !== undefined) nextCache.set(entry.path, old);
+      }
+    }
+    for (const { path: historyPath, file } of historyWrites) await this.addHistory(historyPath, file.content, file.etag, deletedPaths.includes(historyPath));
+    for (const entry of nextEntries) {
+      if (entry.kind !== 'file') continue;
+      const indexed = nextCache.get(entry.path);
+      if (indexed?.metadata.frontmatter !== undefined) entry.frontmatter = indexed.metadata.frontmatter;
+    }
+    const nextLibraryPathByKey = new Map<string, string>();
+    const nextSemanticNotePathByKey = new Map<string, string>();
+    for (const [filePath, file] of nextCache) {
+      const frontmatter = file.metadata.frontmatter;
+      if ((frontmatter?.noteType === 'source' || frontmatter?.noteType === 'item') && typeof frontmatter.id === 'string') {
+        const key = libraryMapKey(frontmatter.noteType, frontmatter.id);
+        if (!nextLibraryPathByKey.has(key)) nextLibraryPathByKey.set(key, filePath);
+      }
+      if ((frontmatter?.noteType === 'topic' || frontmatter?.noteType === 'chapter')
+        && typeof frontmatter.topicId === 'string'
+        && (typeof frontmatter.chapterId === 'string' || frontmatter.chapterId === null)) {
+        const key = idKey(frontmatter.topicId, frontmatter.chapterId);
+        if (!nextSemanticNotePathByKey.has(key)) nextSemanticNotePathByKey.set(key, filePath);
+      }
+    }
+    const oldLinks = JSON.stringify([this.resolvedLinks, this.unresolvedLinks]);
+    this.entries = nextEntries;
+    this.physicalPaths = nextPhysicalPaths;
+    this.cache = nextCache;
+    this.libraryPathByKey = nextLibraryPathByKey;
+    this.semanticNotePathByKey = nextSemanticNotePathByKey;
+    for (const [filePath, failure] of failureUpdates) {
+      if (failure === null) this.failedFiles.delete(filePath);
+      else this.failedFiles.set(filePath, failure);
+    }
+    for (const filePath of deletedPaths) this.failedFiles.delete(filePath);
+    await this.rebuildLinks();
+    for (const filePath of changedPaths) await this.syncSqlProjection(filePath);
+    this.attachWatchers();
+    this.lastIndexedAt = new Date().toISOString();
+    for (const filePath of changedPaths) this.emit('changed', filePath);
+    for (const filePath of deletedPaths) this.emit('deleted', filePath);
+    if (oldLinks !== JSON.stringify([this.resolvedLinks, this.unresolvedLinks])) this.emit('resolved', '');
+    await this.persistHashCache();
+    return true;
+  }
+
+  private async refreshOnce(force: boolean, watchEvents?: VaultWatchEvent[]): Promise<void> {
     this.indexing = true;
     try {
+      if (watchEvents !== undefined && await this.refreshWatchEvents(watchEvents)) return;
+      const previousCache = this.cache;
       const folders: VaultEntry[] = [];
       const files: VaultEntry[] = [];
-      this.physicalPaths.clear();
-      await this.scanDirectory(this.rootPath, '', folders, files);
+      const nextPhysicalPaths = new Map<string, string>();
+      await this.scanDirectory(this.rootPath, '', folders, files, nextPhysicalPaths);
       const knownPaths = new Map<string, string>();
       for (const entry of [...folders, ...files]) {
         const key = pathKey(entry.path);
@@ -518,6 +1159,7 @@ export class VaultService {
       files.sort((a, b) => a.path.localeCompare(b.path));
       folders.sort((a, b) => a.path.localeCompare(b.path));
       const nextCache = new Map<string, CachedFile>();
+      const deletedPaths: string[] = [];
       let lastYield = Date.now();
       for (let index = 0; index < files.length; index += 1) {
         const entry = files[index]!;
@@ -530,7 +1172,7 @@ export class VaultService {
             this.hashLastUsed.set(old.etag, Date.now());
             continue;
           }
-          const absolute = await this.safePath(entry.path, false);
+          const absolute = await this.safePath(entry.path, false, nextPhysicalPaths);
           const content = await readFile(absolute, 'utf8');
           const etag = sha256(content);
           // Keep the last indexed bytes before an external edit replaces them.
@@ -549,7 +1191,6 @@ export class VaultService {
             codeRanges: result.codeRanges, frontmatterRange: result.frontmatterRange,
           });
           this.failedFiles.delete(entry.path);
-          if (old?.etag !== etag) this.emit('changed', entry.path);
         } catch (error) {
           this.failedFiles.set(entry.path, { path: entry.path, error: error instanceof Error ? error.message : String(error), at: new Date().toISOString() });
           // A transient read/parser failure must not evict a previously indexed note.
@@ -568,38 +1209,88 @@ export class VaultService {
         // even inside the normal 60s throttle window; exact duplicate snapshots
         // are deduplicated by addHistory below.
         await this.addHistory(oldPath, oldFile.content, oldFile.etag, true);
-        this.emit('deleted', oldPath);
+        deletedPaths.push(oldPath);
       }
+      const nextLibraryPathByKey = new Map<string, string>();
+      const nextSemanticNotePathByKey = new Map<string, string>();
+      for (const [filePath, file] of nextCache) {
+        const frontmatter = file.metadata.frontmatter;
+        if ((frontmatter?.noteType === 'source' || frontmatter?.noteType === 'item') && typeof frontmatter.id === 'string') {
+          const key = libraryMapKey(frontmatter.noteType, frontmatter.id);
+          if (!nextLibraryPathByKey.has(key)) nextLibraryPathByKey.set(key, filePath);
+        }
+        if ((frontmatter?.noteType === 'topic' || frontmatter?.noteType === 'chapter')
+          && typeof frontmatter.topicId === 'string'
+          && (typeof frontmatter.chapterId === 'string' || frontmatter.chapterId === null)) {
+          const key = idKey(frontmatter.topicId, frontmatter.chapterId);
+          if (!nextSemanticNotePathByKey.has(key)) nextSemanticNotePathByKey.set(key, filePath);
+        }
+      }
+      const changedPaths: string[] = [];
+      for (const entry of files) {
+        const indexed = nextCache.get(entry.path);
+        if (indexed === undefined) continue;
+        const frontmatter = indexed.metadata.frontmatter;
+        if (frontmatter !== undefined) entry.frontmatter = frontmatter;
+        if (previousCache.get(entry.path)?.etag !== indexed.etag) changedPaths.push(entry.path);
+      }
+      // Publish a complete path/index snapshot atomically; readers must never see a cleared or partial physical-path map.
+      this.physicalPaths = nextPhysicalPaths;
       this.entries = [...folders, ...files];
       this.cache = nextCache;
+      this.libraryPathByKey = nextLibraryPathByKey;
+      this.semanticNotePathByKey = nextSemanticNotePathByKey;
       const oldLinks = JSON.stringify([this.resolvedLinks, this.unresolvedLinks]);
       await this.rebuildLinks();
-      if (oldLinks !== JSON.stringify([this.resolvedLinks, this.unresolvedLinks])) this.emit('resolved', '');
+      for (const filePath of changedPaths) await this.syncSqlProjection(filePath);
       this.attachWatchers();
       this.lastIndexedAt = new Date().toISOString();
+      // Publish file revisions only after the matching metadata, link, and SQL indexes are ready.
+      for (const filePath of changedPaths) this.emit('changed', filePath);
+      for (const filePath of deletedPaths) this.emit('deleted', filePath);
+      if (oldLinks !== JSON.stringify([this.resolvedLinks, this.unresolvedLinks])) this.emit('resolved', '');
       await this.persistHashCache();
     } finally { this.indexing = false; }
   }
 
   private attachWatchers(): void {
     if (this.closed) return;
-    const directories = [this.rootPath, ...this.entries.filter((entry) => entry.kind === 'folder').map((entry) => this.physicalPaths.get(entry.path) ?? path.join(this.rootPath, ...entry.path.split('/')))];
-    const keep = new Set(directories);
+    const generation = this.watcherGeneration;
+    const directories = [
+      { absolute: this.rootPath, relative: '' },
+      ...this.entries.filter((entry) => entry.kind === 'folder').map((entry) => ({
+        absolute: this.physicalPaths.get(entry.path) ?? path.join(this.rootPath, ...entry.path.split('/')),
+        relative: entry.path,
+      })),
+    ];
+    const keep = new Set(directories.map(({ absolute }) => absolute));
     for (const [directory, watcher] of this.watchers) {
       if (keep.has(directory)) continue;
       watcher.close();
       this.watchers.delete(directory);
     }
-    for (const directory of directories) {
-      if (this.watchers.has(directory)) continue;
+    for (const { absolute, relative } of directories) {
+      if (this.watchers.has(absolute)) continue;
       try {
-        const watcher = watchDirectory(directory, () => {
-          if (this.closed) return;
+        const watcher = watchDirectory(absolute, (eventType, fileName) => {
+          if (this.closed || generation !== this.watcherGeneration) return;
+          if (this.pendingWatchEvents.length <= 512) this.pendingWatchEvents.push({ relativeDirectory: relative, eventType, fileName });
+          else if (this.pendingWatchEvents[0]?.fileName !== null) this.pendingWatchEvents = [{ relativeDirectory: '', eventType: 'overflow', fileName: null }];
           if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
-          this.refreshTimer = setTimeout(() => { void this.refresh(true).catch(() => undefined); }, 45);
+          this.refreshTimer = setTimeout(() => {
+            this.refreshTimer = null;
+            const events = this.pendingWatchEvents;
+            this.pendingWatchEvents = [];
+            void this.refresh(true, events).catch(() => undefined);
+          }, 45);
         });
-        watcher.on('error', () => { watcher.close(); this.watchers.delete(directory); });
-        this.watchers.set(directory, watcher);
+        watcher.on('error', () => {
+          if (generation !== this.watcherGeneration) return;
+          watcher.close();
+          this.watchers.delete(absolute);
+          if (!this.closed) void this.refresh(true).catch(() => undefined);
+        });
+        this.watchers.set(absolute, watcher);
       } catch { /* a transiently removed folder is discovered by the next parent event */ }
     }
   }
@@ -802,45 +1493,109 @@ export class VaultService {
     const requested = path.resolve(rootPathInput);
     await mkdir(requested, { recursive: true });
     const nextRoot = await realpath(requested);
+    this.watcherGeneration += 1;
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+    this.pendingWatchEvents = [];
+    for (const watcher of this.watchers.values()) watcher.close();
+    this.watchers.clear();
     await this.refreshQueue.catch(() => undefined);
     this.rootPath = nextRoot;
     this.newLinkFormat = this.settingsByRoot.get(sha256(this.rootPath)) ?? 'shortest';
     this.settingsByRoot.set(sha256(this.rootPath), this.newLinkFormat);
     await this.persistSettings();
-    for (const watcher of this.watchers.values()) watcher.close();
-    this.watchers.clear();
     this.cache.clear();
     this.entries = [];
     this.physicalPaths.clear();
     this.historyIndex.clear();
     this.historyIndexLoaded = false;
     this.legacyMap = {};
+    this.propertyTypes = {};
+    this.propertyTypesConfig = {};
+    this.propertyTypesMalformed = false;
     this.legacyMapFile = this.mapFileFor(this.rootPath);
+    await this.loadPropertyTypes();
     await this.loadLegacyMap();
     await this.loadHashCache(this.rootPath);
     await this.refresh(true);
     await this.migrateLegacyNotes();
+    await this.migrateLegacyLibrary();
     await this.refresh(true);
     return this.snapshot();
   }
 
-  async getSettings(): Promise<VaultSettings> {
-    await this.ensureReady();
-    return { newLinkFormat: this.newLinkFormat };
+  async getSettings(requestRoot?: string): Promise<VaultSettings> {
+    if (requestRoot !== undefined && !path.isAbsolute(requestRoot)) {
+      throw knowledgeError('invalid_request', 'Vault 目录必须是绝对路径');
+    }
+    const expectedRoot = await this.mutationRootForCall(requestRoot);
+    return await this.serializeMutation(async () => this.settingsValue(), expectedRoot);
+  }
+
+  private settingsValue(): VaultSettings {
+    return { newLinkFormat: this.newLinkFormat, propertyTypes: { ...this.propertyTypes } };
   }
 
   async updateSettings(settings: VaultSettings, requestRoot?: string): Promise<VaultSettings> {
     const expectedRoot = await this.mutationRootForCall(requestRoot);
     return await this.serializeMutation(async () => {
+      if (settings.propertyTypes !== undefined) await this.persistPropertyTypes({ ...this.propertyTypes, ...settings.propertyTypes });
       this.newLinkFormat = settings.newLinkFormat;
       this.settingsByRoot.set(sha256(this.rootPath), this.newLinkFormat);
       await this.persistSettings();
-      return this.getSettings();
+      return this.settingsValue();
     }, expectedRoot);
   }
 
   private async persistSettings(): Promise<void> {
     await this.atomicWrite(this.settingsFile, JSON.stringify({ rootPath: this.rootPath, newLinkFormat: this.newLinkFormat, vaults: Object.fromEntries(this.settingsByRoot) }, null, 2));
+  }
+
+  private async loadPropertyTypes(): Promise<void> {
+    for (const relative of ['.noltri/types.json', '.obsidian/types.json']) {
+      let absolute: string;
+      try { absolute = await this.safePath(relative, false); }
+      catch (error) {
+        if (missing(error)) continue;
+        this.propertyTypesMalformed = true;
+        return;
+      }
+      let value: unknown;
+      try { value = JSON.parse(await readFile(absolute, 'utf8')); }
+      catch {
+        this.propertyTypesMalformed = true;
+        return;
+      }
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        this.propertyTypesMalformed = true;
+        return;
+      }
+      this.propertyTypesConfig = value as Record<string, unknown>;
+      const validTypes = new Set(['text', 'number', 'boolean', 'list', 'yaml']);
+      this.propertyTypes = Object.fromEntries(Object.entries(value).filter((entry): entry is [string, VaultPropertyTypes[string]] => validTypes.has(String(entry[1]))));
+      return;
+    }
+  }
+
+  private async persistPropertyTypes(propertyTypes: VaultPropertyTypes): Promise<void> {
+    if (this.propertyTypesMalformed) throw knowledgeError('invalid_request', 'Vault 属性类型配置无法解析或路径不安全；请先修复配置再保存');
+    const relative = '.noltri/types.json';
+    let existing: Record<string, unknown> = this.propertyTypesConfig;
+    try {
+      const absolute = await this.safePath(relative, false);
+      const value: unknown = JSON.parse(await readFile(absolute, 'utf8'));
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('types.json must contain an object');
+      existing = { ...existing, ...(value as Record<string, unknown>) };
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+    const absolute = await this.ensureParent(relative);
+    await this.safePath(relative, true);
+    const merged = { ...existing, ...propertyTypes };
+    await this.atomicWrite(absolute, JSON.stringify(merged, null, 2));
+    this.propertyTypesConfig = merged;
+    this.propertyTypes = propertyTypes;
+    this.propertyTypesMalformed = false;
   }
 
   async createFolder(pathInput: string, requestRoot?: string): Promise<{ path: string }> {
@@ -941,7 +1696,7 @@ export class VaultService {
     }
     await this.atomicWrite(target, content, current !== null);
     const info = await stat(target);
-    if (refresh) await this.refresh(true);
+    if (refresh) await this.refreshKnownPaths([relative]);
     return { path: relative, content, mtime: info.mtimeMs, ctime: info.ctimeMs, size: info.size, etag: sha256(content), ...(this.cache.get(relative) === undefined ? {} : { metadata: this.cache.get(relative)!.metadata }) };
   }
 
@@ -1049,6 +1804,7 @@ export class VaultService {
     if (info.isSymbolicLink()) throw knowledgeError('invalid_request', 'Vault 不跟随符号链接');
     const removed: Array<{ path: string; bytes: Buffer }> = [];
     let deletedAttachments: string[] = [];
+    let dirtyPaths: string[] = [];
     if (info.isDirectory()) {
       const preview = await this.deletePreview(relative);
       if (expectedEtag === undefined || preview.etag !== expectedEtag) throw knowledgeError('conflict', '文件夹内容已经变化或缺少 etag，请重新预览后再删除');
@@ -1113,6 +1869,7 @@ export class VaultService {
       }
       const targets = orphanPolicy === 'always' ? [...preview.orphanAttachments] : [];
       const removalPaths = [relative, ...targets.map((item) => item.path)];
+      dirtyPaths = removalPaths;
       for (const targetPath of removalPaths) {
         const bytes = await readFile(await this.safePath(targetPath, false));
         const targetEtag = sha256(bytes);
@@ -1132,7 +1889,8 @@ export class VaultService {
       }
       deletedAttachments = targets.map((item) => item.path);
     }
-    await this.refresh(true);
+    if (info.isDirectory()) await this.refresh(true);
+    else await this.refreshKnownPaths(dirtyPaths);
     return { path: relative, deletedAttachments };
   }
 
@@ -1161,7 +1919,7 @@ export class VaultService {
       const matches = refs.filter((ref) => ref.target === relative);
       if (matches.length > 0) backlinks.push({ sourcePath, count: matches.length, positions: matches.map((ref) => ref.position) });
     }
-    return { backlinks: backlinks.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath)) };
+    return { revision: this.revision, backlinks: backlinks.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath)) };
   }
 
   async graph(): Promise<VaultGraph> {
@@ -1403,7 +2161,8 @@ export class VaultService {
       }
       throw error;
     }
-    await this.refresh(true);
+    const changedPaths = [oldPath, newPath, ...rewrites.keys(), ...[...rewrites.values()].map((plan) => plan.nextPath)];
+    await this.refreshKnownPaths(changedPaths);
     return { path: newPath };
   }
 
@@ -1463,7 +2222,7 @@ export class VaultService {
       }
       throw error;
     }
-    await this.refresh(true);
+    await this.refreshKnownPaths(plans.map((plan) => plan.path));
     const saved = await this.getFile(relative);
     return {
       file: saved,
@@ -1626,7 +2385,7 @@ export class VaultService {
       const bytes = Buffer.from(version.content, 'base64');
       await this.atomicWrite(absolute, bytes, current !== null);
       const info = await stat(absolute);
-      await this.refresh(true);
+      await this.refreshKnownPaths([relative]);
       return { path: relative, content: '', mtime: info.mtimeMs, ctime: info.ctimeMs, size: info.size, etag: sha256(bytes) };
     }
     let current: NoteFile | null = null;
@@ -1638,19 +2397,47 @@ export class VaultService {
     return await this.writeFileInternal(relative, version.content, current?.etag, true);
   }
 
-  async legacyPath(topicId: string, chapterId: string | null): Promise<{ path: string; exists: boolean }> {
-    await this.ensureReady();
+  private async legacyPathInternal(topicId: string, chapterId: string | null, refresh: boolean): Promise<{ path: string; exists: boolean }> {
     const key = idKey(topicId, chapterId);
     const mapped = this.legacyMap[key];
-    const filePath = mapped ?? this.defaultLegacyPath(topicId, chapterId);
-    return { path: filePath, exists: await this.pathExists(filePath) };
+    if (mapped !== undefined) return { path: mapped, exists: await this.pathExists(mapped) };
+    const topic = await this.repository.findNode(topicId, this.userId);
+    const chapter = chapterId === null ? null : await this.repository.findNode(chapterId, this.userId);
+    if (topic?.nodeType !== 'topic' || chapterId !== null && chapter?.nodeType !== 'chapter') {
+      const filePath = this.defaultLegacyPath(topicId, chapterId);
+      return { path: filePath, exists: await this.pathExists(filePath) };
+    }
+    const base = this.defaultLegacyPath(topicId, chapterId);
+    let filePath = base;
+    for (let collision = 1; await this.pathExists(filePath); collision += 1) {
+      const ext = path.posix.extname(base);
+      filePath = `${base.slice(0, -ext.length)}-${String(collision)}${ext}`;
+    }
+    const legacy = await this.repository.getKnowledgeNote(this.userId, topicId, chapterId);
+    const title = chapter?.title ?? topic.title;
+    const noteType = chapterId === null ? 'topic' : 'chapter';
+    await this.writeFileInternal(filePath, this.documentWithFrontmatter(legacy?.content ?? `# ${title}\n`, {
+      id: chapterId ?? topicId, noteType, topicId, chapterId, title,
+    }), undefined, false);
+    this.legacyMap[key] = filePath;
+    await this.saveLegacyMap();
+    if (refresh) await this.refreshKnownPaths([filePath]);
+    return { path: filePath, exists: true };
+  }
+
+  async legacyPath(topicId: string, chapterId: string | null): Promise<{ path: string; exists: boolean }> {
+    await this.ensureReady();
+    const mapped = this.legacyMap[idKey(topicId, chapterId)];
+    if (mapped !== undefined) return { path: mapped, exists: await this.pathExists(mapped) };
+    const expectedRoot = this.rootPath;
+    return await this.serializeMutation(() => this.legacyPathInternal(topicId, chapterId, true), expectedRoot);
   }
 
   async getLegacyNote(topicId: string, chapterId: string | null): Promise<{ content: string; updatedAt: string | null; etag: string | null; path: string }> {
     const mapped = await this.legacyPath(topicId, chapterId);
     if (!mapped.exists) return { content: '', updatedAt: null, etag: null, path: mapped.path };
     const note = await this.getFile(mapped.path);
-    return { content: note.content, updatedAt: new Date(note.mtime).toISOString(), etag: note.etag, path: note.path };
+    return { content: markdownBody(note.content), updatedAt: new Date(note.mtime).toISOString(), etag: note.etag, path: note.path };
   }
 
   async saveLegacyNote(topicId: string, chapterId: string | null, content: string, expectedEtag?: string, requestRoot?: string): Promise<{ content: string; updatedAt: string; etag: string; path: string }> {
@@ -1659,11 +2446,32 @@ export class VaultService {
   }
 
   private async saveLegacyNoteInternal(topicId: string, chapterId: string | null, content: string, expectedEtag?: string): Promise<{ content: string; updatedAt: string; etag: string; path: string }> {
-    const mapped = await this.legacyPath(topicId, chapterId);
-    const saved = await this.writeFileInternal(mapped.path, content, expectedEtag, true);
+    const mapped = await this.legacyPathInternal(topicId, chapterId, false);
+    let current: NoteFile | null = null;
+    try { current = await this.getFileInternal(mapped.path); }
+    catch (error) { if (!missing(error)) throw error; }
+    if (expectedEtag !== undefined && current?.etag !== expectedEtag) throw knowledgeError('conflict', '文件已被其他编辑更新，请刷新后再保存');
+    if (current === null && expectedEtag !== undefined) throw knowledgeError('conflict', '文件已被删除，请刷新后再保存');
+    let next = content;
+    if (current !== null) {
+      const prefix = /^---\r?\n[\s\S]*?\r?\n---(?=\r?\n|$)\r?\n?/.exec(current.content)?.[0] ?? '';
+      next = `${prefix}${content}`;
+    } else {
+      const topic = await this.repository.findNode(topicId, this.userId);
+      const chapter = chapterId === null ? null : await this.repository.findNode(chapterId, this.userId);
+      next = this.documentWithFrontmatter(content, {
+        id: chapterId ?? topicId,
+        noteType: chapterId === null ? 'topic' : 'chapter',
+        topicId,
+        chapterId,
+        title: chapter?.title ?? topic?.title ?? topicId,
+      });
+    }
+    const saved = await this.writeFileInternal(mapped.path, next, current?.etag, true);
     this.legacyMap[idKey(topicId, chapterId)] = mapped.path;
     await this.saveLegacyMap();
-    return { content: saved.content, updatedAt: new Date(saved.mtime).toISOString(), etag: saved.etag, path: saved.path };
+    const note = await this.repository.saveKnowledgeNote({ userId: this.userId, topicId, chapterId, content });
+    return { content, updatedAt: note.updatedAt || new Date(saved.mtime).toISOString(), etag: saved.etag, path: saved.path };
   }
 
   async restoreLegacyNote(topicId: string, chapterId: string | null, requestRoot?: string): Promise<NoteFile> {
@@ -1680,7 +2488,7 @@ export class VaultService {
     const restored = await this.writeFileInternal(relative, archived.content, undefined, false);
     this.legacyMap[key] = relative;
     await this.saveLegacyMap();
-    await this.refresh(true);
+    await this.refreshKnownPaths([relative]);
     return restored;
   }
 

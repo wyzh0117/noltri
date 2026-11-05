@@ -25,8 +25,15 @@ import {
   type KnowledgeNode,
   type ProcessingStatus,
   type RawSource,
+  type RawSourceReviewConfirmation,
+  type ReviewStatus,
+  type ReviewSourceRequest,
+  type ReviewSourceResponse,
   type UpdateNodeInput,
   type VersionRecord,
+  type CaptureAssetMime,
+  type CaptureBatchItemRequest,
+  type CaptureBatchItemStatus,
 } from '@noltri/schema';
 import { isKnowledgeError, knowledgeError, createId, nowIso, tokenize, uniqueTokens } from '@noltri/shared';
 import { SQLITE_SCHEMA_VERSION, openSqlite, type SqlitePragmas } from './sqlite-schema';
@@ -38,6 +45,9 @@ import {
   type VectorOwnerType,
   type VectorScanOptions,
 } from './sqlite-vectors';
+import { captureRecognitionSnapshotSchema, captureRecognitionEntrySchema } from '@noltri/schema';
+import { validateTaskRules } from './task-rules';
+import { nextReviewStatus, reviewConfirmationOf, reviewIntent } from './review';
 import type {
   AddMessageInput,
   CreateConversationInput,
@@ -58,6 +68,22 @@ import type {
   NodeVectorMatch,
   PathSegment,
   StorageDriverName,
+  CaptureBatchItemPatch,
+  StoredCaptureRecognitionSnapshot,
+  CreateCaptureRecognitionSnapshotInput,
+  SaveCaptureRecognitionResultInput,
+  CreateCaptureBatchInput,
+  StoredCaptureBatch,
+  StoredCaptureBatchItem,
+  StoredCaptureAsset,
+  PutCaptureAssetInput,
+  CaptureProcessingPlan,
+  CaptureProcessingPlanPoint,
+  CaptureProcessingPlanPointPatch,
+  ReserveCaptureProcessingPlanInput,
+  CaptureReviewAuthority,
+  FinishCaptureProcessingInput,
+  CaptureProcessingOutcome,
   StorageHealth,
   SaveKnowledgeNoteInput,
   KnowledgeNoteIndexEntry,
@@ -131,6 +157,8 @@ function toRawSource(row: DbRow): RawSource {
     capturedAt: text(row.captured_at),
     metadata: json(row.metadata_json),
     processingStatus: text(row.processing_status) as ProcessingStatus,
+    reviewStatus: text(row.review_status) as ReviewStatus,
+    reviewRevision: num(row.review_revision),
     errorReason: optText(row.error_reason),
     requestId: optText(row.request_id),
     clientId: optText(row.client_id),
@@ -243,9 +271,71 @@ function toMessage(row: DbRow): ConversationMessage {
   };
 }
 
+function toCaptureAsset(row: DbRow): StoredCaptureAsset {
+  const bytes = row.bytes instanceof Uint8Array ? new Uint8Array(row.bytes) : new Uint8Array();
+  return {
+    userId: text(row.user_id),
+    assetId: text(row.asset_id),
+    sessionId: text(row.session_id),
+    mimeType: text(row.mime_type) as CaptureAssetMime,
+    sha256: text(row.sha256),
+    byteLength: num(row.byte_length),
+    bytes,
+    createdAt: text(row.created_at),
+  };
+}
+
+function toCaptureBatchItem(row: DbRow): StoredCaptureBatchItem {
+  return {
+    ...(JSON.parse(text(row.request_json)) as CaptureBatchItemRequest),
+    status: text(row.status) as CaptureBatchItemStatus,
+    rawSourceId: optText(row.raw_source_id),
+    duplicate: bool(row.duplicate),
+    retryable: bool(row.retryable),
+    errorReason: optText(row.error_reason),
+    processingReason: optText(row.processing_reason) as StoredCaptureBatchItem['processingReason'],
+    updatedAt: text(row.updated_at),
+  };
+}
+
+function toCaptureProcessingPlan(row: DbRow): CaptureProcessingPlan {
+  let points: CaptureProcessingPlanPoint[];
+  try {
+    points = JSON.parse(text(row.points_json)) as CaptureProcessingPlanPoint[];
+  } catch (error) {
+    throw knowledgeError('storage_error', `采集冻结计划 JSON 无效 / invalid capture processing plan: ${String(error)}`);
+  }
+  return {
+    userId: text(row.user_id),
+    rawSourceId: text(row.raw_source_id),
+    analysisVersion: num(row.analysis_version),
+    points,
+    rulesSnapshot: row.rules_snapshot_json == null ? null : validateTaskRules(JSON.parse(text(row.rules_snapshot_json))),
+    extractionReady: row.extraction_ready == null || num(row.extraction_ready) === 1,
+    createdAt: text(row.created_at),
+    updatedAt: text(row.updated_at),
+  };
+}
+
+const CAPTURE_POINT_STATUS_RANK = {
+  pending: 0, decision_saved: 1, placement_saved: 2, item_saved: 3, linked: 4, complete: 5,
+} as const;
+
+function toCaptureBatch(batchRow: DbRow, itemRows: DbRow[]): StoredCaptureBatch {
+  return {
+    userId: text(batchRow.user_id),
+    batchId: text(batchRow.batch_id),
+    sessionId: text(batchRow.session_id),
+    payloadHash: text(batchRow.payload_hash),
+    items: itemRows.map(toCaptureBatchItem).sort((left, right) => left.userOrder - right.userOrder),
+    createdAt: text(batchRow.created_at),
+    updatedAt: text(batchRow.updated_at),
+  };
+}
+
 const RAW_SOURCE_FIELDS = `id, user_id, raw_text, surrounding_context, source_type, source_platform,
   source_app, source_title, source_url, captured_at, metadata_json, processing_status, error_reason,
-  request_id, client_id, created_at`;
+  request_id, client_id, created_at, review_status, review_revision`;
 
 const ITEM_FIELDS = `id, user_id, raw_source_id, normalized_text, summary, confidence, status,
   is_ai_derived, created_at, updated_at`;
@@ -377,6 +467,421 @@ export class SqliteRepository implements KnowledgeRepository {
     }
   }
 
+  private readCaptureBatch(userId: string, batchId: string): StoredCaptureBatch | null {
+    const batch = this.one(
+      'select user_id, batch_id, session_id, payload_hash, created_at, updated_at from capture_batches where user_id = ? and batch_id = ?',
+      [userId, batchId],
+    );
+    if (batch === null) return null;
+    const items = this.many(
+      `select request_id, user_order, kind, status, request_json, raw_source_id, duplicate, retryable, error_reason, processing_reason, updated_at
+       from capture_batch_items where user_id = ? and batch_id = ? order by user_order asc`,
+      [userId, batchId],
+    );
+    return toCaptureBatch(batch, items);
+  }
+
+  async putCaptureAsset(input: PutCaptureAssetInput): Promise<{ asset: StoredCaptureAsset; duplicate: boolean }> {
+    return this.inTransaction(() => {
+      const existingRow = this.one(
+        'select user_id, asset_id, session_id, mime_type, sha256, byte_length, bytes, created_at from capture_assets where user_id = ? and asset_id = ?',
+        [input.userId, input.assetId],
+      );
+      if (existingRow !== null) {
+        const existing = toCaptureAsset(existingRow);
+        const sameBytes = existing.bytes.byteLength === input.bytes.byteLength &&
+          existing.bytes.every((byte, index) => byte === input.bytes[index]);
+        if (
+          existing.sessionId !== input.sessionId || existing.mimeType !== input.mimeType ||
+          existing.sha256 !== input.sha256 || !sameBytes
+        ) {
+          throw knowledgeError('conflict', 'assetId 已绑定到不同会话或内容 / assetId is already bound to different content');
+        }
+        return { asset: existing, duplicate: true };
+      }
+      const asset: StoredCaptureAsset = {
+        ...input,
+        bytes: new Uint8Array(input.bytes),
+        byteLength: input.bytes.byteLength,
+        createdAt: nowIso(),
+      };
+      this.run(
+        `insert into capture_assets (user_id, asset_id, session_id, mime_type, sha256, byte_length, bytes, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [asset.userId, asset.assetId, asset.sessionId, asset.mimeType, asset.sha256, asset.byteLength, asset.bytes, asset.createdAt],
+      );
+      return { asset, duplicate: false };
+    });
+  }
+
+  async getCaptureAsset(userId: string, sessionId: string, assetId: string): Promise<StoredCaptureAsset | null> {
+    const row = this.one(
+      `select user_id, asset_id, session_id, mime_type, sha256, byte_length, bytes, created_at
+       from capture_assets where user_id = ? and session_id = ? and asset_id = ?`,
+      [userId, sessionId, assetId],
+    );
+    return row === null ? null : toCaptureAsset(row);
+  }
+
+  async createCaptureBatch(input: CreateCaptureBatchInput): Promise<{ batch: StoredCaptureBatch; duplicate: boolean }> {
+    return this.inTransaction(() => {
+      const existing = this.readCaptureBatch(input.userId, input.batchId);
+      if (existing !== null) {
+        if (existing.sessionId !== input.sessionId || existing.payloadHash !== input.payloadHash) {
+          throw knowledgeError('conflict', 'batchId 已绑定到不同请求 / batchId is already bound to a different request');
+        }
+        return { batch: existing, duplicate: true };
+      }
+      for (const item of input.items) {
+        for (const assetId of item.assetIds) {
+          const asset = this.one(
+            'select asset_id from capture_assets where user_id = ? and session_id = ? and asset_id = ?',
+            [input.userId, input.sessionId, assetId],
+          );
+          if (asset === null) {
+            throw knowledgeError('invalid_request', `批次引用了未保存的 asset ${assetId} / batch references an unsaved asset`);
+          }
+        }
+      }
+      const createdAt = nowIso();
+      this.run(
+        'insert into capture_batches (user_id, batch_id, session_id, payload_hash, created_at, updated_at) values (?, ?, ?, ?, ?, ?)',
+        [input.userId, input.batchId, input.sessionId, input.payloadHash, createdAt, createdAt],
+      );
+      for (const item of [...input.items].sort((left, right) => left.userOrder - right.userOrder)) {
+        this.run(
+          `insert into capture_batch_items
+           (user_id, batch_id, request_id, user_order, kind, status, request_json, raw_source_id, duplicate, retryable, error_reason, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?, null, 0, 0, null, ?)`,
+          [input.userId, input.batchId, item.requestId, item.userOrder, item.kind, item.kind === 'text' ? 'queued' : 'assets_saved', JSON.stringify(item), createdAt],
+        );
+      }
+      const batch = this.readCaptureBatch(input.userId, input.batchId);
+      if (batch === null) throw knowledgeError('storage_error', '无法读取刚写入的采集批次 / could not read newly stored capture batch');
+      return { batch, duplicate: false };
+    });
+  }
+
+  async getCaptureBatch(userId: string, batchId: string): Promise<StoredCaptureBatch | null> {
+    return this.readCaptureBatch(userId, batchId);
+  }
+
+  async listCaptureBatches(userId: string, limit: number): Promise<StoredCaptureBatch[]> {
+    const rows = this.many(
+      'select batch_id from capture_batches where user_id = ? order by updated_at desc, batch_id desc limit ?',
+      [userId, limit],
+    );
+    return rows.flatMap((row) => {
+      const batch = this.readCaptureBatch(userId, text(row.batch_id));
+      return batch === null ? [] : [batch];
+    });
+  }
+
+  async updateCaptureBatchItem(
+    userId: string,
+    batchId: string,
+    requestId: string,
+    patch: CaptureBatchItemPatch,
+    expectedReviewRevision?: number,
+  ): Promise<StoredCaptureBatch> {
+    return this.inTransaction(() => {
+      const batch = this.readCaptureBatch(userId, batchId);
+      if (batch === null) throw knowledgeError('not_found', `采集批次 ${batchId} 不存在 / capture batch not found`);
+      const item = batch.items.find((candidate) => candidate.requestId === requestId);
+      if (item === undefined) throw knowledgeError('not_found', `批次项目 ${requestId} 不存在 / capture batch item not found`);
+      const boundSourceId = patch.rawSourceId === undefined ? item.rawSourceId : patch.rawSourceId;
+      if (expectedReviewRevision !== undefined && boundSourceId !== null) {
+        const source = this.mustRawSource(boundSourceId, userId);
+        if (source.reviewRevision !== expectedReviewRevision) patch = { rawSourceId: source.id, status: source.reviewStatus === 'confirmed' ? 'done' : 'needs_review', retryable: false, errorReason: null, processingReason: null };
+      }
+      const updatedAt = nowIso();
+      const status = patch.status ?? item.status;
+      const rawSourceId = patch.rawSourceId === undefined ? item.rawSourceId : patch.rawSourceId;
+      const duplicate = patch.duplicate ?? item.duplicate;
+      const retryable = patch.retryable ?? item.retryable;
+      const errorReason = patch.errorReason === undefined ? item.errorReason : patch.errorReason;
+      const processingReason = patch.processingReason === undefined ? item.processingReason : patch.processingReason;
+      this.run(
+        `update capture_batch_items set status = ?, raw_source_id = ?, duplicate = ?, retryable = ?, error_reason = ?, processing_reason = ?, updated_at = ?
+         where user_id = ? and batch_id = ? and request_id = ?`,
+        [status, rawSourceId, Number(duplicate), Number(retryable), errorReason, processingReason, updatedAt, userId, batchId, requestId],
+      );
+      this.run('update capture_batches set updated_at = ? where user_id = ? and batch_id = ?', [updatedAt, userId, batchId]);
+      const updated = this.readCaptureBatch(userId, batchId);
+      if (updated === null) throw knowledgeError('storage_error', '更新后无法读取采集批次 / could not read updated capture batch');
+      return updated;
+    });
+  }
+
+  async claimCaptureBatchItemForProcessing(userId: string, batchId: string, requestId: string): Promise<StoredCaptureBatch> {
+    return this.inTransaction(() => {
+      const batch = this.readCaptureBatch(userId, batchId);
+      if (batch === null) throw knowledgeError('not_found', `采集批次 ${batchId} 不存在 / capture batch not found`);
+      const item = batch.items.find((candidate) => candidate.requestId === requestId);
+      if (item === undefined) throw knowledgeError('not_found', `批次项目 ${requestId} 不存在 / capture batch item not found`);
+      if (!((item.kind !== 'text' && item.status === 'assets_saved') || (item.status === 'failed' && item.retryable))) {
+        throw knowledgeError('conflict', '只有可重试的失败文本项目可以重试 / only retryable failed text items can be retried');
+      }
+      const updatedAt = nowIso();
+      this.run(
+        `update capture_batch_items set status = 'processing', retryable = 0, error_reason = null, updated_at = ?
+         where user_id = ? and batch_id = ? and request_id = ? and ((kind != 'text' and status = 'assets_saved') or (status = 'failed' and retryable = 1))`,
+        [updatedAt, userId, batchId, requestId],
+      );
+      if (num(this.one('select changes() as count')?.count) !== 1) {
+        throw knowledgeError('conflict', '该批次项目已被处理或重试 / batch item is already being processed or retried');
+      }
+      this.run('update capture_batches set updated_at = ? where user_id = ? and batch_id = ?', [updatedAt, userId, batchId]);
+      const updated = this.readCaptureBatch(userId, batchId);
+      if (updated === null) throw knowledgeError('storage_error', '更新后无法读取采集批次 / could not read updated capture batch');
+      return updated;
+    });
+  }
+
+  async claimCaptureBatchItemForRetry(userId: string, batchId: string, requestId: string): Promise<StoredCaptureBatch> {
+    const batch = this.readCaptureBatch(userId, batchId);
+    if (!batch) throw knowledgeError('not_found', 'Capture batch not found');
+    const item = batch.items.find(item => item.requestId === requestId);
+    if (!item) throw knowledgeError('not_found', 'Capture batch item not found');
+    if (item?.status !== 'failed' || !item.retryable) throw knowledgeError('conflict', 'Only failed retryable items can be retried');
+    return this.claimCaptureBatchItemForProcessing(userId, batchId, requestId);
+  }
+
+  async recoverInterruptedCaptureBatches(): Promise<number> {
+    return this.inTransaction(() => {
+      this.run("update raw_sources set processing_status = 'failed', error_reason = 'Capture interrupted; retry the frozen analysis' where processing_status = 'processing'");
+      const pending = this.many(
+        `select distinct user_id, batch_id from capture_batch_items
+         where (kind = 'text' and status = 'queued') or status = 'processing'`,
+      );
+      const count = num(this.one(
+        `select count(*) as count from capture_batch_items
+         where (kind = 'text' and status = 'queued') or status = 'processing'`,
+      )?.count);
+      if (count === 0) return 0;
+      const updatedAt = nowIso();
+      const errorReason = '服务重启期间采集处理被中断，可重试原项目';
+      this.run(
+        `update capture_batch_items set status = 'failed', retryable = 1, error_reason = ?, updated_at = ?
+         where (kind = 'text' and status = 'queued') or status = 'processing'`,
+        [errorReason, updatedAt],
+      );
+      for (const row of pending) {
+        this.run('update capture_batches set updated_at = ? where user_id = ? and batch_id = ?', [updatedAt, text(row.user_id), text(row.batch_id)]);
+      }
+      return count;
+    });
+  }
+
+  async createCaptureRecognitionSnapshot(input: CreateCaptureRecognitionSnapshotInput): Promise<StoredCaptureRecognitionSnapshot> {
+    return this.inTransaction(() => {
+      this.mustRawSource(input.rawSourceId, input.userId);
+      if (input.expectedReviewRevision !== undefined) this.assertCaptureReview(input.userId, input.rawSourceId, input.expectedReviewRevision);
+      const prior = this.readRecognitionSnapshot(input.userId, input.rawSourceId);
+      if (prior) {
+        if (prior.inputFingerprint !== input.inputFingerprint || JSON.stringify(prior.inputs) !== JSON.stringify(captureRecognitionSnapshotSchema.shape.inputs.parse(input.inputs))) throw knowledgeError('conflict', 'Recognition inputs are frozen');
+        return prior;
+      }
+      const timestamp = nowIso();
+      const payload = captureRecognitionSnapshotSchema.parse({ version: 1, inputFingerprint: input.inputFingerprint, inputs: input.inputs, results: [], createdAt: timestamp, updatedAt: timestamp });
+      this.run('insert into capture_image_recognition_snapshots (user_id, raw_source_id, version, snapshot_json) values (?, ?, 1, ?)', [input.userId, input.rawSourceId, JSON.stringify(payload)]);
+      return { ...payload, userId: input.userId, rawSourceId: input.rawSourceId };
+    });
+  }
+  private readRecognitionSnapshot(userId: string, rawSourceId: string): StoredCaptureRecognitionSnapshot | null {
+    const row = this.one('select snapshot_json from capture_image_recognition_snapshots where user_id = ? and raw_source_id = ? and version = 1', [userId, rawSourceId]);
+    if (row === null) return null;
+    try { return { ...captureRecognitionSnapshotSchema.parse(JSON.parse(text(row.snapshot_json))), userId, rawSourceId }; }
+    catch { throw knowledgeError('storage_error', 'Invalid saved recognition snapshot'); }
+  }
+  async getCaptureRecognitionSnapshot(userId: string, rawSourceId: string): Promise<StoredCaptureRecognitionSnapshot | null> {
+    return this.readRecognitionSnapshot(userId, rawSourceId);
+  }
+  async saveCaptureRecognitionResult(userId: string, rawSourceId: string, input: SaveCaptureRecognitionResultInput, expectedReviewRevision?: number): Promise<StoredCaptureRecognitionSnapshot> {
+    return this.inTransaction(() => {
+      if (expectedReviewRevision !== undefined) this.assertCaptureReview(userId, rawSourceId, expectedReviewRevision);
+      const snapshot = this.readRecognitionSnapshot(userId, rawSourceId);
+      if (!snapshot) throw knowledgeError('not_found', 'Recognition snapshot not found');
+      const entry = captureRecognitionEntrySchema.parse({ ...input, createdAt: nowIso() });
+      if (!snapshot.inputs.some(asset => asset.assetId === entry.assetId)) throw knowledgeError('conflict', 'Recognition input is not in the frozen snapshot');
+      const prior = snapshot.results.find(result => result.assetId === entry.assetId);
+      if (prior) {
+        if (JSON.stringify({ ...prior, createdAt: '' }) !== JSON.stringify({ ...entry, createdAt: '' })) throw knowledgeError('conflict', 'Recognition result is frozen');
+        return snapshot;
+      }
+      const { userId: owner, rawSourceId: sourceId, ...payload } = snapshot;
+      const updated = { ...payload, results: [...payload.results, entry], updatedAt: nowIso() };
+      this.run('update capture_image_recognition_snapshots set snapshot_json = ? where user_id = ? and raw_source_id = ? and version = 1', [JSON.stringify(updated), userId, rawSourceId]);
+      return { ...updated, userId: owner, rawSourceId: sourceId };
+    });
+  }
+
+  async reserveCaptureProcessingPlan(input: ReserveCaptureProcessingPlanInput): Promise<CaptureProcessingPlan> {
+    const rules = validateTaskRules(input.rulesSnapshot);
+    return this.inTransaction(() => {
+      const source = this.mustRawSource(input.rawSourceId, input.userId);
+      this.assertCaptureReview(input.userId, input.rawSourceId, input.expectedReviewRevision);
+      if (source.processingStatus === 'processing') throw knowledgeError('conflict', 'Capture is already processing');
+      const latest = this.one('select * from capture_processing_plans where user_id = ? and raw_source_id = ? order by analysis_version desc limit 1', [input.userId, input.rawSourceId]);
+      const prior = latest === null ? null : toCaptureProcessingPlan(latest);
+      if (input.newVersion) {
+        if ((prior?.analysisVersion ?? 0) !== input.expectedAnalysisVersion) throw knowledgeError('conflict', 'Analysis version changed');
+        if (this.one('select action_id from source_review_actions where user_id = ? and raw_source_id = ? limit 1', [input.userId, input.rawSourceId]) !== null
+          || this.one('select id from knowledge_items where user_id = ? and raw_source_id = ? and is_ai_derived = 0 limit 1', [input.userId, input.rawSourceId]) !== null) throw knowledgeError('conflict', 'Human-reviewed source cannot be reanalyzed');
+      }
+      if (prior && !input.newVersion && prior.rulesSnapshot === null) throw knowledgeError('conflict', 'Historical rules unknown; explicit reanalysis required');
+      const timestamp = nowIso();
+      let result = prior;
+      if (!prior || input.newVersion) {
+        const itemVersion = num(this.one('select max(capture_analysis_version) as version from knowledge_items where user_id = ? and raw_source_id = ?', [input.userId, input.rawSourceId])?.version);
+        if (!input.newVersion && itemVersion > 0) throw knowledgeError('conflict', 'Historical partial analysis requires explicit reanalysis');
+        const version = input.newVersion ? Math.max(prior?.analysisVersion ?? 0, itemVersion) + 1 : 1;
+        this.run('insert into capture_processing_plans (user_id, raw_source_id, analysis_version, points_json, rules_snapshot_json, extraction_ready, created_at, updated_at) values (?, ?, ?, ?, ?, 0, ?, ?)', [input.userId, input.rawSourceId, version, '[]', JSON.stringify(rules), timestamp, timestamp]);
+        result = toCaptureProcessingPlan(this.one('select * from capture_processing_plans where user_id = ? and raw_source_id = ? and analysis_version = ?', [input.userId, input.rawSourceId, version])!);
+      }
+      this.run("update raw_sources set processing_status = 'processing', error_reason = null where id = ? and user_id = ?", [input.rawSourceId, input.userId]);
+      return result!;
+    });
+  }
+
+  async completeCaptureProcessingPlanExtraction(userId: string, rawSourceId: string, analysisVersion: number, points: CaptureProcessingPlanPoint[], expectedReviewRevision?: number): Promise<CaptureProcessingPlan> {
+    return this.inTransaction(() => {
+      if (expectedReviewRevision !== undefined) this.assertCaptureReview(userId, rawSourceId, expectedReviewRevision);
+      const row = this.one('select * from capture_processing_plans where user_id = ? and raw_source_id = ? and analysis_version = ?', [userId, rawSourceId, analysisVersion]);
+      if (row === null) throw knowledgeError('not_found', 'Capture plan not found');
+      const plan = toCaptureProcessingPlan(row);
+      if (plan.extractionReady) {
+        if (JSON.stringify(plan.points) !== JSON.stringify(points)) throw knowledgeError('conflict', 'Frozen extraction cannot be replaced');
+        return plan;
+      }
+      const updatedAt = nowIso();
+      this.run('update capture_processing_plans set points_json = ?, extraction_ready = 1, updated_at = ? where user_id = ? and raw_source_id = ? and analysis_version = ?', [JSON.stringify(points), updatedAt, userId, rawSourceId, analysisVersion]);
+      return { ...plan, points: structuredClone(points), extractionReady: true, updatedAt };
+    });
+  }
+
+  async getCaptureProcessingPlan(
+    userId: string, rawSourceId: string, analysisVersion?: number,
+  ): Promise<CaptureProcessingPlan | null> {
+    const row = analysisVersion === undefined
+      ? this.one(
+          `select user_id, raw_source_id, analysis_version, points_json, rules_snapshot_json, extraction_ready, created_at, updated_at
+             from capture_processing_plans where user_id = ? and raw_source_id = ?
+             order by analysis_version desc limit 1`,
+          [userId, rawSourceId],
+        )
+      : this.one(
+          `select user_id, raw_source_id, analysis_version, points_json, rules_snapshot_json, extraction_ready, created_at, updated_at
+             from capture_processing_plans where user_id = ? and raw_source_id = ? and analysis_version = ?`,
+          [userId, rawSourceId, analysisVersion],
+        );
+    return row === null ? null : toCaptureProcessingPlan(row);
+  }
+
+  async createCaptureProcessingPlan(
+    userId: string, rawSourceId: string, points: CaptureProcessingPlanPoint[],
+  ): Promise<CaptureProcessingPlan> {
+    return this.inTransaction(() => {
+      if (this.one('select id from raw_sources where id = ? and user_id = ?', [rawSourceId, userId]) === null) {
+        throw knowledgeError('not_found', `RawSource ${rawSourceId} not found`);
+      }
+      const existing = this.one(
+        `select user_id, raw_source_id, analysis_version, points_json, rules_snapshot_json, extraction_ready, created_at, updated_at
+           from capture_processing_plans where user_id = ? and raw_source_id = ?
+           order by analysis_version desc limit 1`,
+        [userId, rawSourceId],
+      );
+      if (existing !== null) return toCaptureProcessingPlan(existing);
+      const timestamp = nowIso();
+      this.run(
+        `insert into capture_processing_plans (user_id, raw_source_id, analysis_version, points_json, created_at, updated_at)
+         values (?, ?, 1, ?, ?, ?)`,
+        [userId, rawSourceId, JSON.stringify(points), timestamp, timestamp],
+      );
+      const created = this.one(
+        `select user_id, raw_source_id, analysis_version, points_json, rules_snapshot_json, extraction_ready, created_at, updated_at
+           from capture_processing_plans where user_id = ? and raw_source_id = ? and analysis_version = 1`,
+        [userId, rawSourceId],
+      );
+      if (created === null) throw knowledgeError('storage_error', '写入采集冻结计划后无法读取 / capture plan vanished after write');
+      return toCaptureProcessingPlan(created);
+    });
+  }
+
+  async createCaptureProcessingPlanVersion(
+    userId: string, rawSourceId: string, points: CaptureProcessingPlanPoint[],
+  ): Promise<CaptureProcessingPlan> {
+    return this.inTransaction(() => {
+      if (this.one('select id from raw_sources where id = ? and user_id = ?', [rawSourceId, userId]) === null) {
+        throw knowledgeError('not_found', `RawSource ${rawSourceId} not found`);
+      }
+      const planVersion = num(this.one(
+        'select max(analysis_version) as version from capture_processing_plans where user_id = ? and raw_source_id = ?',
+        [userId, rawSourceId],
+      )?.version);
+      const itemVersion = num(this.one(
+        'select max(capture_analysis_version) as version from knowledge_items where user_id = ? and raw_source_id = ?',
+        [userId, rawSourceId],
+      )?.version);
+      const analysisVersion = Math.max(planVersion, itemVersion) + 1;
+      const timestamp = nowIso();
+      this.run(
+        `insert into capture_processing_plans (user_id, raw_source_id, analysis_version, points_json, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?)`,
+        [userId, rawSourceId, analysisVersion, JSON.stringify(points), timestamp, timestamp],
+      );
+      const created = this.one(
+        `select user_id, raw_source_id, analysis_version, points_json, rules_snapshot_json, extraction_ready, created_at, updated_at
+           from capture_processing_plans where user_id = ? and raw_source_id = ? and analysis_version = ?`,
+        [userId, rawSourceId, analysisVersion],
+      );
+      if (created === null) throw knowledgeError('storage_error', '写入新分析版本后无法读取 / capture plan version vanished after write');
+      return toCaptureProcessingPlan(created);
+    });
+  }
+
+  async updateCaptureProcessingPlanPoint(userId: string, rawSourceId: string, analysisVersion: number, pointIndex: number, patch: CaptureProcessingPlanPointPatch, captureAuthority?: CaptureReviewAuthority): Promise<CaptureProcessingPlan> {
+    return this.updateCaptureProcessingPlanPointSync(userId, rawSourceId, analysisVersion, pointIndex, patch, captureAuthority);
+  }
+
+  private updateCaptureProcessingPlanPointSync(
+    userId: string, rawSourceId: string, analysisVersion: number, pointIndex: number,
+    patch: CaptureProcessingPlanPointPatch, captureAuthority?: CaptureReviewAuthority,
+  ): CaptureProcessingPlan {
+    return this.inTransaction(() => {
+      if (captureAuthority) this.assertCaptureReview(userId, rawSourceId, captureAuthority.expectedReviewRevision);
+      const row = this.one(
+        `select user_id, raw_source_id, analysis_version, points_json, rules_snapshot_json, extraction_ready, created_at, updated_at
+           from capture_processing_plans where user_id = ? and raw_source_id = ? and analysis_version = ?`,
+        [userId, rawSourceId, analysisVersion],
+      );
+      if (row === null) throw knowledgeError('not_found', '采集冻结计划不存在 / capture processing plan not found');
+      const plan = toCaptureProcessingPlan(row);
+      const currentIndex = plan.points.findIndex((point) => point.pointIndex === pointIndex);
+      if (currentIndex < 0) throw knowledgeError('not_found', '冻结计划点位不存在 / capture plan point not found');
+      const current = plan.points[currentIndex]!;
+      const isSame = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+      for (const field of ['decision', 'placement', 'embedding', 'embeddingModel', 'knowledgeItemId'] as const) {
+        const stored = current[field];
+        const next = patch[field];
+        if (stored !== null && stored !== undefined && next !== undefined && !isSame(stored, next)) {
+          throw knowledgeError('conflict', '冻结计划的已保存决策、放置或副作用标记不能改写 / saved capture plan state is immutable');
+        }
+      }
+      if (patch.status !== undefined && CAPTURE_POINT_STATUS_RANK[patch.status] < CAPTURE_POINT_STATUS_RANK[current.status]) {
+        throw knowledgeError('conflict', '冻结计划点位状态不能回退 / capture plan point status cannot regress');
+      }
+      const points = plan.points.map((point, index) => index === currentIndex ? { ...point, ...patch } : point);
+      const updatedAt = nowIso();
+      this.run(
+        `update capture_processing_plans set points_json = ?, updated_at = ?
+         where user_id = ? and raw_source_id = ? and analysis_version = ?`,
+        [JSON.stringify(points), updatedAt, userId, rawSourceId, analysisVersion],
+      );
+      return { ...plan, points, updatedAt };
+    });
+  }
+
   // --- raw sources ---------------------------------------------------------------------
 
   async createRawSource(input: CreateRawSourceInput): Promise<RawSource> {
@@ -393,6 +898,8 @@ export class SqliteRepository implements KnowledgeRepository {
       capturedAt: input.capturedAt,
       metadata: cloneJson(input.metadata ?? {}),
       processingStatus: 'pending',
+      reviewStatus: 'needs_review',
+      reviewRevision: 0,
       errorReason: null,
       requestId: input.requestId ?? null,
       clientId: input.clientId ?? null,
@@ -425,15 +932,26 @@ export class SqliteRepository implements KnowledgeRepository {
     return record;
   }
 
+  async finishCaptureProcessing(input: FinishCaptureProcessingInput): Promise<CaptureProcessingOutcome> {
+    return this.inTransaction(() => {
+      const source = this.mustRawSource(input.rawSourceId, input.userId);
+      if (source.reviewRevision !== input.expectedReviewRevision) return { source, applied: false };
+      const confirm = input.status === 'done' && input.confirmIfInitial === true && source.reviewRevision === 0 && source.reviewStatus === 'needs_review';
+      this.run('update raw_sources set processing_status = ?, error_reason = ?, review_status = ?, review_revision = ? where id = ? and user_id = ? and review_revision = ?', [input.status, input.errorReason ?? null, confirm ? 'confirmed' : source.reviewStatus, source.reviewRevision + Number(confirm), input.rawSourceId, input.userId, input.expectedReviewRevision]);
+      return { source: this.mustRawSource(input.rawSourceId, input.userId), applied: true };
+    });
+  }
+
   async updateRawSourceProcessing(
     id: string,
     userId: string,
     status: ProcessingStatus,
     errorReason: string | null = null,
+    expectedReviewRevision?: number,
   ): Promise<RawSource> {
     this.run(
-      `update raw_sources set processing_status = ?, error_reason = ? where id = ? and user_id = ?`,
-      [status, errorReason, id, userId],
+      `update raw_sources set processing_status = ?, error_reason = ? where id = ? and user_id = ? ${expectedReviewRevision === undefined ? '' : 'and review_revision = ?'}`,
+      [status, errorReason, id, userId, ...(expectedReviewRevision === undefined ? [] : [expectedReviewRevision])],
     );
     return this.mustRawSource(id, userId);
   }
@@ -508,15 +1026,17 @@ export class SqliteRepository implements KnowledgeRepository {
 
   async listInbox(input: ListInboxInput): Promise<RawSource[]> {
     const statuses = input.statuses ?? [];
+    const reviewFilter = input.reviewStatus === undefined ? '' : 'and review_status = ?';
     const statusFilter = statuses.length > 0 ? `and processing_status in (${placeholders(statuses.length)})` : '';
     const rows = this.many(
       `select ${RAW_SOURCE_FIELDS} from raw_sources
-        where user_id = ? ${statusFilter}
+        where user_id = ? ${statusFilter} ${reviewFilter}
         order by created_at desc, rowid desc
         limit ? offset ?`,
       [
         input.userId,
         ...statuses,
+        ...(input.reviewStatus === undefined ? [] : [input.reviewStatus]),
         Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), MAX_INBOX_PAGE),
         Math.max(Math.trunc(input.offset ?? 0), 0),
       ],
@@ -537,39 +1057,130 @@ export class SqliteRepository implements KnowledgeRepository {
     return counts;
   }
 
+  async countInboxByReviewStatus(userId: string): Promise<Record<ReviewStatus, number>> {
+    const counts: Record<ReviewStatus, number> = { needs_review: 0, confirmed: 0, deferred: 0, rejected: 0 };
+    for (const row of this.many('select review_status, count(*) as total from raw_sources where user_id = ? group by review_status', [userId])) counts[text(row.review_status) as ReviewStatus] = num(row.total);
+    return counts;
+  }
+
+  async markRawSourceConfirmed(id: string, userId: string, onlyInitial = true): Promise<void> {
+    this.run(`update raw_sources set review_status = 'confirmed', review_revision = review_revision + 1 where id = ? and user_id = ? and review_status != 'confirmed' ${onlyInitial ? "and review_revision = 0 and review_status = 'needs_review'" : ''}`, [id, userId]);
+  }
+
+  async readReviewConfirmation(id: string, userId: string, reviewRevision: number): Promise<RawSourceReviewConfirmation | null> {
+    const source = await this.findRawSource(id, userId);
+    if (!source || source.reviewStatus !== 'confirmed' || source.reviewRevision !== reviewRevision) return null;
+    const actions = this.many('select intent_json, response_json from source_review_actions where user_id = ? and raw_source_id = ?', [userId, id]);
+    return reviewConfirmationOf(id, userId, reviewRevision, actions.map(row => ({ fingerprint: String(row.intent_json), response: row.response_json })));
+  }
+
+  async reviewSource(id: string, userId: string, input: ReviewSourceRequest): Promise<ReviewSourceResponse> {
+    return this.inTransaction(() => {
+      const source = this.mustRawSource(id, userId);
+      const { request, fingerprint } = reviewIntent(input);
+      const prior = this.one('select intent_json, response_json from source_review_actions where user_id = ? and raw_source_id = ? and action_id = ?', [userId, id, request.actionId]);
+      if (prior !== null) {
+        if (text(prior.intent_json) !== fingerprint) throw knowledgeError('conflict', 'actionId is already bound to a different review intent');
+        return { ...JSON.parse(text(prior.response_json)) as ReviewSourceResponse, duplicate: true };
+      }
+      const reviewStatus = nextReviewStatus(source, request);
+      const response: ReviewSourceResponse = { reviewStatus, reviewRevision: source.reviewRevision + 1, duplicate: false };
+      if (request.action === 'confirm') {
+        const node = this.one('select id, status from knowledge_nodes where id = ? and user_id = ?', [request.nodeId, userId]);
+        if (node === null) throw knowledgeError('not_found', 'Target node not found');
+        if (text(node.status) === 'archived') throw knowledgeError('conflict', 'Target node is archived');
+        const normalizedText = (request.editedText ?? source.rawText).trim();
+        if (!normalizedText) throw knowledgeError('invalid_request', 'Nothing to file');
+        // Use the same Unicode boundary trimming as manual assign and the memory driver.
+        const alreadyLinked = this.many(`select i.normalized_text from knowledge_items i join item_node_links l on l.item_id = i.id and l.user_id = i.user_id where i.user_id = ? and i.raw_source_id = ? and l.node_id = ?`, [userId, id, request.nodeId]);
+        if (alreadyLinked.some((row) => text(row.normalized_text).trim() === normalizedText)) throw knowledgeError('conflict', 'Source text is already filed under this node');
+        const itemId = createId();
+        const timestamp = nowIso();
+        this.run(`insert into knowledge_items (id, user_id, raw_source_id, normalized_text, summary, confidence, status, is_ai_derived, embedding_model, embedding_status, created_at, updated_at) values (?, ?, ?, ?, null, 1, 'active', 0, null, 'none', ?, ?)`, [itemId, userId, id, normalizedText, timestamp, timestamp]);
+        this.indexKeywords('knowledge_item', itemId, userId, normalizedText);
+        this.run(`insert into item_node_links (id, user_id, item_id, node_id, relation_type, confidence, created_at) values (?, ?, ?, ?, 'primary', 1, ?)`, [createId(), userId, itemId, request.nodeId, timestamp]);
+        response.item = this.mustItem(itemId, userId);
+        response.path = this.nodePathOf(userId, request.nodeId);
+      }
+      this.run(`update raw_sources set review_status = ?, review_revision = ? ${request.action === 'confirm' ? ", processing_status = 'done', error_reason = null" : ", processing_status = case when processing_status = 'processing' then 'pending' else processing_status end"} where id = ? and user_id = ?`, [reviewStatus, response.reviewRevision, id, userId]);
+      const changedAt = nowIso();
+      const batches = this.many('select distinct batch_id from capture_batch_items where user_id = ? and raw_source_id = ?', [userId, id]);
+      this.run('update capture_batch_items set status = ?, retryable = 0, error_reason = null, processing_reason = null, updated_at = ? where user_id = ? and raw_source_id = ?', [reviewStatus === 'confirmed' ? 'done' : 'needs_review', changedAt, userId, id]);
+      for (const batch of batches) this.run('update capture_batches set updated_at = ? where user_id = ? and batch_id = ?', [changedAt, userId, text(batch.batch_id)]);
+      this.run('insert into source_review_actions (user_id, raw_source_id, action_id, intent_json, response_json, created_at) values (?, ?, ?, ?, ?, ?)', [userId, id, request.actionId, fingerprint, JSON.stringify(response), nowIso()]);
+      return response;
+    });
+  }
+
   // --- knowledge items -----------------------------------------------------------------
 
-  async createKnowledgeItem(input: CreateKnowledgeItemRecordInput): Promise<KnowledgeItem> {
-    const timestamp = nowIso();
-    const id = createId();
-    this.run(
-      `insert into knowledge_items (id, user_id, raw_source_id, normalized_text, summary, confidence, status,
-         is_ai_derived, embedding_model, embedding_status, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
-      [
-        id,
-        input.userId,
-        input.rawSourceId,
-        input.normalizedText,
-        input.summary ?? null,
-        input.confidence,
-        input.isAiDerived ?? true ? 1 : 0,
-        input.embeddingModel ?? null,
-        input.embeddingStatus ?? 'none',
-        timestamp,
-        timestamp,
-      ],
-    );
-    if (input.embedding) {
-      this.vectors.upsert('knowledge_item', id, input.userId, input.embedding, {
-        modelId: input.embeddingModel ?? null,
-        normalization: this.normalization,
-        sourceText: input.normalizedText,
-        builderVersion: this.builderVersion,
-      }, timestamp);
-    }
-    this.indexKeywords('knowledge_item', id, input.userId, input.normalizedText);
-    return this.mustItem(id, input.userId);
+  private createKnowledgeItemSync(input: CreateKnowledgeItemRecordInput): KnowledgeItem {
+    return this.inTransaction(() => {
+      const pointIndex = input.capturePointIndex;
+      const analysisVersion = input.captureAnalysisVersion ?? 1;
+      if (!Number.isSafeInteger(analysisVersion) || analysisVersion < 1) {
+        throw knowledgeError('invalid_request', 'captureAnalysisVersion must be a positive safe integer');
+      }
+      if (pointIndex !== undefined) {
+        if (!Number.isSafeInteger(pointIndex) || pointIndex < 0) {
+          throw knowledgeError('invalid_request', 'capturePointIndex must be a non-negative safe integer');
+        }
+        const existing = this.one(
+          `select ${ITEM_FIELDS} from knowledge_items
+           where user_id = ? and raw_source_id = ? and capture_analysis_version = ? and capture_point_index = ?`,
+          [input.userId, input.rawSourceId, analysisVersion, pointIndex],
+        );
+        if (existing !== null) return toItem(existing);
+
+        // Only v1 can adopt exact-text records written before frozen plans existed. Later analyses are distinct.
+        const legacy = analysisVersion === 1 ? this.one(
+          `select ${ITEM_FIELDS} from knowledge_items
+           where user_id = ? and raw_source_id = ? and normalized_text = ? and capture_analysis_version = 1 and capture_point_index is null and is_ai_derived = 1
+           order by created_at asc, rowid asc limit 1`,
+          [input.userId, input.rawSourceId, input.normalizedText],
+        ) : null;
+        if (legacy !== null) {
+          this.run(
+            'update knowledge_items set capture_point_index = ? where user_id = ? and id = ? and capture_point_index is null',
+            [pointIndex, input.userId, text(legacy.id)],
+          );
+          return toItem(legacy);
+        }
+      }
+
+      const timestamp = nowIso();
+      const id = createId();
+      this.run(
+        `insert into knowledge_items (id, user_id, raw_source_id, normalized_text, summary, confidence, status,
+           is_ai_derived, embedding_model, embedding_status, created_at, updated_at, capture_analysis_version, capture_point_index)
+         values (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          input.userId,
+          input.rawSourceId,
+          input.normalizedText,
+          input.summary ?? null,
+          input.confidence,
+          input.isAiDerived ?? true ? 1 : 0,
+          input.embeddingModel ?? null,
+          input.embeddingStatus ?? 'none',
+          timestamp,
+          timestamp,
+          analysisVersion,
+          pointIndex ?? null,
+        ],
+      );
+      if (input.embedding) {
+        this.vectors.upsert('knowledge_item', id, input.userId, input.embedding, {
+          modelId: input.embeddingModel ?? null,
+          normalization: this.normalization,
+          sourceText: input.normalizedText,
+          builderVersion: this.builderVersion,
+        }, timestamp);
+      }
+      this.indexKeywords('knowledge_item', id, input.userId, input.normalizedText);
+      return this.mustItem(id, input.userId);
+    });
   }
 
   private mustItem(id: string, userId: string): KnowledgeItem {
@@ -656,7 +1267,50 @@ export class SqliteRepository implements KnowledgeRepository {
 
   // --- nodes ---------------------------------------------------------------------------
 
+  private assertCaptureReview(userId: string, rawSourceId: string, expectedReviewRevision: number): void {
+    const source = this.mustRawSource(rawSourceId, userId);
+    if (!Number.isSafeInteger(expectedReviewRevision) || source.reviewRevision !== expectedReviewRevision) throw knowledgeError('conflict', 'Capture review authority changed', { reason: 'capture_review_changed' });
+  }
+
   async createNode(input: CreateNodeRecordInput): Promise<KnowledgeNode> {
+    const authority = input.captureAuthority;
+    if (!authority) return this.createNodeSync(input);
+    return this.inTransaction(() => {
+      this.assertCaptureReview(input.userId, authority.rawSourceId, authority.expectedReviewRevision);
+      const node = this.createNodeSync(input);
+      if (node.parentId !== null) this.upsertEdge({ userId: input.userId, fromNodeId: node.id, toNodeId: node.parentId, relationType: 'part_of', confidence: 1, source: 'tree_structure' });
+      this.createVersionRecordSync({ userId: input.userId, entityType: 'knowledge_node', entityId: node.id, operation: 'create', before: {}, after: { title: node.title, parentId: node.parentId, nodeType: node.nodeType }, actor: authority.actor });
+      return node;
+    });
+  }
+
+  async createKnowledgeItem(input: CreateKnowledgeItemRecordInput): Promise<KnowledgeItem> {
+    const authority = input.captureAuthority;
+    if (!authority) return this.createKnowledgeItemSync(input);
+    return this.inTransaction(() => {
+      this.assertCaptureReview(input.userId, authority.rawSourceId, authority.expectedReviewRevision);
+      if (input.rawSourceId !== authority.rawSourceId || input.captureAnalysisVersion !== authority.analysisVersion || input.capturePointIndex !== authority.pointIndex) throw knowledgeError('invalid_request', 'Capture identity mismatch');
+      const item = this.createKnowledgeItemSync(input);
+      if (!item.isAiDerived) throw knowledgeError('conflict', 'Human knowledge cannot be adopted by capture');
+      this.updateCaptureProcessingPlanPointSync(input.userId, authority.rawSourceId, authority.analysisVersion, authority.pointIndex, { knowledgeItemId: item.id, status: 'item_saved' }, authority);
+      return item;
+    });
+  }
+
+  async linkItemToNode(input: LinkItemInput): Promise<ItemNodeLink> {
+    const authority = input.captureAuthority;
+    if (!authority) return this.linkItemToNodeSync(input);
+    return this.inTransaction(() => {
+      this.assertCaptureReview(input.userId, authority.rawSourceId, authority.expectedReviewRevision);
+      const item = this.mustItem(input.itemId, input.userId);
+      if (item.rawSourceId !== authority.rawSourceId || !item.isAiDerived) throw knowledgeError('conflict', 'Human knowledge cannot receive capture placement');
+      const linked = this.linkItemToNodeSync(input);
+      this.updateCaptureProcessingPlanPointSync(input.userId, authority.rawSourceId, authority.analysisVersion, authority.pointIndex, { status: 'linked' }, authority);
+      return linked;
+    });
+  }
+
+  private createNodeSync(input: CreateNodeRecordInput): KnowledgeNode {
     if (input.parentId) {
       const parent = this.one('select id from knowledge_nodes where id = ? and user_id = ?', [
         input.parentId,
@@ -912,7 +1566,7 @@ export class SqliteRepository implements KnowledgeRepository {
 
   // --- links and edges -----------------------------------------------------------------
 
-  async linkItemToNode(input: LinkItemInput): Promise<ItemNodeLink> {
+  private linkItemToNodeSync(input: LinkItemInput): ItemNodeLink {
     const item = this.one('select user_id from knowledge_items where id = ?', [input.itemId]);
     if (item === null || text(item.user_id) !== input.userId) {
       throw knowledgeError('not_found', `KnowledgeItem ${input.itemId} not found`);
@@ -1036,7 +1690,11 @@ export class SqliteRepository implements KnowledgeRepository {
   }
 
   async createEdge(input: CreateEdgeInput): Promise<KnowledgeEdge> {
-    return this.upsertEdge(input);
+    if (!input.captureAuthority) return this.upsertEdge(input);
+    return this.inTransaction(() => {
+      this.assertCaptureReview(input.userId, input.captureAuthority!.rawSourceId, input.captureAuthority!.expectedReviewRevision);
+      return this.upsertEdge(input);
+    });
   }
 
   private upsertEdge(input: CreateEdgeInput): KnowledgeEdge {

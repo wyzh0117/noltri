@@ -12,13 +12,14 @@ import {
   knowledgeNodeSchema,
   moveNodeResponseSchema,
   nodeChatResponseSchema,
+  noteInterpretationResponseSchema,
   nodeContextSchema,
   nodeDetailSchema,
   rawSourceSchema,
   searchResponseSchema,
   treeResponseSchema,
 } from '@noltri/schema';
-import { attachItemRecord, captureOf, CHINESE_TEXT, createNodeRecord, makeHarness, testConfig, type Harness } from './fakes';
+import { attachItemRecord, captureOf, CHINESE_TEXT, createNodeRecord, makeHarness, repoCalls, testConfig, type Harness } from './fakes';
 import { createRequestHandler, type RequestHandler } from '../src/http/router';
 
 function handlerOf(harness: Harness): RequestHandler {
@@ -214,6 +215,62 @@ describe('http router', () => {
       }),
     );
     expect(nodeChatResponseSchema.parse(await jsonOf(chat)).context.scope).toBe('current_node');
+  });
+
+  it('interprets an explicitly submitted note snapshot without storing it', async () => {
+    const sourceText = 'A tuple is immutable.\n\n| Kind | Mutable |\n| --- | --- |\n| tuple | no |\n\n```ts\nconst x = 1;\n```\n\n$$x^2$$\n\n![diagram](assets/graph.png)';
+    const harness = makeHarness({ script: { chat: (input) => {
+      const message = input.messages.at(-1)?.content ?? '';
+      const submitted = JSON.parse(message.slice(message.indexOf('\n') + 1)) as { sourceText: string };
+      return { text: submitted.sourceText, model: 'synthetic-model' };
+    } } });
+    const response = await handlerOf(harness)(
+      new Request('http://core.local/api/note-interpretation', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'translation', sourceText, targetLanguage: '简体中文' }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(noteInterpretationResponseSchema.parse(await jsonOf(response))).toEqual({ text: sourceText, model: 'synthetic-model' });
+    expect(harness.provider.chatInputs[0]?.messages.at(-1)?.content).toContain('NOLTRIPROTECTED');
+    expect(harness.provider.chatInputs[0]?.messages.at(-1)?.content).not.toContain('| Kind |');
+    expect(repoCalls(harness.timeline)).toEqual([]);
+  });
+
+  it('returns an API error instead of success when interpretation output invents structure', async () => {
+    const harness = makeHarness({ script: { chat: () => ({ text: '# invented heading' }) } });
+    const response = await handlerOf(harness)(
+      new Request('http://core.local/api/note-interpretation', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'translation', sourceText: 'A plain sentence.' }),
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    expect(apiErrorSchema.parse(await jsonOf(response)).error.code).toBe('provider_error');
+    expect(repoCalls(harness.timeline)).toEqual([]);
+  });
+
+  it('rejects empty, whitespace-only, and oversized interpretation snapshots before invoking the provider', async () => {
+    const whitespaceOnly = String.fromCharCode(32, 9, 13, 10, 32);
+    for (const sourceText of ['', whitespaceOnly, 'x'.repeat(20_001)]) {
+      const harness = makeHarness();
+      const response = await handlerOf(harness)(
+        new Request('http://core.local/api/note-interpretation', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'translation', sourceText }),
+        }),
+      );
+
+      expect(response.status).toBe(400);
+      expect(apiErrorSchema.parse(await jsonOf(response)).error.code).toBe('invalid_request');
+      expect(harness.provider.chatInputs).toEqual([]);
+      expect(repoCalls(harness.timeline)).toEqual([]);
+    }
   });
 
   it('moving a parent under its own child is a 409 and leaves the tree untouched', async () => {

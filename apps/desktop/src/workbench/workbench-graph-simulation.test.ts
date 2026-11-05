@@ -17,6 +17,28 @@ describe('graph force simulation', () => {
     expect(new Set(simulation.nodes.map(({ x, y }) => `${x.toFixed(3)},${y.toFixed(3)}`)).size).toBeGreaterThan(1);
   });
 
+  it('resolves overlaps across neighboring collision-grid cells', () => {
+    const simulation = createGraphSimulation([
+      { id: 'x-neighbor-a', x: 119, y: 0 }, { id: 'x-neighbor-b', x: 121, y: 0 },
+      { id: 'diagonal-a', x: 119, y: 479 }, { id: 'diagonal-b', x: 121, y: 481 },
+      { id: 'reverse-diagonal-a', x: 121, y: 959 }, { id: 'reverse-diagonal-b', x: 119, y: 961 },
+    ], [], { centerStrength: 0, repelStrength: 0, linkStrength: 0 });
+    const distances = [[0, 1], [2, 3], [4, 5]].map(([left, right]) => {
+      const first = simulation.nodes[left]!;
+      const second = simulation.nodes[right]!;
+      return Math.hypot(second.x - first.x, second.y - first.y);
+    });
+
+    tickGraphSimulation(simulation);
+
+    const separatedDistances = [[0, 1], [2, 3], [4, 5]].map(([left, right]) => {
+      const first = simulation.nodes[left]!;
+      const second = simulation.nodes[right]!;
+      return Math.hypot(second.x - first.x, second.y - first.y);
+    });
+    expect(separatedDistances.every((distance, index) => distance > distances[index]!)).toBe(true);
+  });
+
   it('keeps a dragged node pinned and unlocks it on release', () => {
     const simulation = createGraphSimulation([{ id: 'a', x: 0, y: 0 }, { id: 'b', x: 10, y: 0 }], [{ source: 'a', target: 'b' }]);
     setSimulationPin(simulation, 'a', { x: 120, y: -40 });
@@ -42,7 +64,7 @@ describe('graph force simulation', () => {
     expect(Math.hypot(added!.x - 150, added!.y - 50)).toBeCloseTo(60);
   });
 
-  it('scales neighbor jitter by the count of new nodes in the batch, not document degree', () => {
+  it('spaces large sibling batches across an area instead of placing them on one ring', () => {
     const simulation = createGraphSimulation([
       { id: 'anchor', x: 25, y: 25 },
       { id: 'new-a' },
@@ -51,9 +73,9 @@ describe('graph force simulation', () => {
       { source: 'anchor', target: 'new-a' },
       { source: 'anchor', target: 'new-b' },
     ]);
-    for (const node of simulation.nodes.slice(1)) {
-      expect(Math.hypot(node.x - 25, node.y - 25)).toBeCloseTo(60 * Math.sqrt(2));
-    }
+    const radii = simulation.nodes.slice(1).map((node) => Math.hypot(node.x - 25, node.y - 25)).sort((left, right) => left - right);
+    expect(radii[0]).toBeCloseTo(60);
+    expect(radii[1]).toBeCloseTo(60 * Math.sqrt(2));
   });
 
   it('places isolated new nodes on an annulus instead of the origin', () => {

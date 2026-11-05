@@ -12,6 +12,7 @@ import {
   edgeRelationSchema,
   nodeStatusSchema,
   processingStatusSchema,
+  reviewStatusSchema,
   searchModeSchema,
   type NodeStatus,
 } from './enums';
@@ -291,6 +292,33 @@ export const nodeChatResponseSchema = z.object({
 });
 export type NodeChatResponse = z.infer<typeof nodeChatResponseSchema>;
 
+// --- POST /api/note-interpretation ----------------------------------------
+// A temporary derivative of an explicitly submitted note snapshot; Core does not persist it.
+export const noteInterpretationRequestSchema = z.object({
+  mode: z.enum(['translation', 'explanation', 'question']),
+  sourceText: z
+    .string()
+    .min(1)
+    .max(20_000)
+    .refine((value) => value.trim().length > 0, { message: 'sourceText cannot be blank' }),
+  targetLanguage: z.string().trim().min(1).max(80).optional(),
+  question: z.string().min(1).max(2_000).refine((value) => value.trim().length > 0, { message: 'question cannot be blank' }).optional(),
+}).superRefine((request, context) => {
+  if (request.mode === 'question' && request.question === undefined) {
+    context.addIssue({ code: 'custom', path: ['question'], message: 'question is required in question mode' });
+  }
+  if (request.mode !== 'question' && request.question !== undefined) {
+    context.addIssue({ code: 'custom', path: ['question'], message: 'question is valid only in question mode' });
+  }
+});
+export type NoteInterpretationRequest = z.infer<typeof noteInterpretationRequestSchema>;
+
+export const noteInterpretationResponseSchema = z.object({
+  text: z.string().min(1),
+  model: z.string().optional(),
+});
+export type NoteInterpretationResponse = z.infer<typeof noteInterpretationResponseSchema>;
+
 export const conversationListResponseSchema = z.object({
   conversations: z.array(conversationSchema),
 });
@@ -310,6 +338,7 @@ export const versionListResponseSchema = z.object({
  */
 export const inboxQuerySchema = z.object({
   status: z.string().trim().max(80).optional(),
+  reviewStatus: reviewStatusSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
@@ -324,6 +353,8 @@ export const inboxEntrySchema = z.object({
   sourceUrl: z.string().nullable(),
   capturedAt: z.string(),
   processingStatus: processingStatusSchema,
+  reviewStatus: reviewStatusSchema,
+  reviewRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   errorReason: z.string().nullable(),
   /** Preview only — the full text is one owner-scoped `GET /api/inbox/:id` away. */
   textPreview: z.string(),
@@ -338,6 +369,7 @@ export const inboxResponseSchema = z.object({
   entries: z.array(inboxEntrySchema),
   /** Whole-library totals per status, so paging never makes a badge lie. */
   counts: inboxCountsSchema,
+  reviewCounts: z.record(reviewStatusSchema, z.number().int().min(0)),
   limit: z.number().int().min(1),
   offset: z.number().int().min(0),
 });
@@ -356,3 +388,22 @@ export const assignSourceResponseSchema = z.object({
   path: z.array(nodePathSegmentSchema),
 });
 export type AssignSourceResponse = z.infer<typeof assignSourceResponseSchema>;
+
+// Review intent is strict: hidden targets/edits on defer/reject/restore are invalid.
+const reviewActionIdentity = {
+  actionId: z.string().trim().min(1).max(128),
+  expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+};
+export const reviewSourceRequestSchema = z.discriminatedUnion('action', [
+  z.object({ ...reviewActionIdentity, action: z.literal('confirm'), nodeId: z.string().min(1), editedText: z.string().min(1).max(4000).optional() }).strict(),
+  z.object({ ...reviewActionIdentity, action: z.enum(['defer', 'reject', 'restore']) }).strict(),
+]);
+export type ReviewSourceRequest = z.infer<typeof reviewSourceRequestSchema>;
+export const reviewSourceResponseSchema = z.object({
+  reviewStatus: reviewStatusSchema,
+  reviewRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  duplicate: z.boolean(),
+  item: knowledgeItemSchema.optional(),
+  path: z.array(nodePathSegmentSchema).optional(),
+});
+export type ReviewSourceResponse = z.infer<typeof reviewSourceResponseSchema>;

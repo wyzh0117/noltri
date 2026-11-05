@@ -3,11 +3,14 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ReactElement } from 'react';
 import { commands } from './lib/tauri';
+import { readDevelopmentEndpoints } from './lib/development-endpoints';
 import type { DesktopSettings } from './lib/tauri';
 import ModelSettings from './workbench/ModelSettings';
 import { createWorkbenchApi } from './workbench/api';
 import WorkbenchApp from './workbench/WorkbenchApp';
+import { buildMcpConnectionConfiguration } from './workbench/mcp-connection-configuration';
 import './workbench/workbench.css';
+import { ConsoleBootView, loadDesktopSession, type DesktopSession } from './workbench/processing-console-boot';
 
 interface Booted {
   readonly api: ReturnType<typeof createWorkbenchApi>;
@@ -18,8 +21,10 @@ interface Booted {
   readonly settings: DesktopSettings;
 }
 
-const DEV_CORE_URL: string = import.meta.env.VITE_NOLTRI_CORE_URL ?? 'http://localhost:8787';
-const DEV_MCP_URL: string = import.meta.env.VITE_NOLTRI_MCP_URL ?? 'http://127.0.0.1:8790/mcp';
+const { apiBaseUrl: DEV_CORE_URL, mcpEndpoint: DEV_MCP_URL } = readDevelopmentEndpoints({
+  VITE_NOLTRI_CORE_URL: import.meta.env.VITE_NOLTRI_CORE_URL,
+  VITE_NOLTRI_MCP_URL: import.meta.env.VITE_NOLTRI_MCP_URL,
+});
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -28,6 +33,7 @@ function isTauri(): boolean {
 function WorkbenchBoot(): ReactElement {
   const [booted, setBooted] = useState<Booted | null>(null);
   const [showWelcome, setShowWelcome] = useState(true);
+  const [modelUpdateSafe, setModelUpdateSafe] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
@@ -86,6 +92,7 @@ function WorkbenchBoot(): ReactElement {
   const modelSettings = <ModelSettings
     settings={booted.settings}
     outsideTauri={booted.outsideTauri}
+    onUpdateSafetyChange={setModelUpdateSafe}
     welcome={showWelcome}
     onSaved={(models, runtimeStatus) => setBooted((current) => current ? { ...current, settings: { ...current.settings, ...models, runtimeStatus } } : current)}
     {...(showWelcome ? { onDone: () => setShowWelcome(false) } : {})}
@@ -99,10 +106,29 @@ function WorkbenchBoot(): ReactElement {
       apiBaseUrl={booted.apiBaseUrl}
       mcpEndpoint={booted.mcpEndpoint}
       tokenConfigured={booted.tokenConfigured}
+      onCopyMcpConfiguration={!booted.outsideTauri && booted.tokenConfigured ? () => navigator.clipboard.writeText(buildMcpConnectionConfiguration(booted.settings.mcpEndpoint, booted.settings.apiToken)) : undefined}
       outsideTauri={booted.outsideTauri}
       modelSettings={modelSettings}
+      modelSettingsUpdateSafe={modelUpdateSafe}
     />
   );
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(<WorkbenchBoot />);
+function DesktopRoleBoot(): ReactElement {
+  const [session, setSession] = useState<DesktopSession | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void loadDesktopSession(isTauri()).then(
+      value => { if (!cancelled) setSession(value); },
+      () => { if (!cancelled) setFailed(true); },
+    );
+    return () => { cancelled = true; };
+  }, []);
+  if (failed) return <main className="boot-error-state"><h1>无法打开窗口</h1><p>无法读取本机连接信息，请关闭此窗口后重试。</p></main>;
+  if (!session) return <main className="boot-loading"><span className="loader"/>正在打开窗口…</main>;
+  if (session.role === 'processing-console') return <ConsoleBootView api={session.api}/>;
+  return <WorkbenchBoot/>;
+}
+
+createRoot(document.getElementById('root') as HTMLElement).render(<DesktopRoleBoot />);

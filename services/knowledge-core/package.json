@@ -1,6 +1,6 @@
 {
   "name": "@noltri/knowledge-core",
-  "version": "0.2.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -22,6 +22,9 @@
     "@noltri/shared": "workspace:*",
     "@noltri/storage": "workspace:*",
     "dotenv": "^18.0.5",
+    "markdown-it": "^15.0.3",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-katex": "^2.0.3",
     "tsx": "^4.23.15",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"

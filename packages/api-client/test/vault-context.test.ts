@@ -8,6 +8,8 @@ describe('Vault mutation context', () => {
       calls.push({ url: String(input), headers: new Headers(init?.headers) });
       const payload = String(input).endsWith('/api/vault/open')
         ? { rootPath: '/tmp/知序 My Vault', files: [], revision: 1 }
+        : String(input).endsWith('/api/vault/settings')
+          ? { newLinkFormat: 'shortest', propertyTypes: {} }
         : { path: 'Home.md', content: '# Home', mtime: 1, size: 6, etag: 'etag-1' };
       return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
     }) as unknown as typeof fetch;
@@ -16,10 +18,12 @@ describe('Vault mutation context', () => {
 
     await client.saveVaultFile({ path: 'Home.md', content: '# Home' }, rootPath);
     await client.openVault({ rootPath });
+    await client.vaultSettings(rootPath);
 
     expect(calls[0]?.headers.get('x-noltri-vault-root')).toBe(encodeURIComponent(rootPath));
     expect(calls[0]?.headers.get('x-noltri-vault-root')).toMatch(/^[\x00-\x7F]+$/);
     expect(calls[1]?.headers.has('x-noltri-vault-root')).toBe(false);
+    expect(calls[2]?.headers.get('x-noltri-vault-root')).toBe(encodeURIComponent(rootPath));
   });
 
   it('rejects a mutation without a captured root before calling fetch', async () => {

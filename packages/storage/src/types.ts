@@ -17,11 +17,24 @@ import type {
   NodeStatus,
   ProcessingStatus,
   RawSource,
+  RawSourceReviewConfirmation,
+  ReviewStatus,
+  ReviewSourceRequest,
+  ReviewSourceResponse,
   UpdateNodeInput,
   VersionedEntity,
   VersionRecord,
   StructureOperation,
   JsonValue,
+  CaptureAssetMime,
+  CaptureAction,
+  CaptureBatchItemRequest,
+  CaptureBatchItemStatus,
+  CaptureProcessingReason,
+  ProcessingRulesSnapshot,
+  CaptureAssetRef,
+  CaptureRecognitionSnapshot,
+  CaptureRecognitionEntry,
 } from '@noltri/schema';
 
 export type StorageDriverName = 'memory' | 'sqlite';
@@ -78,19 +91,44 @@ export interface VectorSearchOptions {
  * `embeddingStatus` is written only when the caller states it. Repositories must never derive it
  * from `embeddingModel` or from whether a vector happens to be present.
  */
+export interface FinishCaptureProcessingInput {
+  userId: string;
+  rawSourceId: string;
+  expectedReviewRevision: number;
+  status: 'pending' | 'done' | 'failed';
+  errorReason?: string | null;
+  confirmIfInitial?: boolean;
+}
+export interface CaptureProcessingOutcome { source: RawSource; applied: boolean }
+
+export interface CaptureReviewAuthority {
+  rawSourceId: string;
+  expectedReviewRevision: number;
+  analysisVersion: number;
+  pointIndex: number;
+  actor: string;
+}
+
 export interface CreateKnowledgeItemRecordInput extends CreateKnowledgeItemInput {
+  captureAuthority?: CaptureReviewAuthority;
+  /** Zero-based extracted-point identity, scoped to rawSourceId so retry does not duplicate one source. */
+  capturePointIndex?: number;
+  /** Explicit reanalysis receives a separate identity; ordinary retries reuse the same frozen version. */
+  captureAnalysisVersion?: number;
   embedding?: number[];
   embeddingModel?: string | null;
   embeddingStatus?: EmbeddingStatus;
 }
 
 export interface CreateNodeRecordInput extends CreateNodeInput {
+  captureAuthority?: CaptureReviewAuthority;
   embedding?: number[];
   embeddingModel?: string | null;
   embeddingStatus?: EmbeddingStatus;
 }
 
 export interface LinkItemInput {
+  captureAuthority?: CaptureReviewAuthority;
   userId: string;
   itemId: string;
   nodeId: string;
@@ -99,6 +137,7 @@ export interface LinkItemInput {
 }
 
 export interface CreateEdgeInput {
+  captureAuthority?: CaptureReviewAuthority;
   userId: string;
   fromNodeId: string;
   toNodeId: string;
@@ -165,6 +204,7 @@ export interface ListInboxInput {
   userId: string;
   /** Omitted means "every status"; the Inbox passes the ones still needing attention. */
   statuses?: ProcessingStatus[];
+  reviewStatus?: ReviewStatus;
   limit?: number;
   offset?: number;
 }
@@ -182,6 +222,115 @@ export interface NodeStats {
   childCount: number;
 }
 
+export interface PutCaptureAssetInput {
+  userId: string;
+  sessionId: string;
+  assetId: string;
+  mimeType: CaptureAssetMime;
+  sha256: string;
+  bytes: Uint8Array;
+}
+
+export interface StoredCaptureAsset extends PutCaptureAssetInput {
+  byteLength: number;
+  createdAt: string;
+}
+
+export type CapturePlanPointStatus = 'pending' | 'decision_saved' | 'placement_saved' | 'item_saved' | 'linked' | 'complete';
+
+export interface CapturePlanDecision {
+  strategy: 'manual' | 'merge' | 'attach' | 'create';
+  action: CaptureAction;
+  nodeId: string | null;
+  path: string[];
+  linkConfidence: number;
+  nodeConfidence: number;
+  provenanceNodeId: string | null;
+  relatedNodeId: string | null;
+}
+
+export interface CapturePlanPlacement {
+  targetNodeId: string;
+  action: CaptureAction;
+  linkConfidence: number;
+  provenanceNodeId: string | null;
+  relatedNodeId: string | null;
+}
+
+export interface CaptureProcessingPlanPoint {
+  pointIndex: number;
+  point: { text: string; summary: string | null; confidence: number; title: string };
+  embedding: number[] | null;
+  embeddingModel: string | null;
+  decision: CapturePlanDecision | null;
+  placement: CapturePlanPlacement | null;
+  knowledgeItemId: string | null;
+  status: CapturePlanPointStatus;
+}
+
+export interface CaptureProcessingPlan {
+  userId: string;
+  rawSourceId: string;
+  analysisVersion: number;
+  points: CaptureProcessingPlanPoint[];
+  rulesSnapshot: ProcessingRulesSnapshot | null;
+  extractionReady: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReserveCaptureProcessingPlanInput {
+  expectedReviewRevision: number;
+  userId: string;
+  rawSourceId: string;
+  rulesSnapshot: ProcessingRulesSnapshot;
+  newVersion?: boolean;
+  expectedAnalysisVersion?: number;
+}
+
+export type CaptureProcessingPlanPointPatch = Partial<Omit<CaptureProcessingPlanPoint, 'pointIndex' | 'point'>>;
+
+export interface CreateCaptureBatchInput {
+  userId: string;
+  batchId: string;
+  sessionId: string;
+  payloadHash: string;
+  items: CaptureBatchItemRequest[];
+}
+
+export interface StoredCaptureBatchItem extends CaptureBatchItemRequest {
+  status: CaptureBatchItemStatus;
+  rawSourceId: string | null;
+  duplicate: boolean;
+  retryable: boolean;
+  errorReason: string | null;
+  processingReason: CaptureProcessingReason | null;
+  updatedAt: string;
+}
+
+export interface StoredCaptureBatch {
+  userId: string;
+  batchId: string;
+  sessionId: string;
+  payloadHash: string;
+  items: StoredCaptureBatchItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredCaptureRecognitionSnapshot extends CaptureRecognitionSnapshot { userId: string; rawSourceId: string }
+export interface CreateCaptureRecognitionSnapshotInput { expectedReviewRevision?: number; userId: string; rawSourceId: string; inputFingerprint: string; inputs: CaptureAssetRef[] }
+export type SaveCaptureRecognitionResultInput = Omit<CaptureRecognitionEntry, 'createdAt'>;
+
+export interface CaptureBatchItemPatch {
+  status?: CaptureBatchItemStatus;
+  rawSourceId?: string | null;
+  duplicate?: boolean;
+  retryable?: boolean;
+  errorReason?: string | null;
+  processingReason?: CaptureProcessingReason | null;
+}
+
 /**
  * The single seam between business logic and persistence.
  * Local-first ships another implementation of this interface without touching
@@ -189,6 +338,52 @@ export interface NodeStats {
  */
 export interface KnowledgeRepository {
   readonly driver: StorageDriverName;
+
+  putCaptureAsset(input: PutCaptureAssetInput): Promise<{ asset: StoredCaptureAsset; duplicate: boolean }>;
+  getCaptureAsset(userId: string, sessionId: string, assetId: string): Promise<StoredCaptureAsset | null>;
+  createCaptureBatch(input: CreateCaptureBatchInput): Promise<{ batch: StoredCaptureBatch; duplicate: boolean }>;
+  listCaptureBatches(userId: string, limit: number): Promise<StoredCaptureBatch[]>;
+  getCaptureBatch(userId: string, batchId: string): Promise<StoredCaptureBatch | null>;
+  updateCaptureBatchItem(
+    userId: string,
+    batchId: string,
+    requestId: string,
+    patch: CaptureBatchItemPatch,
+    expectedReviewRevision?: number,
+  ): Promise<StoredCaptureBatch>;
+  createCaptureRecognitionSnapshot(input: CreateCaptureRecognitionSnapshotInput): Promise<StoredCaptureRecognitionSnapshot>;
+  getCaptureRecognitionSnapshot(userId: string, rawSourceId: string): Promise<StoredCaptureRecognitionSnapshot | null>;
+  saveCaptureRecognitionResult(userId: string, rawSourceId: string, entry: SaveCaptureRecognitionResultInput, expectedReviewRevision?: number): Promise<StoredCaptureRecognitionSnapshot>;
+  claimCaptureBatchItemForProcessing(userId: string, batchId: string, requestId: string): Promise<StoredCaptureBatch>;
+  claimCaptureBatchItemForRetry(userId: string, batchId: string, requestId: string): Promise<StoredCaptureBatch>;
+  /** Marks queued text and interrupted processing items as retryable after a process restart. */
+  recoverInterruptedCaptureBatches(): Promise<number>;
+
+  reserveCaptureProcessingPlan(input: ReserveCaptureProcessingPlanInput): Promise<CaptureProcessingPlan>;
+  completeCaptureProcessingPlanExtraction(userId: string, rawSourceId: string, analysisVersion: number, points: CaptureProcessingPlanPoint[], expectedReviewRevision?: number): Promise<CaptureProcessingPlan>;
+  /** Returns the requested immutable analysis version, or the latest version when omitted. */
+  getCaptureProcessingPlan(userId: string, rawSourceId: string, analysisVersion?: number): Promise<CaptureProcessingPlan | null>;
+  /** Creates version 1 once; if a plan already exists, returns its latest frozen version unchanged. */
+  createCaptureProcessingPlan(
+    userId: string, rawSourceId: string, points: CaptureProcessingPlanPoint[],
+  ): Promise<CaptureProcessingPlan>;
+  /** Explicit reanalysis appends a new version without replacing prior snapshots or KnowledgeItems. */
+  createCaptureProcessingPlanVersion(
+    userId: string, rawSourceId: string, points: CaptureProcessingPlanPoint[],
+  ): Promise<CaptureProcessingPlan>;
+  updateCaptureProcessingPlanPoint(
+    userId: string, rawSourceId: string, analysisVersion: number, pointIndex: number,
+    patch: CaptureProcessingPlanPointPatch,
+    captureAuthority?: CaptureReviewAuthority,
+  ): Promise<CaptureProcessingPlan>;
+
+  /** One atomic source-scoped revision/action/item/link commit; replay precedes revision checks. */
+  reviewSource(id: string, userId: string, request: ReviewSourceRequest): Promise<ReviewSourceResponse>;
+  /** Exact read-only human confirmation snapshot; unavailable/corrupt/ambiguous actions return null. */
+  readReviewConfirmation(id: string, userId: string, reviewRevision: number): Promise<RawSourceReviewConfirmation | null>;
+  countInboxByReviewStatus(userId: string): Promise<Record<ReviewStatus, number>>;
+  /** Automatic confirmation cannot overwrite any human action. Legacy assign may explicitly confirm. */
+  markRawSourceConfirmed(id: string, userId: string, onlyInitial?: boolean): Promise<void>;
 
   createRawSource(input: CreateRawSourceInput): Promise<RawSource>;
   /**
@@ -201,11 +396,13 @@ export interface KnowledgeRepository {
     clientId: string,
     requestId: string,
   ): Promise<RawSource | null>;
+  finishCaptureProcessing(input: FinishCaptureProcessingInput): Promise<CaptureProcessingOutcome>;
   updateRawSourceProcessing(
     id: string,
     userId: string,
     status: ProcessingStatus,
     errorReason?: string | null,
+    expectedReviewRevision?: number,
   ): Promise<RawSource>;
   updateRawSource(
     id: string,

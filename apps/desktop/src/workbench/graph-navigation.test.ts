@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { GraphNode, GraphNoteIndexEntry, NodeDetail, TreeNode } from '@noltri/schema';
 import { ChapterChoicePanel, GraphNotebook } from './GraphNotebook';
 import type { GraphNotebookProps } from './GraphNotebook';
-import { commitLatestNavigation, contentIdentity, disciplineScopesForTopics, graphChapterAttachment, graphChapterTitle, NavigationIntentClock, searchGraphNodes, selectionForTreeNode, shouldReuseActiveNote } from './graph-navigation';
+import { commitLatestNavigation, contentIdentity, contextualChapterPath, contextualChapterSelectionId, disciplineScopesForTopics, graphChapterAttachment, graphChapterTitle, NavigationIntentClock, searchGraphNodes, selectionForTreeNode, shouldReuseActiveNote } from './graph-navigation';
 
 function treeNode(id: string, nodeType: string, children: TreeNode[] = []): TreeNode {
   return {
@@ -22,6 +22,17 @@ function treeNode(id: string, nodeType: string, children: TreeNode[] = []): Tree
 }
 
 describe('graph navigation mapping', () => {
+  it('routes discipline, subdiscipline, and deeper domain roots into their own scopes', () => {
+    const tree = [treeNode('d1', 'discipline', [treeNode('s1', 'subdiscipline', [
+      treeNode('domain-3', 'domain', [treeNode('t1', 'topic')]),
+    ])])];
+
+    expect(selectionForTreeNode(tree, 'd1')?.scope).toEqual({ kind: 'discipline', disciplineId: 'd1' });
+    expect(selectionForTreeNode(tree, 's1')?.scope).toEqual({ kind: 'subdiscipline', disciplineId: 'd1', subdisciplineId: 's1' });
+    expect(selectionForTreeNode(tree, 'domain-3')?.scope).toEqual({ kind: 'subdiscipline', disciplineId: 'd1', subdisciplineId: 'domain-3' });
+    expect(selectionForTreeNode(tree, 'domain-3')?.content).toEqual({ kind: 'cards', scope: { kind: 'subdiscipline', disciplineId: 'd1', subdisciplineId: 'domain-3' }, selectedNodeId: 'domain-3' });
+  });
+
   it('routes chapters to their actual parent topic and keeps its discipline scope', () => {
     const tree = [treeNode('d1', 'discipline', [treeNode('s1', 'subdiscipline', [
       treeNode('t1', 'topic', [treeNode('c1', 'chapter')]),
@@ -43,6 +54,19 @@ describe('graph navigation mapping', () => {
     expect(disciplineScopesForTopics(tree, ['python', 'cpp', 'c'])).toEqual([
       { kind: 'discipline', disciplineId: 'cs' },
     ]);
+  });
+
+  it('keeps shared chapters in the active topic breadcrumb when the tree stores another primary parent', () => {
+    const tree = [
+      treeNode('d1', 'discipline', [treeNode('s1', 'subdiscipline', [
+        treeNode('topic-a', 'topic', [treeNode('shared-chapter', 'chapter')]),
+        treeNode('topic-b', 'topic'),
+      ])]),
+    ];
+
+    expect(contextualChapterPath(tree, 'topic-b', 'Shared chapter')).toEqual(['d1', 's1', 'topic-b', 'Shared chapter']);
+    expect(contextualChapterSelectionId(tree, 'topic-b', 'shared-chapter')).toBe('topic-b');
+    expect(contextualChapterSelectionId(tree, 'topic-a', 'shared-chapter')).toBe('shared-chapter');
   });
 
   it('uses the real title for a parentless chapter and scopes detached status to its topic', () => {

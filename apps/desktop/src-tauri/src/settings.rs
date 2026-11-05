@@ -238,6 +238,10 @@ pub fn load(config_dir: Option<&Path>) -> DesktopSettings {
     let value = config_dir
         .and_then(|dir| std::fs::read(dir.join("settings.json")).ok())
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    from_value(value)
+}
+
+fn from_value(value: Option<serde_json::Value>) -> DesktopSettings {
     let models = value
         .as_ref()
         .and_then(|value| value.get("providers").map(|_| value))
@@ -262,6 +266,39 @@ pub fn load(config_dir: Option<&Path>) -> DesktopSettings {
         ),
         models,
     }
+}
+
+fn saved_access_token(value: Option<&serde_json::Value>) -> Result<&str, String> {
+    match value.and_then(|v| v.get("apiToken")) {
+        None => Ok(""),
+        Some(serde_json::Value::String(token)) => Ok(token),
+        Some(_) => Err("invalid_saved_device_access_credential".into()),
+    }
+}
+
+/// The runtime resolves credentials once; main and console consume that same accepted connection.
+pub fn load_authenticated(config_dir: &Path, generate: bool) -> Result<DesktopSettings, String> {
+    crate::runtime::resolve_runtime_ports()?;
+    let value = crate::device_access::read_settings(config_dir, generate)?
+        .map(|bytes| {
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| "invalid_settings_file".to_owned())
+        })
+        .transpose()?;
+    if value.as_ref().is_some_and(|v| !v.is_object()) {
+        return Err("invalid_settings_file".into());
+    }
+    let saved = saved_access_token(value.as_ref())?;
+    let access = crate::device_access::resolve(
+        config_dir,
+        saved,
+        std::env::var("NOLTRI_ACCESS_TOKEN").ok().as_deref(),
+        std::env::var("NOLTRI_DEV_TOKEN").ok().as_deref(),
+        generate,
+    )?;
+    let mut settings = from_value(value);
+    settings.api_token = access.token().to_owned();
+    Ok(settings)
 }
 
 impl ModelSettings {
@@ -466,6 +503,31 @@ pub fn save(config_dir: &Path, models: &ModelSettings) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_profile_saved_token_requires_a_string_without_silent_fallback() {
+        for value in [
+            serde_json::json!({"apiToken": null}),
+            serde_json::json!({"apiToken": 7}),
+            serde_json::json!({"apiToken": []}),
+        ] {
+            assert!(saved_access_token(Some(&value)).is_err());
+        }
+        assert_eq!(saved_access_token(None).unwrap(), "");
+        assert_eq!(
+            saved_access_token(Some(&serde_json::json!({}))).unwrap(),
+            ""
+        );
+        assert_eq!(
+            saved_access_token(Some(&serde_json::json!({"apiToken": ""}))).unwrap(),
+            ""
+        );
+        assert_eq!(
+            saved_access_token(Some(&serde_json::json!({"apiToken": "synthetic-explicit"})))
+                .unwrap(),
+            "synthetic-explicit"
+        );
+    }
 
     fn model(id: &str) -> ProviderModel {
         ProviderModel {

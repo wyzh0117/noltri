@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Noltri Mindmap Synthetic Harness</title>
+    <style>
+      :root { --paper: #fffefb; --canvas: #f3f1e9; --ink: #202722; --ink-soft: #445149; --muted: #79847d; --green: #4d8067; --green-dark: #315742; --green-pale: #e7eee8; --line: #d9ded7; --serif: Georgia, serif; }
+      * { box-sizing: border-box; }
+      html, body, #root { width: 100%; height: 100%; margin: 0; }
+      body { background: var(--paper); color: var(--ink); font: 13px/1.5 system-ui, sans-serif; }
+      .harness { display: flex; flex-direction: column; width: min(1040px, 100vw); height: min(760px, 100vh); margin: 0 auto; }
+      .harness-toolbar { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
+      .harness-workspace { flex: 1; min-height: 0; border: 1px solid var(--line); }
+      .harness-live { display: grid; grid-template-rows: auto 1fr; width: 100%; height: 100%; min-height: 0; }
+      .harness-status { display: flex; gap: 12px; padding: 5px 10px; border-bottom: 1px solid var(--line); color: var(--muted); font: 10px ui-monospace, monospace; }
+      .harness-textarea { width: 100%; height: 100%; padding: 20px; border: 0; outline: 0; resize: none; background: transparent; color: var(--ink); font: 12px/1.7 ui-monospace, monospace; }
+      .harness-editor-wrap { width: 100%; height: 100%; min-height: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./mindmap-harness.tsx"></script>
+  </body>
+</html>

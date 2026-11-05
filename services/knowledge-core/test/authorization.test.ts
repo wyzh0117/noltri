@@ -284,7 +284,10 @@ describe('scope and project rules', () => {
     expect(scopeForAction('POST', 'api/nodes/:id/move')).toBe('mutate');
     expect(scopeForAction('POST', 'api/inbox/:id/assign')).toBe('mutate');
     expect(scopeForAction('POST', 'api/capture/:id/retry')).toBe('mutate');
+    expect(scopeForAction('GET', 'api/capture/batches')).toBe('read');
+    expect(scopeForAction('GET', 'api/capture/batches/:batchId/assets/:assetId')).toBe('read');
     expect(scopeForAction('POST', 'api/graph/select')).toBe('read');
+    expect(scopeForAction('POST', 'api/note-interpretation')).toBe('read');
     expect(scopeForAction('GET', 'api/notes/:topicId/chapters')).toBe('read');
     expect(scopeForAction('PUT', 'api/notes/:topicId')).toBe('mutate');
     expect(scopeForAction('PUT', 'api/chapters/:chapterId/topics/:topicId')).toBe('mutate');

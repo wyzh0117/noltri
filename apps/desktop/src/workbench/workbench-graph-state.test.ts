@@ -1,41 +1,50 @@
-import { describe, expect, it } from 'vitest';
-import { scheduleGraphStateWrite } from './workbench-graph-state';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { graphStateKey, readGraphState, writeGraphState } from './workbench-graph-state';
 
-describe('scope graph view persistence', () => {
-  it('flushes the captured old scope and snapshot when a scope change cancels the debounce', () => {
-    const snapshot = { camera: { x: 71, y: -38, scale: 1.42 }, positions: { topicA: { x: 211, y: 190 } } };
-    const writes: Array<[string, typeof snapshot]> = [];
-    let currentScope = 'A';
-    const scheduled: { callback?: () => void } = {};
-    let canceled = false;
-    const cleanup = scheduleGraphStateWrite(
-      'A', snapshot, () => currentScope,
-      (scope, state) => writes.push([scope, state]),
-      (callback) => { scheduled.callback = callback; return 1; },
-      () => { canceled = true; },
-    );
+class MemoryStorage {
+  private readonly values = new Map<string, string>();
+  getItem(key: string): string | null { return this.values.get(key) ?? null; }
+  setItem(key: string, value: string): void { this.values.set(key, value); }
+  removeItem(key: string): void { this.values.delete(key); }
+  clear(): void { this.values.clear(); }
+}
 
-    currentScope = 'B';
-    cleanup();
+describe('graph view state', () => {
+  const scope = 'discipline:scope\0mini';
+  let storage: MemoryStorage;
 
-    expect(canceled).toBe(true);
-    expect(writes).toEqual([['A', snapshot]]);
-    expect(scheduled.callback).toBeDefined();
+  beforeEach(() => {
+    storage = new MemoryStorage();
+    vi.stubGlobal('window', { localStorage: storage });
   });
 
-  it('keeps same-scope debounce asynchronous and writes its captured snapshot once', () => {
-    const snapshot = { camera: { x: 8, y: 9, scale: 1.1 }, positions: null };
-    const writes: Array<[string, typeof snapshot]> = [];
-    const scheduled: { callback?: () => void } = {};
-    scheduleGraphStateWrite(
-      'A', snapshot, () => 'A',
-      (scope, state) => writes.push([scope, state]),
-      (callback) => { scheduled.callback = callback; return 1; },
-      () => undefined,
-    );
+  afterEach(() => vi.unstubAllGlobals());
 
-    expect(writes).toEqual([]);
-    scheduled.callback?.();
-    expect(writes).toEqual([['A', snapshot]]);
+  it('invalidates the old placeholder camera while retaining query settings', () => {
+    storage.setItem(graphStateKey(scope), JSON.stringify({
+      camera: { x: 0, y: 0, scale: 0.5 },
+      positions: { a: { x: 10, y: 20 } },
+      settings: { filterQuery: 'tag:policy', groups: [{ id: 'g1', query: 'path:notes', color: '#112233' }] },
+    }));
+
+    expect(readGraphState(scope)).toMatchObject({
+      camera: null,
+      cameraReady: false,
+      positions: { a: { x: 10, y: 20 } },
+      settings: { filterQuery: 'tag:policy', groups: [{ id: 'g1', query: 'path:notes', color: '#112233' }] },
+    });
+  });
+
+  it('keeps legacy user cameras and explicitly ready default cameras', () => {
+    storage.setItem(graphStateKey(scope), JSON.stringify({ camera: { x: 12, y: -8, scale: 1.7 } }));
+    expect(readGraphState(scope)).toMatchObject({ camera: { x: 12, y: -8, scale: 1.7 }, cameraReady: true });
+
+    storage.setItem(graphStateKey(scope), JSON.stringify({ camera: { x: 0, y: 0, scale: 0.5 }, cameraReady: true }));
+    expect(readGraphState(scope)).toMatchObject({ camera: { x: 0, y: 0, scale: 0.5 }, cameraReady: true });
+  });
+
+  it('does not persist a placeholder when layout has not fit yet', () => {
+    writeGraphState(scope, { camera: { x: 0, y: 0, scale: 0.5 }, cameraReady: false, positions: {}, settings: readGraphState(scope).settings });
+    expect(JSON.parse(storage.getItem(graphStateKey(scope))!)).toMatchObject({ camera: null, cameraReady: false });
   });
 });

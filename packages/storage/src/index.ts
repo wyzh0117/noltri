@@ -9,6 +9,11 @@ export interface RepositoryOptions {
   sqliteBusyTimeoutMs?: number;
 }
 
+/** Whether factory options describe a temporary repository rather than a persistent file. */
+export function isEphemeralStorage(options: RepositoryOptions): boolean {
+  return options.driver === 'memory' || (options.driver === 'sqlite' && options.sqliteFile === ':memory:');
+}
+
 /** Keep the Node SQLite driver behind a dynamic import for browser consumers. */
 export async function createRepository(options: RepositoryOptions): Promise<KnowledgeRepository> {
   if (options.driver === 'memory') return createInMemoryRepository();

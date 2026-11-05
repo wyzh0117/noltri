@@ -299,6 +299,18 @@ describe('Notes editor model', () => {
     expect(extractSubpath(note, 'missing')).toBeNull();
   });
 
+  it('embeds a standalone block marker paragraph and bounds nested headings at same-or-higher levels', () => {
+    const blockNote = '# Start\n\nA paragraph split\nacross lines.\n^block-a\n\n# Next\nother text';
+    expect(extractSubpath(blockNote, '^block-a')).toBe('A paragraph split\nacross lines.');
+
+    const sectionNote = '# Parent\nparent text\n## Child\nchild text\n### Grandchild\ngrandchild text\n#### Deeper\ndeeper text\n## Sibling\nsibling text\n# Outside\noutside text';
+    const child = extractSubpath(sectionNote, 'Parent#Child');
+    expect(child).toContain('### Grandchild');
+    expect(child).toContain('#### Deeper');
+    expect(child).not.toContain('## Sibling');
+    expect(child).not.toContain('# Outside');
+  });
+
   it('blocks unsafe protocols while permitting normal local and web links', () => {
     expect(safeNoteHref(' javascript:alert(1) ')).toBeNull();
     expect(safeNoteHref('data:text/html,boom')).toBeNull();

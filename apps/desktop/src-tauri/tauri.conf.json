@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "知序",
-  "version": "0.2.0",
-  "identifier": "com.noltri.companion",
+  "version": "3.0.0",
+  "identifier": "com.noltri.notes",
   "build": {
     "beforeDevCommand": "pnpm exec vite",
     "devUrl": "http://localhost:1420",
@@ -25,12 +25,15 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "category": "Productivity",
     "publisher": "知序 Noltri",
     "copyright": "© 知序 Noltri",
@@ -43,17 +46,35 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/noltri-runtime"],
+    "externalBin": [
+      "binaries/noltri-runtime"
+    ],
     "resources": [
       "resources/core-server.mjs",
       "resources/parser-worker.mjs",
-      "resources/mcp-server.mjs"
+      "resources/mcp-server.mjs",
+      "resources/node-LICENSE.txt",
+      "resources/third-party"
     ],
     "macOS": {
       "minimumSystemVersion": "13.5",
       "signingIdentity": "-",
       "hardenedRuntime": true,
       "entitlements": "entitlements.plist"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/wyzh0117/noltri/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA2N0ZDNUJGQjk2OEIwNTMKUldSVHNHaTV2OFYvQmoxa05kdHVBQ2JBaTUyNWMyOFltNjd1amhVQmx2bG9yM0VzMHYxTEl0YUsK",
+      "requireSignedVersion": true,
+      "allowDowngrades": false,
+      "dangerousInsecureTransportProtocol": false,
+      "dangerousAcceptInvalidCerts": false,
+      "dangerousAcceptInvalidHostnames": false
     }
   }
 }

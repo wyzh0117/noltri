@@ -30,17 +30,20 @@ fn runtime_status(handle: &CoreRuntimeHandle) -> String {
 }
 
 #[tauri::command]
-pub fn get_settings(app: AppHandle, runtime: State<'_, Arc<CoreRuntimeHandle>>) -> DesktopSettings {
-    let config_dir = app
-        .path()
-        .app_config_dir()
-        .ok()
-        .map(crate::settings::directory);
-    let settings = crate::settings::load(config_dir.as_deref());
-    DesktopSettings {
-        api_base_url: settings.api_base_url,
-        api_token: settings.api_token,
-        mcp_endpoint: settings.mcp_endpoint,
+pub async fn get_settings(
+    app: AppHandle,
+    runtime: State<'_, Arc<CoreRuntimeHandle>>,
+) -> Result<DesktopSettings, String> {
+    let handle = runtime.inner().clone();
+    let connection = tauri::async_runtime::spawn_blocking(move || handle.wait_connection())
+        .await
+        .map_err(|_| "authenticated_runtime_not_ready")??;
+    let directory = config_dir(&app)?;
+    let settings = crate::settings::load(Some(&directory));
+    Ok(DesktopSettings {
+        api_base_url: connection.api_base_url,
+        api_token: connection.api_token,
+        mcp_endpoint: connection.mcp_endpoint,
         providers: settings
             .models
             .providers
@@ -50,7 +53,7 @@ pub fn get_settings(app: AppHandle, runtime: State<'_, Arc<CoreRuntimeHandle>>) 
         active_provider_id: settings.models.active_provider_id,
         active_model_id: settings.models.active_model_id,
         runtime_status: runtime_status(&runtime),
-    }
+    })
 }
 
 #[derive(Serialize)]

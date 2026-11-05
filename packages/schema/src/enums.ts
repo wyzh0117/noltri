@@ -17,6 +17,9 @@ export type KnowledgeItemStatus = z.infer<typeof knowledgeItemStatusSchema>;
 export const processingStatusSchema = z.enum(['pending', 'processing', 'done', 'failed']);
 export type ProcessingStatus = z.infer<typeof processingStatusSchema>;
 
+export const reviewStatusSchema = z.enum(['needs_review', 'confirmed', 'deferred', 'rejected']);
+export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
+
 export const captureActionSchema = z.enum(['created', 'attached', 'merged']);
 export type CaptureAction = z.infer<typeof captureActionSchema>;
 

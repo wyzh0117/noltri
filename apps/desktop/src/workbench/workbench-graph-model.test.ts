@@ -1,104 +1,79 @@
 import { describe, expect, it } from 'vitest';
-import type { VaultGraph } from '@noltri/schema';
-import { buildGraphModel, graphNodeSize, graphQueryMatchFromResponse, tagNodeId } from './workbench-graph-model';
-import type { GraphModelOptions } from './workbench-graph-model';
+import type { GraphEdge, GraphNode } from '@noltri/schema';
+import { buildGraphModel, graphContextAnchorId, graphContextPathIds, selectGraphWindow } from './workbench-graph-model';
 
-const options: GraphModelOptions = {
-  mode: 'global', focusPath: null, depth: 1, showOutgoing: true, showIncoming: true, neighborLinks: false,
-  showTags: false, showAttachments: false, existingFilesOnly: false, showOrphans: true,
-  nodeSizeMultiplier: 1, lineSizeMultiplier: 1,
-};
-
-const graph: VaultGraph = {
-  revision: 4,
-  nodes: [
-    { path: 'a.md', title: 'A', basename: 'A', type: 'note', tags: ['work', '#Project/Work'] },
-    { path: 'b.md', title: 'B', basename: 'B', type: 'note', tags: ['project/work'] },
-    { path: 'c.png', title: 'C', basename: 'C', extension: 'png', type: 'attachment', tags: [] },
-    { path: 'dangling', title: 'Dangling', basename: 'Dangling', type: 'unresolved', tags: [] },
-    { path: 'isolated.md', title: 'Isolated', basename: 'Isolated', type: 'note', tags: [] },
-  ],
-  edges: [
-    { sourcePath: 'a.md', targetPath: 'b.md', count: 2, resolved: true },
-    { sourcePath: 'a.md', targetPath: 'dangling', count: 1, resolved: false },
-    { sourcePath: 'b.md', targetPath: 'c.png', count: 1, resolved: true },
-    { sourcePath: 'b.md', targetPath: 'a.md', count: 1, resolved: true },
-  ],
-};
-
-function match(paths: string[] = [], matchingTags: string[] = [], attachmentPaths: string[] = []) {
-  return graphQueryMatchFromResponse({ revision: 4, paths, matchingTags, attachmentPaths });
+function topic(id: string, parentId: string | null = null): GraphNode {
+  return { id, title: id, nodeType: 'topic', parentId, summary: null };
 }
 
-describe('vault graph model', () => {
-  it('applies attachment, unresolved, filter, and orphan options without parsing note text', () => {
-    const filtered = buildGraphModel(graph, options, { filter: match(['a.md']), groups: [] });
-    expect(filtered.nodes.map((node) => node.id).sort()).toEqual(['a.md', 'dangling']);
-    expect(filtered.edges).toHaveLength(1);
-    expect(buildGraphModel(graph, { ...options, existingFilesOnly: true }, { filter: null, groups: [] }).nodes.some((node) => node.type === 'unresolved')).toBe(false);
-    expect(buildGraphModel(graph, { ...options, showAttachments: true }, { filter: null, groups: [] }).nodes.some((node) => node.path === 'c.png')).toBe(true);
-    expect(buildGraphModel(graph, { ...options, showOrphans: false }, { filter: null, groups: [] }).nodes.some((node) => node.path === 'isolated.md')).toBe(false);
-  });
+function chapter(id: string, parentId: string): GraphNode {
+  return { id, title: id, nodeType: 'chapter', parentId, summary: null };
+}
 
-  it('builds tag nodes and colors them from the first matching group', () => {
-    const model = buildGraphModel({ ...graph, edges: [] }, { ...options, showTags: true }, {
-      filter: null,
-      groups: [
-        { query: 'tag:work', color: '#f00', match: match(['b.md'], ['project/work']) },
-        { query: 'all', color: '#0f0', match: match(['a.md', 'b.md'], ['work', '#project/work']) },
-      ],
+function taxonomy(id: string, nodeType: 'discipline' | 'subdiscipline' | 'domain', parentId: string | null): GraphNode {
+  return { id, title: id, nodeType, parentId, summary: null };
+}
+
+function edge(fromNodeId: string, toNodeId: string, relationType: GraphEdge['relationType'] = 'part_of'): GraphEdge {
+  return { id: `${fromNodeId}->${toNodeId}`, fromNodeId, toNodeId, relationType, source: 'test' };
+}
+
+describe('semantic graph model', () => {
+  it('keeps topic and chapter identity and applies semantic filter and query groups', () => {
+    const nodes = [topic('root'), topic('child', 'root'), chapter('note', 'child'), topic('other')];
+    const edges = [edge('root', 'child'), edge('child', 'note'), edge('other', 'note', 'wikilink')];
+    const model = buildGraphModel(nodes, edges, {
+      showOrphans: true,
+      nodeSizeMultiplier: 1,
+      lineSizeMultiplier: 1,
+      preserveNodeIds: new Set(['root']),
+    }, {
+      filter: { nodeIds: new Set(['note']) },
+      groups: [{ query: 'tag:method', color: '#ff0000', match: { nodeIds: new Set(['note']) } }],
     });
-    const tag = model.nodes.find((node) => node.id === tagNodeId('project/work'));
-    expect(tag).toMatchObject({ title: '#Project/Work', colorGroup: '#f00' });
-    expect(model.edges.some((edge) => edge.source === 'a.md' && edge.target === tagNodeId('project/work'))).toBe(true);
+
+    expect(model.nodes.map(({ id }) => id)).toEqual(['note', 'root']);
+    expect(model.nodes.find(({ id }) => id === 'note')).toMatchObject({ type: 'chapter', colorGroup: '#ff0000' });
+    expect(model.edges).toEqual([]);
   });
 
-  it('extracts local depth, respects directions, and includes neighbor links only when enabled', () => {
-    const local = buildGraphModel(graph, { ...options, mode: 'local', focusPath: 'b.md', depth: 1, showAttachments: true }, { filter: null, groups: [] });
-    expect(local.nodes.map((node) => node.id).sort()).toEqual(['a.md', 'b.md', 'c.png']);
-    expect(local.edges.some((edge) => edge.source === 'a.md' && edge.target === 'b.md')).toBe(true);
-    expect(local.edges.some((edge) => edge.source === 'a.md' && edge.target === 'dangling')).toBe(false);
+  it('keeps the taxonomy scope root, selected path, and the 40-node window', () => {
+    const nodes = [
+      taxonomy('discipline-id', 'discipline', null),
+      taxonomy('subdiscipline-id', 'subdiscipline', 'discipline-id'),
+      topic('root-topic', 'subdiscipline-id'),
+      ...Array.from({ length: 70 }, (_, index) => topic(`child-${String(index).padStart(2, '0')}`, 'root-topic')),
+    ];
+    const edges = nodes.slice(1).map((node) => edge(node.id, node.parentId!));
+    const model = buildGraphModel(nodes, edges, { showOrphans: true, nodeSizeMultiplier: 1, lineSizeMultiplier: 1 });
+    const anchor = graphContextAnchorId('discipline-id', nodes);
+    const mini = selectGraphWindow(model, anchor ?? 'root', 'child-69', nodes, 40);
 
-    const withoutReverseEdge = { ...graph, edges: graph.edges.filter((edge) => !(edge.sourcePath === 'b.md' && edge.targetPath === 'a.md')) };
-    const outgoing = buildGraphModel(withoutReverseEdge, { ...options, mode: 'local', focusPath: 'b.md', depth: 1, showAttachments: true, showIncoming: false }, { filter: null, groups: [] });
-    expect(outgoing.nodes.map((node) => node.id).sort()).toEqual(['b.md', 'c.png']);
+    expect(anchor).toBe('discipline-id');
+    expect(mini.nodes).toHaveLength(40);
+    expect(mini.nodes.map(({ id }) => id)).toContain('discipline-id');
+    expect(mini.nodes.map(({ id }) => id)).toContain('child-69');
+    expect(mini.hiddenCount).toBe(33);
+    expect(mini.nodes.slice(0, 4).map(({ id }) => id)).toEqual(['discipline-id', 'subdiscipline-id', 'root-topic', 'child-69']);
+    expect(graphContextPathIds('discipline-id', 'child-69', nodes)).toEqual(new Set(['discipline-id', 'subdiscipline-id', 'root-topic', 'child-69']));
   });
 
-  it('uses the specified clamped square-root size curve', () => {
-    expect(graphNodeSize(0)).toBe(8);
-    expect(graphNodeSize(99)).toBe(30);
-    expect(graphNodeSize(99, 20)).toBe(150);
+  it('anchors a subdiscipline/domain root exactly instead of substituting the first topic', () => {
+    const nodes = [taxonomy('discipline-id', 'discipline', null), taxonomy('domain-id', 'domain', 'discipline-id'), topic('topic-id', 'domain-id')];
+    expect(graphContextAnchorId('domain-id', nodes)).toBe('domain-id');
+    expect(graphContextAnchorId('missing-root', nodes)).toBeNull();
   });
 
-  it('filters and colors tag nodes only from typed matchingTags, not every tag on a matching note', () => {
-    const taggedGraph: VaultGraph = {
-      revision: 4,
-      nodes: [
-        { path: 'a.md', title: 'A', basename: 'A', type: 'note', tags: ['science/math', 'math'] },
-        { path: 'b.md', title: 'B', basename: 'B', type: 'note', tags: ['science/ethics', 'history'] },
-      ],
-      edges: [],
-    };
-    const typedMatch = match(['a.md', 'b.md'], ['#science/math', 'science/ethics']);
-    const filtered = buildGraphModel(taggedGraph, { ...options, showTags: true }, { filter: typedMatch, groups: [] });
-    expect(filtered.nodes.map((node) => node.id).sort()).toEqual(['a.md', 'b.md', tagNodeId('science/ethics'), tagNodeId('science/math')]);
-    expect(filtered.nodes.some((node) => node.id === tagNodeId('math') || node.id === tagNodeId('history'))).toBe(false);
+  it('keeps a chapter with its topic in the mini graph and retains explicit semantic edges', () => {
+    const nodes = [topic('root'), topic('level-2', 'root'), topic('level-3', 'level-2'), chapter('chapter-a', 'level-3'), chapter('chapter-b', 'root')];
+    const edges = [edge('root', 'level-2'), edge('level-2', 'level-3'), edge('level-3', 'chapter-a'), edge('root', 'chapter-b'), edge('chapter-a', 'chapter-b', 'wikilink')];
+    const model = buildGraphModel(nodes, edges, { showOrphans: true, nodeSizeMultiplier: 1, lineSizeMultiplier: 1 });
+    const mini = selectGraphWindow(model, 'root', 'chapter-a', nodes, 4);
 
-    const grouped = buildGraphModel(taggedGraph, { ...options, showTags: true }, {
-      filter: null,
-      groups: [
-        { query: 'tag:science', color: '#f00', match: match(['a.md', 'b.md'], ['science/math', 'science/ethics']) },
-        { query: 'tag:math OR tag:history', color: '#0f0', match: match(['a.md', 'b.md'], ['math', 'history']) },
-      ],
-    });
-    expect(grouped.nodes.find((node) => node.id === tagNodeId('science/math'))?.colorGroup).toBe('#f00');
-    expect(grouped.nodes.find((node) => node.id === tagNodeId('science/ethics'))?.colorGroup).toBe('#f00');
-    expect(grouped.nodes.find((node) => node.id === tagNodeId('math'))?.colorGroup).toBe('#0f0');
-    expect(grouped.nodes.find((node) => node.id === tagNodeId('history'))?.colorGroup).toBe('#0f0');
-
-    const notMatch = buildGraphModel(taggedGraph, { ...options, showTags: true }, {
-      filter: match(['a.md', 'b.md'], ['math', 'history']), groups: [],
-    });
-    expect(notMatch.nodes.filter((node) => node.type === 'tag').map((node) => node.id).sort()).toEqual([tagNodeId('history'), tagNodeId('math')]);
+    expect(mini.nodes.map(({ id }) => id)).toEqual(['root', 'level-2', 'level-3', 'chapter-a']);
+    expect(mini.edges.some(({ relationType }) => relationType === 'wikilink')).toBe(false);
+    const expanded = selectGraphWindow(model, 'root', 'chapter-a', nodes, 5000);
+    expect(expanded.nodes).toHaveLength(model.nodes.length);
+    expect(expanded.edges.some(({ relationType }) => relationType === 'wikilink')).toBe(true);
   });
 });

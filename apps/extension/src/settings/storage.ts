@@ -3,7 +3,7 @@ import { MIN_CAPTURE_TEXT_LENGTH } from '@noltri/schema';
 export const SETTINGS_STORAGE_KEY = 'noltri.settings';
 
 /** Default matches `NOLTRI_API_BASE_URL` in the repository `.env.example`. */
-export const DEFAULT_API_BASE_URL = 'http://localhost:8787';
+export const DEFAULT_API_BASE_URL = 'http://localhost:18887';
 
 export interface ExtensionSettings {
   apiBaseUrl: string;
@@ -143,7 +143,7 @@ export function validateApiBaseUrl(value: string): UrlValidation {
   try {
     parsed = new URL(trimmed);
   } catch {
-    return fail('API 地址不是合法 URL，例如 http://localhost:8787');
+    return fail('API 地址不是合法 URL，例如 http://localhost:18887');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return fail('API 地址只能使用 http 或 https');

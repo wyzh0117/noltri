@@ -1,17 +1,18 @@
 {
   "name": "@noltri/desktop",
-  "version": "0.2.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "build": "vite build",
+    "build": "pnpm run build:graph-wasm && vite build",
     "build:runtime": "node scripts/build-runtime.mjs",
+    "build:graph-wasm": "node scripts/build-workbench-graph-wasm.mjs",
     "release:mac": "tauri build && node scripts/verify-macos.mjs",
     "verify:mac": "node scripts/verify-macos.mjs",
     "tauri": "tauri",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests && node --test scripts/build-pipeline.contract.mjs",
     "native:check": "cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {

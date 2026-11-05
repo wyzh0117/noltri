@@ -10,9 +10,11 @@ export type GraphScope = z.infer<typeof graphScopeSchema>;
 export const graphNodeSchema = z.object({
   id: z.string(),
   title: z.string(),
-  nodeType: z.enum(['topic', 'chapter']),
+  nodeType: z.enum(['discipline', 'subdiscipline', 'domain', 'topic', 'chapter']),
   parentId: z.string().nullable(),
   summary: z.string().nullable(),
+  notePath: z.string().optional(),
+  notePaths: z.array(z.string()).optional(),
 });
 export type GraphNode = z.infer<typeof graphNodeSchema>;
 
@@ -20,7 +22,7 @@ export const graphEdgeSchema = z.object({
   id: z.string(),
   fromNodeId: z.string(),
   toNodeId: z.string(),
-  relationType: z.literal('part_of'),
+  relationType: z.enum(['part_of', 'wikilink']),
   source: z.string(),
   implicit: z.boolean().optional(),
 });
@@ -34,6 +36,7 @@ export type GraphDiagnostic = z.infer<typeof graphDiagnosticSchema>;
 
 export const graphSelectionSchema = z.object({
   scope: graphScopeSchema,
+  scopeGraphNodeId: z.string(),
   nodes: z.array(graphNodeSchema),
   edges: z.array(graphEdgeSchema),
   diagnostics: z.array(graphDiagnosticSchema).optional(),
@@ -63,7 +66,7 @@ export const graphNoteSchema = z.object({
   etag: z.string().nullable(),
 });
 export type GraphNote = z.infer<typeof graphNoteSchema>;
-/** Bounds the legacy GraphNote API; Vault file writes use the larger file-oriented request contract. */
+/** Keeps worst-case JSON escaping below Knowledge Core's 256 KB HTTP request ceiling. */
 export const MAX_GRAPH_NOTE_CHARS = 40_000;
 
 export const graphNoteIndexEntrySchema = z.object({

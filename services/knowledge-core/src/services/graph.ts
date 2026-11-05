@@ -18,11 +18,32 @@ import { isKnowledgeError, knowledgeError } from '@noltri/shared';
 import type { ActorContext, CoreDeps } from '../types';
 import { taxonomyNodeType } from '../node-taxonomy';
 
-function graphNode(node: KnowledgeNode): GraphNode {
-  if (node.nodeType !== 'topic' && node.nodeType !== 'chapter') {
+function semanticId(frontmatter: Record<string, unknown>): string | null {
+  if (frontmatter.noteType === 'topic' && typeof frontmatter.topicId === 'string') return frontmatter.topicId;
+  if (frontmatter.noteType === 'chapter' && typeof frontmatter.chapterId === 'string') return frontmatter.chapterId;
+  return null;
+}
+
+function frontmatterIds(frontmatter: Record<string, unknown>, singular: string, plural: string): Set<string> {
+  const values = [frontmatter[singular], ...(Array.isArray(frontmatter[plural]) ? frontmatter[plural] as unknown[] : [])];
+  return new Set(values.filter((value): value is string => typeof value === 'string'));
+}
+
+function semanticIds(frontmatter: Record<string, unknown>): Set<string> {
+  const ids = new Set<string>();
+  const indexId = semanticId(frontmatter);
+  if (indexId !== null) ids.add(indexId);
+  for (const id of frontmatterIds(frontmatter, 'topicId', 'topicIds')) ids.add(id);
+  for (const id of frontmatterIds(frontmatter, 'chapterId', 'chapterIds')) ids.add(id);
+  return ids;
+}
+
+function graphNode(node: KnowledgeNode, nodesById?: Map<string, KnowledgeNode>): GraphNode {
+  const nodeType = nodesById === undefined ? node.nodeType : taxonomyNodeType(node, nodesById);
+  if (nodeType !== 'discipline' && nodeType !== 'subdiscipline' && nodeType !== 'domain' && nodeType !== 'topic' && nodeType !== 'chapter') {
     throw knowledgeError('invalid_request', `节点 ${node.id} 不是主题或章节`);
   }
-  return { id: node.id, title: node.title, nodeType: node.nodeType, parentId: node.parentId, summary: node.summary };
+  return { id: node.id, title: node.title, nodeType, parentId: node.parentId, summary: node.summary };
 }
 
 function graphEdge(edge: KnowledgeEdge, implicit = false): GraphEdge {
@@ -192,9 +213,10 @@ export async function selectGraph(
   let scopeRootId = scope.disciplineId;
   if (scope.kind === 'subdiscipline') {
     const subdiscipline = byId.get(scope.subdisciplineId);
+    const subdisciplineType = subdiscipline === undefined ? null : taxonomyNodeType(subdiscipline, byId);
     if (
       subdiscipline === undefined ||
-      taxonomyNodeType(subdiscipline, byId) !== 'subdiscipline' ||
+      (subdisciplineType !== 'subdiscipline' && subdisciplineType !== 'domain') ||
       !belongsTo(subdiscipline.id, discipline.id, parents) ||
       subdiscipline.id === discipline.id
     ) {
@@ -234,16 +256,90 @@ export async function selectGraph(
     );
   }
 
-  const selectedNodes = nodes
-    .filter((node) => (node.nodeType === 'topic' && topicIds.has(node.id)) || (node.nodeType === 'chapter' && chapterIds.has(node.id)))
+  const graphFiles = await deps.vault?.semanticFileIndex() ?? [];
+  const semanticPaths = new Map<string, Set<string>>();
+  const indexFiles = new Map<string, (typeof graphFiles)[number]>();
+  const semanticIdsByPath = new Map<string, Set<string>>();
+  for (const file of graphFiles) {
+    const id = semanticId(file.frontmatter);
+    if (id !== null && !indexFiles.has(id)) indexFiles.set(id, file);
+    const ids = semanticIds(file.frontmatter);
+    if (ids.size > 0) {
+      semanticIdsByPath.set(file.path, ids);
+      for (const semanticNodeId of ids) {
+        const paths = semanticPaths.get(semanticNodeId) ?? new Set<string>();
+        paths.add(file.path);
+        semanticPaths.set(semanticNodeId, paths);
+      }
+    }
+  }
+  const selectedIds = new Set<string>();
+  if (scope.kind === 'topic') {
+    for (const topicId of topicIds) selectedIds.add(topicId);
+    for (const chapterId of chapterIds) selectedIds.add(chapterId);
+  } else {
+    for (const node of nodes) {
+      const nodeType = taxonomyNodeType(node, byId);
+      const inHierarchy = nodeType === 'discipline' || nodeType === 'subdiscipline' || nodeType === 'domain' || nodeType === 'topic';
+      if (node.id === scopeRootId || (inHierarchy && belongsTo(node.id, scopeRootId, parents))) selectedIds.add(node.id);
+    }
+    for (const chapterId of chapterIds) selectedIds.add(chapterId);
+  }
+  const selectedNodes = await Promise.all(nodes
+    .filter((node) => selectedIds.has(node.id))
     .sort((first, second) => first.title.localeCompare(second.title, 'zh-Hans-CN') || first.id.localeCompare(second.id))
-    .map(graphNode);
-  const selectedIds = new Set(selectedNodes.map((node) => node.id));
+    .map(async (node) => {
+      const nodeType = taxonomyNodeType(node, byId);
+      if (nodeType !== 'topic' && nodeType !== 'chapter') return graphNode(node, byId);
+      const file = indexFiles.get(node.id);
+      const notePaths = new Set(semanticPaths.get(node.id) ?? []);
+      const semanticTopicIds = node.nodeType === 'topic'
+        ? [node.id]
+        : taxonomyEdges
+          .filter((edge) => edge.fromNodeId === node.id && topicIds.has(edge.toNodeId) && byId.get(edge.toNodeId)?.nodeType === 'topic')
+          .map((edge) => edge.toNodeId)
+          .sort();
+      const legacyNotes = await Promise.all(semanticTopicIds.map(async (topicId) =>
+        await deps.graphNoteStore?.legacyPath(topicId, node.nodeType === 'chapter' ? node.id : null)));
+      const existingLegacyPaths = legacyNotes.flatMap((entry) => entry?.exists ? [entry.path] : []);
+      for (const notePath of existingLegacyPaths) notePaths.add(notePath);
+      const notePath = file?.path ?? existingLegacyPaths[0] ?? [...notePaths][0];
+      return {
+        ...graphNode(node, byId),
+        ...(notePath === undefined ? {} : { notePath }),
+        notePaths: [...notePaths].sort(),
+        ...(file === undefined ? {} : { title: file.title, summary: file.summary ?? node.summary }),
+      };
+    }));
   const selectedEdges = taxonomyEdges
     .filter((edge) => selectedIds.has(edge.fromNodeId) && selectedIds.has(edge.toNodeId))
-    .filter((edge) => byId.get(edge.fromNodeId)?.nodeType === 'chapter' && byId.get(edge.toNodeId)?.nodeType === 'topic')
+    .filter((edge) => scope.kind !== 'topic' || (byId.get(edge.fromNodeId)?.nodeType === 'chapter' && byId.get(edge.toNodeId)?.nodeType === 'topic'))
     .sort((first, second) => first.fromNodeId.localeCompare(second.fromNodeId) || first.toNodeId.localeCompare(second.toNodeId));
-  return { scope, nodes: selectedNodes, edges: selectedEdges, ...(diagnostics.length > 0 ? { diagnostics } : {}) };
+  const wikilinkEdges = new Map<string, GraphEdge>();
+  for (const file of graphFiles) {
+    const fromNodeIds = semanticIdsByPath.get(file.path);
+    if (fromNodeIds === undefined) continue;
+    for (const targetPath of file.links) {
+      const toNodeIds = semanticIdsByPath.get(targetPath) ?? new Set<string>();
+      for (const fromNodeId of fromNodeIds) {
+        if (!selectedIds.has(fromNodeId)) continue;
+        for (const toNodeId of toNodeIds) {
+          if (!selectedIds.has(toNodeId) || fromNodeId === toNodeId) continue;
+          const key = `${fromNodeId}\u0000${toNodeId}`;
+          if (wikilinkEdges.has(key)) continue;
+          wikilinkEdges.set(key, {
+            id: `wikilink:${encodeURIComponent(file.path)}:${encodeURIComponent(targetPath)}`,
+            fromNodeId,
+            toNodeId,
+            relationType: 'wikilink',
+            source: 'markdown_wikilink',
+          });
+        }
+      }
+    }
+  }
+  const scopeGraphNodeId = scope.kind === 'topic' ? scope.anchorTopicId : scopeRootId;
+  return { scope, scopeGraphNodeId, nodes: selectedNodes, edges: [...selectedEdges, ...wikilinkEdges.values()], ...(diagnostics.length > 0 ? { diagnostics } : {}) };
 }
 
 export async function resolveChapter(

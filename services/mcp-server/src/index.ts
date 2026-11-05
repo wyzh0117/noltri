@@ -30,30 +30,22 @@ export interface McpHttpConfig {
   readonly host: string;
 }
 
-/** Loads local config for repo, packaged, and stdio runs; actual process env always wins. */
-export function loadMcpRootEnv(startFrom: string = path.dirname(fileURLToPath(import.meta.url))): void {
-  const findUp = (name: string): string | undefined => {
-    let cursor = startFrom;
-    for (let depth = 0; depth < 8; depth += 1) {
-      const candidate = path.join(cursor, name);
-      if (existsSync(candidate)) return candidate;
-      const parent = path.dirname(cursor);
-      if (parent === cursor) break;
-      cursor = parent;
-    }
-    return undefined;
-  };
+/** Explicit env files are exclusive; defaults never search the checkout or retired home. */
+export function loadMcpRootEnv(): void {
+  const explicit = process.env.NOLTRI_ENV_FILE?.trim();
+  if (explicit) {
+    if (existsSync(explicit)) dotenv.config({ path: explicit, quiet: true, override: false });
+    return;
+  }
+  const home = path.join(os.homedir(), '.noltri-notes');
   const data = process.env.NOLTRI_DATA_DIR?.trim();
   const candidates = [
-    process.env.NOLTRI_ENV_FILE?.trim(),
-    findUp('.env.local'),
-    path.join(os.homedir(), '.noltri', '.env.local'),
+    path.join(home, '.env.local'),
     ...(data ? [path.join(data, '.env.local')] : []),
-    findUp('.env'),
-    path.join(os.homedir(), '.noltri', '.env'),
+    path.join(home, '.env'),
     ...(data ? [path.join(data, '.env')] : []),
-  ].filter((candidate): candidate is string => candidate !== undefined && existsSync(candidate));
-  for (const candidate of new Set(candidates)) dotenv.config({ path: candidate, quiet: true });
+  ].filter((candidate) => existsSync(candidate));
+  for (const candidate of new Set(candidates)) dotenv.config({ path: candidate, quiet: true, override: false });
 }
 
 export function loadMcpConfig(env: EnvSource = currentEnv()): McpHttpConfig {
@@ -65,12 +57,12 @@ export function loadMcpConfig(env: EnvSource = currentEnv()): McpHttpConfig {
     );
   }
   return {
-    version: envString(env, 'MCP_VERSION', '0.2.0'),
-    apiBaseUrl: envString(env, 'KNOWLEDGE_API_URL').trim() || 'http://127.0.0.1:8787',
+    version: envString(env, 'MCP_VERSION', '3.0.0'),
+    apiBaseUrl: envString(env, 'KNOWLEDGE_API_URL').trim() || 'http://127.0.0.1:18887',
     accessToken,
     authRequired,
     corsOrigin: envString(env, 'CORS_ORIGIN', '*'),
-    port: envInt(env, 'MCP_PORT', 8790),
+    port: envInt(env, 'MCP_PORT', 18890),
     host: envString(env, 'MCP_HOST', '127.0.0.1'),
   };
 }

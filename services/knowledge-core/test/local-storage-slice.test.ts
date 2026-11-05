@@ -213,7 +213,7 @@ describe('capture to a local SQLite profile and back', () => {
 
   it('resolves the profile path from the environment, not from wherever the process happens to start', async () => {
     expect(loadCoreConfig({ STORAGE_DRIVER: 'sqlite' }).sqliteFile).toBe(
-      path.join(homedir(), '.noltri', 'data', 'noltri.sqlite'),
+      path.join(homedir(), '.noltri-notes', 'data', 'noltri.sqlite'),
     );
     expect(loadCoreConfig({ NOLTRI_DATA_DIR: '/tmp/noltri-profile' }).sqliteFile).toBe(
       path.join('/tmp/noltri-profile', 'noltri.sqlite'),
@@ -243,7 +243,7 @@ describe('capture to a local SQLite profile and back', () => {
     const opened = await openCore(env);
     try {
       expect(existsSync(config.sqliteFile)).toBe(true);
-      expect(config.sqliteFile).not.toBe(path.join(homedir(), '.noltri', 'data', 'noltri.sqlite'));
+      expect(config.sqliteFile).not.toBe(path.join(homedir(), '.noltri-notes', 'data', 'noltri.sqlite'));
     } finally {
       await opened.close();
     }

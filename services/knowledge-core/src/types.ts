@@ -1,3 +1,4 @@
+import type { ProcessingRulesStore } from './services/processing-rules';
 /**
  * Shared seams for Knowledge Core.
  *
@@ -8,6 +9,7 @@ import type { AIProvider } from '@noltri/ai-provider';
 import { truncate, type Logger } from '@noltri/shared';
 import type { KnowledgeRepository } from '@noltri/storage';
 import type { CoreConfig } from './config';
+import type { VaultService } from './notes/vault';
 
 export interface GraphNoteStore {
   legacyPath(topicId: string, chapterId: string | null): Promise<{ path: string; exists: boolean }>;
@@ -33,12 +35,14 @@ export interface ActorContext {
 
 /** Everything a core service or pipeline step needs. Constructed once, in `createKnowledgeCore`. */
 export interface CoreDeps {
+  processingRules?: ProcessingRulesStore;
   readonly repository: KnowledgeRepository;
   readonly provider: AIProvider;
   readonly config: CoreConfig;
   readonly logger: Logger;
   /** When configured, graph-note reads and writes use the Markdown Vault as the only truth. */
   readonly graphNoteStore?: GraphNoteStore;
+  readonly vault?: VaultService;
 }
 
 /** Upper bound of a node chain the pipeline is willing to create from one classification answer. */

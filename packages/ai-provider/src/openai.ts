@@ -29,11 +29,18 @@ import type {
   ExtractResult,
   ExtractedKnowledge,
   ProviderCapabilities,
+  RecognizeImageInput,
+  ImageRecognitionResult,
 } from './types';
 
+import { MAX_IMAGE_RECOGNITION_OUTPUT_CHARS, validateImageRecognitionResult, validateRecognizeImageInput } from './image-recognition';
+
 type JsonMap = Record<string, unknown>;
+type ImageCompletion = { model: string; dataUrl: string };
 
 export interface OpenAiProviderOptions {
+  /** Explicit opt-in; currently supported only by openai-completions. */
+  imageRecognitionModel?: string;
   /** Extra attempts after the first one for HTTP 429 / 5xx / aborts. Defaults to 2. */
   maxRetries?: number;
   /** Base of the jittered exponential backoff. Defaults to 250ms. */
@@ -229,7 +236,10 @@ function jsonSpanOf(raw: string): string | undefined {
   return body.slice(open, close + 1);
 }
 
-function parseModelJson(raw: string, label: string): unknown {
+function parseModelJson(raw: string, label: string, maxChars?: number): unknown {
+  if (maxChars !== undefined && raw.length > maxChars) {
+    throw knowledgeError('provider_error', `${label}: model output exceeds the size limit`);
+  }
   const snippet = truncate(raw.trim(), RAW_SNIPPET_CHARS);
   const span = jsonSpanOf(raw);
   if (span === undefined) {
@@ -269,6 +279,7 @@ export class ProtocolProvider implements AIProvider {
   private readonly chatEndpoint: string;
   private readonly embedEndpoint: string | null;
   private readonly protocol: AiProtocol;
+  private readonly imageRecognitionModel: string | undefined;
   private readonly maxRetries: number;
   private readonly backoffBaseMs: number;
 
@@ -291,10 +302,13 @@ export class ProtocolProvider implements AIProvider {
     }
     this.protocol = protocol;
     this.id = this.protocol === 'openai-completions' ? 'openai-compatible' : this.protocol;
+    this.imageRecognitionModel = protocol === 'openai-completions' ? options.imageRecognitionModel?.trim() || undefined : undefined;
     this.capabilities = {
       embeddings: this.protocol !== 'anthropic-messages',
       chat: true,
       structuredOutput: this.protocol !== 'anthropic-messages',
+      processingInstructions: true,
+      ...(this.imageRecognitionModel === undefined ? {} : { imageRecognition: true }),
     };
     this.config = { ...config, apiKey, baseUrl, chatModel, embedModel };
     this.chatEndpoint = this.protocol === 'openai-completions'
@@ -315,7 +329,7 @@ export class ProtocolProvider implements AIProvider {
       }
       const maxItems = Math.trunc(clamp(input.maxItems ?? DEFAULT_MAX_ITEMS, 1, 50));
       const messages: ChatMessage[] = [
-        { role: 'system', content: extractSystemPrompt(maxItems) },
+        { role: 'system', content: extractSystemPrompt(maxItems, input.instructions) },
         {
           role: 'user',
           content: buildExtractUserPrompt({
@@ -363,7 +377,7 @@ export class ProtocolProvider implements AIProvider {
         throw knowledgeError('invalid_request', 'classifyKnowledge 需要非空的知识点文本');
       }
       const messages: ChatMessage[] = [
-        { role: 'system', content: classifySystemPrompt(input.attachThreshold) },
+        { role: 'system', content: classifySystemPrompt(input.attachThreshold, input.instructions) },
         { role: 'user', content: buildClassifyUserPrompt(input) },
       ];
       const first = await this.classifyOnce(messages, input);
@@ -450,6 +464,24 @@ export class ProtocolProvider implements AIProvider {
     });
   }
 
+  async recognizeImage(input: RecognizeImageInput): Promise<ImageRecognitionResult> {
+    return this.guarded('recognizeImage', async () => {
+      if (this.imageRecognitionModel === undefined) {
+        throw knowledgeError('invalid_request', 'Image recognition is unavailable; explicitly configure an imageRecognitionModel with openai-completions');
+      }
+      const validated = validateRecognizeImageInput(input);
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'Transcribe visible image content only. Return JSON {text,confidence,blocks,uncertainRegions}. Blocks have kind paragraph/table/code/formula/image, text and optional region {x,y,width,height} normalized within [0,1]. uncertainRegions have reason, optional text and optional region. Preserve partial or unreadable content as uncertain; do not guess, invent URLs, or provide source identity. Return empty text if nothing is legible.' },
+        { role: 'user', content: 'Recognize this image and return the JSON object.' },
+      ];
+      const result = await this.requestJsonObject(messages, 'recognizeImage', {
+        model: this.imageRecognitionModel,
+        dataUrl: `data:${validated.mimeType};base64,${Buffer.from(validated.bytes).toString('base64')}`,
+      });
+      return validateImageRecognitionResult(result);
+    });
+  }
+
   private async guarded<T>(label: string, run: () => Promise<T>): Promise<T> {
     try {
       return await run();
@@ -466,7 +498,7 @@ export class ProtocolProvider implements AIProvider {
 
   private chatPayload(
     messages: ChatMessage[],
-    options: { wantsJson: boolean; structured: boolean; maxOutputTokens?: number },
+    options: { wantsJson: boolean; structured: boolean; maxOutputTokens?: number; image?: ImageCompletion },
   ): JsonMap {
     const maxTokens = Math.trunc(clamp(
       options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
@@ -493,8 +525,13 @@ export class ProtocolProvider implements AIProvider {
       };
     }
     const payload: JsonMap = {
-      model: this.config.chatModel,
-      messages: messages.map((message) => ({ role: message.role, content: message.content })),
+      model: options.image?.model ?? this.config.chatModel,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: options.image !== undefined && message.role === 'user'
+          ? [{ type: 'text', text: message.content }, { type: 'image_url', image_url: { url: options.image.dataUrl } }]
+          : message.content,
+      })),
       temperature: this.config.temperature,
       max_tokens: maxTokens,
     };
@@ -555,24 +592,24 @@ export class ProtocolProvider implements AIProvider {
   }
 
   /** One JSON-mode chat call; falls back once when response_format is unsupported. */
-  private async requestJsonObject(messages: ChatMessage[], label: string): Promise<unknown> {
+  private async requestJsonObject(messages: ChatMessage[], label: string, image?: ImageCompletion): Promise<unknown> {
     if (this.protocol === 'anthropic-messages') {
       const response = await this.complete(this.chatPayload(withJsonOnlyReminder(messages), { wantsJson: true, structured: false }));
-      return parseModelJson(response.text, label);
+      return parseModelJson(response.text, label, image === undefined ? undefined : MAX_IMAGE_RECOGNITION_OUTPUT_CHARS);
     }
     try {
       const response = await this.complete(
-        this.chatPayload(messages, { wantsJson: true, structured: true }),
+        this.chatPayload(messages, { wantsJson: true, structured: true, image }),
       );
-      return parseModelJson(response.text, label);
+      return parseModelJson(response.text, label, image === undefined ? undefined : MAX_IMAGE_RECOGNITION_OUTPUT_CHARS);
     } catch (error) {
       if (!(error instanceof UpstreamHttpError) || error.status !== 400) throw error;
       if (!looksLikeFormatRejection(error.body)) throw error;
       const fallbackMessages = withJsonOnlyReminder(messages);
       const response = await this.complete(
-        this.chatPayload(fallbackMessages, { wantsJson: true, structured: false }),
+        this.chatPayload(fallbackMessages, { wantsJson: true, structured: false, image }),
       );
-      return parseModelJson(response.text, label);
+      return parseModelJson(response.text, label, image === undefined ? undefined : MAX_IMAGE_RECOGNITION_OUTPUT_CHARS);
     }
   }
 

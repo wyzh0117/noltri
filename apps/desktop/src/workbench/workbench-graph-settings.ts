@@ -10,38 +10,22 @@ export interface GraphColorGroup {
 export interface GraphSettings {
   filterQuery: string;
   groups: GraphColorGroup[];
-  showTags: boolean;
-  showAttachments: boolean;
-  existingFilesOnly: boolean;
   showOrphans: boolean;
   showArrows: boolean;
-  showOutgoing: boolean;
-  showIncoming: boolean;
-  neighborLinks: boolean;
-  depth: number;
   labelMode: 'auto' | 'show' | 'hide';
   nodeSizeMultiplier: number;
   lineSizeMultiplier: number;
-  timelineProgress: number;
   forces: GraphForces;
 }
 
 export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
   filterQuery: '',
   groups: [],
-  showTags: false,
-  showAttachments: false,
-  existingFilesOnly: false,
   showOrphans: true,
   showArrows: false,
-  showOutgoing: true,
-  showIncoming: true,
-  neighborLinks: false,
-  depth: 1,
   labelMode: 'auto',
   nodeSizeMultiplier: 1,
   lineSizeMultiplier: 1,
-  timelineProgress: 1,
   forces: DEFAULT_GRAPH_FORCES,
 };
 
@@ -90,19 +74,11 @@ export function normalizeGraphSettings(value: unknown): GraphSettings {
   return {
     filterQuery: typeof value.filterQuery === 'string' ? value.filterQuery.slice(0, 2000) : '',
     groups,
-    showTags: typeof value.showTags === 'boolean' ? value.showTags : DEFAULT_GRAPH_SETTINGS.showTags,
-    showAttachments: typeof value.showAttachments === 'boolean' ? value.showAttachments : DEFAULT_GRAPH_SETTINGS.showAttachments,
-    existingFilesOnly: typeof value.existingFilesOnly === 'boolean' ? value.existingFilesOnly : DEFAULT_GRAPH_SETTINGS.existingFilesOnly,
     showOrphans: typeof value.showOrphans === 'boolean' ? value.showOrphans : DEFAULT_GRAPH_SETTINGS.showOrphans,
     showArrows: typeof value.showArrows === 'boolean' ? value.showArrows : DEFAULT_GRAPH_SETTINGS.showArrows,
-    showOutgoing: typeof value.showOutgoing === 'boolean' ? value.showOutgoing : DEFAULT_GRAPH_SETTINGS.showOutgoing,
-    showIncoming: typeof value.showIncoming === 'boolean' ? value.showIncoming : DEFAULT_GRAPH_SETTINGS.showIncoming,
-    neighborLinks: typeof value.neighborLinks === 'boolean' ? value.neighborLinks : DEFAULT_GRAPH_SETTINGS.neighborLinks,
-    depth: Math.round(clamp(Number(value.depth), 1, 5, DEFAULT_GRAPH_SETTINGS.depth)),
     labelMode,
     nodeSizeMultiplier: clamp(Number(value.nodeSizeMultiplier), 0.1, 5, DEFAULT_GRAPH_SETTINGS.nodeSizeMultiplier),
     lineSizeMultiplier: clamp(Number(value.lineSizeMultiplier), 0.1, 5, DEFAULT_GRAPH_SETTINGS.lineSizeMultiplier),
-    timelineProgress: clamp(Number(value.timelineProgress), 0, 1, DEFAULT_GRAPH_SETTINGS.timelineProgress),
     forces: normalizeGraphForces(isRecord(value.forces) ? value.forces as Partial<GraphForces> : DEFAULT_GRAPH_SETTINGS.forces),
   };
 }
