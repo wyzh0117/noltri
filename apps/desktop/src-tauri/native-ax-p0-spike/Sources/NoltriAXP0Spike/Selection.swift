@@ -4,12 +4,14 @@ import Foundation
 
 public struct AXSelectionSnapshot: Equatable {
     public let processID: pid_t
+    public let focusedElementIdentity: String
     public let text: String
     public let selectionRange: NSRange
     public let bounds: CGRect
 
-    public init(processID: pid_t, text: String, selectionRange: NSRange, bounds: CGRect) {
+    public init(processID: pid_t, focusedElementIdentity: String, text: String, selectionRange: NSRange, bounds: CGRect) {
         self.processID = processID
+        self.focusedElementIdentity = focusedElementIdentity
         self.text = text
         self.selectionRange = selectionRange
         self.bounds = bounds
@@ -20,6 +22,7 @@ public protocol AXElementAPI {
     associatedtype Element
 
     func focusedElement(processID: pid_t) -> Element?
+    func focusedElementIdentity(for element: Element) -> String
     func selectedText(for element: Element) -> String?
     func selectedRange(for element: Element) -> NSRange?
     func bounds(for element: Element, range: NSRange) -> CGRect?
@@ -41,9 +44,12 @@ public struct AXSelectionReader<API: AXElementAPI> {
         guard processID > 0,
               isAccessibilityTrusted(),
               let element = api.focusedElement(processID: processID),
+              let identity = nonemptyIdentity(api.focusedElementIdentity(for: element)),
               let text = api.selectedText(for: element),
-              !text.isEmpty,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let range = api.selectedRange(for: element),
+              range.location >= 0,
+              range.location != NSNotFound,
               range.length > 0,
               let bounds = api.bounds(for: element, range: range),
               !bounds.isNull,
@@ -54,10 +60,15 @@ public struct AXSelectionReader<API: AXElementAPI> {
 
         return AXSelectionSnapshot(
             processID: processID,
+            focusedElementIdentity: identity,
             text: text,
             selectionRange: range,
             bounds: bounds
         )
+    }
+
+    private func nonemptyIdentity(_ identity: String) -> String? {
+        identity.isEmpty ? nil : identity
     }
 }
 
@@ -117,6 +128,10 @@ public struct MacAXElementAPI: AXElementAPI {
             &value
         ) == .success else { return nil }
         return value as? String
+    }
+
+    public func focusedElementIdentity(for element: Element) -> String {
+        String(CFHash(element.raw))
     }
 
     public func selectedRange(for element: Element) -> NSRange? {

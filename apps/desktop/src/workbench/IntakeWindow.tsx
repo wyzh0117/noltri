@@ -8,6 +8,7 @@ import { describeError } from './api';
 import {
   buildCaptureBatchRequest,
   cancelIntakeWindow,
+  applySelectedTextActivation,
   createIntakeSession,
   enqueueIntakeImages,
   remainingIntakeImageSlots,
@@ -531,9 +532,21 @@ export function IntakeWindow({
     setPanelView('compose');
     const work = activation.action === 'capture'
       ? captureScreenshot(activation.requestId)
-      : clipboardAdapter === undefined
-        ? Promise.resolve()
-        : readClipboardSnapshot(activation.requestId);
+      : activation.action === 'selectedText'
+        ? Promise.resolve().then(() => {
+          const result = applySelectedTextActivation(sessionRef.current, activation);
+          if (!result.accepted) {
+            setCaptureNotice(result.reason === 'draft_exists'
+              ? '当前收集草稿已有内容，已保留原草稿；请先完成或取消后再收集选区。'
+              : '当前收集窗口无法接收此选区，请重试。');
+            return;
+          }
+          if (!result.duplicate) changeSession(() => result.session);
+          setCaptureNotice(result.duplicate ? '这段选区已加入当前收集窗口。' : `已将来自 ${activation.sourceApp} 的原文放入收集窗口。`);
+        })
+        : clipboardAdapter === undefined
+          ? Promise.resolve()
+          : readClipboardSnapshot(activation.requestId);
     void work
       .catch((error: unknown) => setCaptureNotice('收集操作失败；现有收集内容保留：' + describeError(error)))
       .then(() => onActivationComplete?.(activation.requestId));
@@ -1071,6 +1084,7 @@ export function IntakeWindow({
           <div className="form-field"><label htmlFor="intake-source-title">标题 <span>可留空</span></label><input id="intake-source-title" value={session.sourceTitle} maxLength={600} disabled={locked} onChange={(event) => updateMetadata({ sourceTitle: event.target.value })} placeholder="仅在已知时填写" /></div>
         </div>
         <div className="form-two-column">
+          <div className="form-field"><label htmlFor="intake-source-app">来源应用 <span>可留空</span></label><input id="intake-source-app" value={session.sourceApp} maxLength={120} disabled={locked} onChange={(event) => updateMetadata({ sourceApp: event.target.value })} placeholder="由桌面选区填入" /></div>
           <div className="form-field"><label htmlFor="intake-source-url">来源链接 <span>可留空</span></label><input id="intake-source-url" type="url" value={session.sourceUrl} disabled={locked} onChange={(event) => updateMetadata({ sourceUrl: event.target.value })} placeholder="https://…" /></div>
           <div className="form-field"><label htmlFor="intake-subject-path">学科与研究方向 <span>可留空</span></label><input id="intake-subject-path" list="intake-path-options" value={subjectPathText} disabled={locked} onChange={(event) => { setSubjectPathText(event.target.value); updateMetadata({ subjectPath: parsePath(event.target.value) }); }} placeholder="例如：社会科学 / 经济学" /><datalist id="intake-path-options">{paths.map((path) => <option key={path.id} value={path.labels.join(' / ')} />)}</datalist></div>
         </div>

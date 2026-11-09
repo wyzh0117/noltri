@@ -66,7 +66,7 @@ public enum AXPanelPlacement {
     }
 }
 
-public final class NonActivatingCapturePanel: NSPanel {
+public class NonActivatingCapturePanel: NSPanel {
     public init(contentRect: CGRect) {
         super.init(
             contentRect: contentRect,

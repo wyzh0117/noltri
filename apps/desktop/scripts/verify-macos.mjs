@@ -12,7 +12,8 @@ assert.equal(process.platform, 'darwin', 'macOS verification requires macOS');
 assert.equal(process.arch, 'arm64', 'This release supports Apple Silicon only');
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const config = JSON.parse(readFileSync(path.join(desktop, 'src-tauri/tauri.conf.json'), 'utf8'));
-const bundle = path.join(desktop, 'src-tauri/target/release/bundle');
+const target = path.resolve(process.env.CARGO_TARGET_DIR || path.join(desktop, 'src-tauri/target'));
+const bundle = path.join(target, 'release', 'bundle');
 const appName = `${config.productName}.app`;
 const app = path.join(bundle, 'macos', appName);
 const dmg = path.join(bundle, 'dmg', `${config.productName}_${config.version}_aarch64.dmg`);
@@ -46,13 +47,18 @@ try {
   if (attached) run('hdiutil', ['detach', mount]);
   rmSync(mount, { recursive: true, force: true });
 }
-const assessment = spawnSync('spctl', ['--assess', '--type', 'execute', '--verbose=2', app], { encoding: 'utf8', timeout: 60_000 });
-if (assessment.error) throw assessment.error;
-console.log(assessment.stdout + assessment.stderr);
+const gatekeeperStatus = spawnSync('spctl', ['--status'], { encoding: 'utf8', timeout: 60_000 });
+if (gatekeeperStatus.error) throw gatekeeperStatus.error;
+const gatekeeperDisabled = /assessments disabled/iu.test(gatekeeperStatus.stdout + gatekeeperStatus.stderr);
+console.log(gatekeeperStatus.stdout + gatekeeperStatus.stderr);
+const assessment = gatekeeperDisabled ? null : spawnSync('spctl', ['--assess', '--type', 'execute', '--verbose=2', app], { encoding: 'utf8', timeout: 60_000 });
+if (assessment?.error) throw assessment.error;
+if (assessment) console.log(assessment.stdout + assessment.stderr);
 if (requireNotarization) {
-  assert.equal(assessment.status, 0, 'Gatekeeper rejected the app: Developer ID signing and Apple notarization are required');
+  assert.ok(!gatekeeperDisabled && assessment?.status === 0, 'Gatekeeper assessment did not pass: Developer ID signing and Apple notarization are required');
   run('xcrun', ['stapler', 'validate', app]);
   console.log('Apple notarization / Gatekeeper check passed');
 } else {
-  console.log(`Signature integrity passed. Gatekeeper ${assessment.status === 0 ? 'accepted' : 'did not accept'} this build. Ad-hoc signing is not Apple notarization.`);
+  const gatekeeperResult = gatekeeperDisabled ? 'assessment disabled on this host; not evaluated' : assessment?.status === 0 ? 'accepted this build' : 'did not accept this build';
+  console.log(`Signature integrity passed. Gatekeeper ${gatekeeperResult}. Ad-hoc signing is not Apple notarization.`);
 }

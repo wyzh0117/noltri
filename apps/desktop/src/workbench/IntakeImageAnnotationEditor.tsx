@@ -169,29 +169,37 @@ export function IntakeImageAnnotationEditor({ image, disabled, onAdd, onUndo, on
     <section ref={editorRef} className="intake-annotation-editor" aria-label="图片标注编辑器" onKeyDown={onKeyDown} tabIndex={-1}>
       <div className="intake-annotation-heading">
         <div><h3>标注图片</h3><span>{image.name} · 原图保留，标注结果单独保存</span></div>
-        <button type="button" className="button-soft" aria-label="撤销最后一个标注" title="撤销最后一个标注" disabled={disabled || image.edit.annotations.length === 0} onClick={() => { if (onUndo()) setSelectedIndex(null); }}>撤销</button>
-      </div>
-      <div className="intake-annotation-toolbar" role="toolbar" aria-label="图片标注工具">
-        {(['pointer', 'rectangle', 'arrow', 'text', 'pixelate'] as const).map((candidate) => (
-          <button
-            key={candidate}
-            type="button"
-            className={tool === candidate ? 'intake-annotation-tool intake-annotation-tool-active' : 'intake-annotation-tool'}
-            aria-label={TOOL_LABELS[candidate]}
-            title={TOOL_LABELS[candidate]}
-            aria-pressed={tool === candidate}
-            disabled={disabled}
-            onClick={() => setTool(candidate)}
-          >{candidate === 'pointer' ? '↖' : candidate === 'rectangle' ? '□' : candidate === 'arrow' ? '↗' : candidate === 'text' ? 'T' : '▦'}</button>
-        ))}
-        <label className="intake-annotation-color" title="标注颜色">颜色<input aria-label="标注颜色" type="color" value={color} disabled={disabled} onChange={(event) => setColor(event.target.value)} /></label>
-        <label className="intake-annotation-width">线宽<select aria-label="线宽" value={strokeWidth} disabled={disabled} onChange={(event) => setStrokeWidth(Number(event.target.value) as 2 | 4 | 6)}><option value={2}>细</option><option value={4}>中</option><option value={6}>粗</option></select></label>
-        {tool === 'text' ? <><label className="intake-annotation-text">文字<input aria-label="标注文字" value={text} maxLength={200} disabled={disabled} onChange={(event) => setText(event.target.value)} placeholder="输入后点选位置" /></label><label className="intake-annotation-width">字号<select aria-label="文字字号" value={fontSize} disabled={disabled} onChange={(event) => setFontSize(Number(event.target.value) as 18 | 24 | 32)}><option value={18}>小</option><option value={24}>中</option><option value={32}>大</option></select></label></> : null}
-        {draft !== null ? <button type="button" className="intake-annotation-cancel" disabled={disabled} onClick={() => setDraft(null)}>取消本次</button> : null}
       </div>
       {previewError !== null ? <p className="intake-error" role="alert">{previewError}</p> : null}
-      {activePreview === null ? <div className="intake-annotation-loading" role="status">正在生成与提交相同的标注预览…</div> : (
-        <div className="intake-annotation-stage-wrap">
+      <div className="intake-annotation-stage-wrap">
+        <div className="intake-annotation-toolbar" role="toolbar" aria-label="图片标注工具">
+          <div className="intake-annotation-toolbar-group" role="group" aria-label="标注工具">
+            {(['pointer', 'rectangle', 'arrow', 'text', 'pixelate'] as const).map((candidate) => (
+              <button
+                key={candidate}
+                type="button"
+                className={tool === candidate ? 'intake-annotation-tool intake-annotation-tool-active' : 'intake-annotation-tool'}
+                aria-label={TOOL_LABELS[candidate]}
+                title={TOOL_LABELS[candidate]}
+                aria-pressed={tool === candidate}
+                disabled={disabled}
+                onClick={() => setTool(candidate)}
+              >{candidate === 'pointer' ? '↖' : candidate === 'rectangle' ? '□' : candidate === 'arrow' ? '↗' : candidate === 'text' ? 'T' : '▦'}</button>
+            ))}
+          </div>
+          {tool === 'text' ? <div className="intake-annotation-toolbar-group" role="group" aria-label="文字标注设置">
+            <label className="intake-annotation-text">文字<input aria-label="标注文字" value={text} maxLength={200} disabled={disabled} onChange={(event) => setText(event.target.value)} placeholder="输入后点选位置" /></label>
+            <label className="intake-annotation-width">字号<select aria-label="文字字号" value={fontSize} disabled={disabled} onChange={(event) => setFontSize(Number(event.target.value) as 18 | 24 | 32)}><option value={18}>小</option><option value={24}>中</option><option value={32}>大</option></select></label>
+          </div> : null}
+          <span className="intake-annotation-toolbar-divider" aria-hidden="true" />
+          <div className="intake-annotation-toolbar-group intake-annotation-style-group" role="group" aria-label="标注样式与操作">
+            <label className="intake-annotation-color" title="标注颜色">颜色<input aria-label="标注颜色" type="color" value={color} disabled={disabled} onChange={(event) => setColor(event.target.value)} /></label>
+            <label className="intake-annotation-width">线宽<select aria-label="线宽" value={strokeWidth} disabled={disabled} onChange={(event) => setStrokeWidth(Number(event.target.value) as 2 | 4 | 6)}><option value={2}>细</option><option value={4}>中</option><option value={6}>粗</option></select></label>
+            <button type="button" className="intake-annotation-tool intake-annotation-undo" aria-label="撤销最后一个标注" title="撤销最后一个标注" disabled={disabled || image.edit.annotations.length === 0} onClick={() => { if (onUndo()) setSelectedIndex(null); }}>↶</button>
+          </div>
+          {draft !== null ? <button type="button" className="intake-annotation-cancel" disabled={disabled} onClick={() => setDraft(null)}>取消本次</button> : null}
+        </div>
+        {activePreview === null ? <div className="intake-annotation-loading" role="status">正在生成与提交相同的标注预览…</div> : (
           <div className="intake-annotation-stage" style={{ width: `min(100%, ${stageWidth}px)`, aspectRatio: `${activePreview.width} / ${activePreview.height}` }}>
             <img src={activePreview.url} alt="当前标注预览" draggable={false} />
             <svg
@@ -214,8 +222,8 @@ export function IntakeImageAnnotationEditor({ image, disabled, onAdd, onUndo, on
                 : <rect className={draft.type === 'pixelate' ? 'intake-annotation-draft-pixelate' : 'intake-annotation-draft'} x={Math.min(draft.start.x, draft.end.x)} y={Math.min(draft.start.y, draft.end.y)} width={Math.abs(draft.end.x - draft.start.x)} height={Math.abs(draft.end.y - draft.start.y)} stroke={color} strokeWidth={strokeWidth / Math.max(activePreview.width, activePreview.height)} /> : null}
             </svg>
           </div>
-        </div>
-      )}
+        )}
+      </div>
       <p className="intake-annotation-help">矩形、箭头、文字与像素化会生成独立派生图。Esc 取消当前绘制，⌘/Ctrl+Z 撤销最后一步。</p>
     </section>
   );

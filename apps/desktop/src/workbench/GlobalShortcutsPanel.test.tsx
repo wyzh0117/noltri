@@ -5,12 +5,14 @@ const harness = `
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import ModelSettings from ${JSON.stringify(fileURLToPath(new URL('./ModelSettings.tsx', import.meta.url)))};
-let root,opts,calls,safety,status,release,doneCalls;
+let root,opts,calls,safety,status,axStatus,release,doneCalls;
 const defaults=()=>({screenshot:{key:'S',control:true,alt:true,shift:false,meta:true},openIntake:{key:'V',control:true,alt:true,shift:false,meta:true}});
 window.__TAURI_INTERNALS__={invoke:async(command,args)=>{
  calls.push([command,structuredClone(args)]);
  if(command==='get_intake_shortcut_status'){if(opts.loadDelay)await new Promise(r=>release=r);if(opts.loadError){opts.loadError=false;throw Error('/private/profile secret-token');}return structuredClone(status);}
  if(command==='save_intake_shortcuts'){if(opts.delay)await new Promise(r=>release=r);if(opts.failure){opts.failure=false;throw opts.failureCode??'/private/profile secret-token';}status={screenshot:'registered',openIntake:'registered',bindings:structuredClone(args.bindings),configurationError:null};return structuredClone(status);}
+ if(command==='get_ax_selection_offer_status')return structuredClone(axStatus);
+ if(command==='set_ax_selection_offers_enabled'){if(opts.axDenied&&args.enabled)return {enabled:false,permission:'denied'};axStatus={enabled:args.enabled,permission:args.enabled?'granted':'not_checked'};return structuredClone(axStatus);}
  throw Error('Unexpected synthetic command '+command);
 }};
 const settings={apiBaseUrl:'http://127.0.0.1:1',apiToken:'synthetic-only',mcpEndpoint:'',providers:[],activeProviderId:null,activeModelId:null,runtimeStatus:'managed'};
@@ -19,11 +21,12 @@ const reportSafety=s=>safety.push(s);
 function OnboardingHost(){const [entered,setEntered]=React.useState(false);return entered?<section aria-label="synthetic knowledge workspace">已进入知识库</section>:<ModelSettings settings={settings} outsideTauri={!!opts.outside} welcome onSaved={onSaved} onUpdateSafetyChange={reportSafety} onDone={()=>{doneCalls++;setEntered(true)}}/>;}
 
 window.harness={
- mount(o={}){root?.unmount();opts=o;calls=[];safety=[];doneCalls=0;release=undefined;status={screenshot:'registered',openIntake:'registered',bindings:defaults(),configurationError:o.configurationError??null};root=createRoot(document.getElementById('root'));root.render(o.onboarding?<OnboardingHost/>:<ModelSettings settings={settings} outsideTauri={!!o.outside} onSaved={onSaved} onUpdateSafetyChange={reportSafety}/>);},
+ mount(o={}){root?.unmount();opts=o;calls=[];safety=[];doneCalls=0;release=undefined;status={screenshot:'registered',openIntake:'registered',bindings:defaults(),configurationError:o.configurationError??null};axStatus=o.axEnabledDenied?{enabled:true,permission:'denied'}:{enabled:false,permission:'not_checked'};root=createRoot(document.getElementById('root'));root.render(o.onboarding?<OnboardingHost/>:<ModelSettings settings={settings} outsideTauri={!!o.outside} onSaved={onSaved} onUpdateSafetyChange={reportSafety}/>);},
+ grantAx(){opts.axDenied=false;},
  click(t){const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===t);if(!b)throw Error('Missing button '+t);b.click()},
  letter(label,value){const e=document.querySelector('[aria-label="'+label+'"]');if(!e)throw Error('Missing letter '+label);e.value=value;e.dispatchEvent(new Event('change',{bubbles:true}))},
  toggle(label){const e=document.querySelector('[aria-label="'+label+'"]');if(!e)throw Error('Missing modifier '+label);e.click()},
- state:()=>({calls,doneCalls,entered:!!document.querySelector('[aria-label="synthetic knowledge workspace"]'),doneDisabled:[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='进入知识库 →')?.disabled,safe:safety.at(-1),text:document.body.innerText,screenshot:document.querySelector('[aria-label="截图字母"]')?.value,openIntake:document.querySelector('[aria-label="打开收集字母"]')?.value,ready:!document.querySelector('[aria-label="截图字母"]')?.closest('fieldset').disabled,saveDisabled:[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='保存快捷键')?.disabled}),
+ state:()=>({calls,doneCalls,entered:!!document.querySelector('[aria-label="synthetic knowledge workspace"]'),doneDisabled:[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='进入知识库 →')?.disabled,safe:safety.at(-1),text:document.body.innerText,screenshot:document.querySelector('[aria-label="截图字母"]')?.value,openIntake:document.querySelector('[aria-label="打开收集字母"]')?.value,axEnabled:document.querySelector('[aria-label="启用选区浮层"]')?.checked,ready:!document.querySelector('[aria-label="截图字母"]')?.closest('fieldset').disabled,saveDisabled:[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='保存快捷键')?.disabled}),
  release(){opts.delay=false;opts.loadDelay=false;release?.()},unmount(){root?.unmount();root=undefined;}
 };
 `;
@@ -87,6 +90,28 @@ describe('global shortcut settings in provider management',()=>{
  it('disables native actions outside the desktop and ignores completion after unmount',async()=>{
   await mount({outside:true});expect((await state()).calls).toEqual([]);expect((await state()).saveDisabled).toBe(true);
   await mount({loadDelay:true});await evaluate('window.harness.unmount();window.harness.release()');await mount();await until(state,s=>s.safe===true);expect(browser.errors).toEqual([]);
+ });
+ it('keeps AX selection offers opt-in and reports permission denial without enabling the observer',async()=>{
+  await mount();await until(state,s=>s.axEnabled===false&&s.calls.some((c:any[])=>c[0]==='get_ax_selection_offer_status'));
+  expect((await state()).calls.some((c:any[])=>c[0]==='set_ax_selection_offers_enabled')).toBe(false);
+  await evaluate(`document.querySelector('[aria-label="启用选区浮层"]').click()`);
+  await until(state,s=>s.axEnabled===true&&s.calls.some((c:any[])=>c[0]==='set_ax_selection_offers_enabled'));
+  expect((await state()).axEnabled).toBe(true);
+  await mount({axDenied:true});await until(state,s=>s.axEnabled===false&&s.calls.some((c:any[])=>c[0]==='get_ax_selection_offer_status'));
+  await evaluate(`document.querySelector('[aria-label="启用选区浮层"]').click()`);
+  const denied=await until(state,s=>s.text.includes('系统设置 > 隐私与安全性 > 辅助功能'));
+  expect(denied.axEnabled).toBe(false);expect(denied.text).toContain('不会读取选区，也不会弹出系统授权提示');
+ });
+ it('distinguishes a saved enabled preference from permission-blocked selection reads and explains recovery',async()=>{
+  await mount({axEnabledDenied:true,axDenied:true});
+  const stale=await until(state,s=>s.axEnabled===true&&s.text.includes('启用偏好仍已保存'));
+  expect(stale.text).toContain('选区读取受权限阻止');expect(stale.text).toContain('授权后请先关闭再重新开启此开关');
+  await evaluate(`document.querySelector('[aria-label="启用选区浮层"]').click()`);
+  await until(state,s=>s.axEnabled===false&&s.text.includes('选区浮层已关闭'));
+  await evaluate('window.harness.grantAx()');
+  await evaluate(`document.querySelector('[aria-label="启用选区浮层"]').click()`);
+  const recovered=await until(state,s=>s.axEnabled===true&&s.text.includes('选区浮层已启用'));
+  expect(recovered.calls.filter((c:any[])=>c[0]==='set_ax_selection_offers_enabled').map((c:any[])=>c[1])).toEqual([{enabled:false},{enabled:true}]);
  });
 });
 

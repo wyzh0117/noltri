@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>知序 Noltri · Notes 3.0</h1>
+  <h1>知序 Noltri · Notes 0.1</h1>
   <p>用本地 Markdown 写作和阅读，把收集的原件留在自己手中。</p>
 </div>
 
@@ -7,7 +7,7 @@
 
 ## 当前版本
 
-当前源码版本为 **3.0.0**，以 Markdown Notes 为主线。安装包、签名更新工件和生产更新清单以正式 Release 为准；[Releases](https://github.com/wyzh0117/noltri/releases) 中的历史版本仍保留为历史记录。
+当前源码版本为 **0.1.0**，以 Markdown Notes 为主线。首发采用手动安装；本地构建候选尚未发布，正式工件与校验值以对应的 [Release](https://github.com/wyzh0117/noltri/releases) 为准。0.1.0 不提供签名 updater 工件或 `latest.json` 更新清单。历史版本仍保留为历史记录。
 
 旧课程产品线不再维护，也不提供课程工作区迁移或兼容承诺。历史版本、已验证工件和原有数据均保留，不会因本轮版本调整而删除。
 
@@ -33,9 +33,9 @@ Notes 以本地 Markdown Vault 为正文来源，提供编辑、阅读、标题�
 
 Core 默认端口为 **18887**，MCP 为 **18890**。未指定 `NOLTRI_ENV_FILE` 时，仅探测 `~/.noltri-notes/.env.local`、`.env` 及显式 `NOLTRI_DATA_DIR` 中的同名文件；不向上查找项目配置。指定文件即为独占选择，缺失也不回退。桌面默认不复用已运行的外部服务；仅明确设置 `NOLTRI_USE_EXTERNAL_RUNTIME=1`、提供一致令牌并通过服务验证后才可连接。
 
-## 独立的 Notes profile
+## Notes profile
 
-3.x 保持同一 Notes 命名空间，后续 3.x 升级继续使用该 profile：
+桌面 bundle identifier 为 `com.noltri.notes`。0.1.0 使用 macOS Notes profile 的既有默认位置；手动替换已有安装前，请备份数据并确认 profile 归属。旧课程产品线不自动迁移或导入：
 
 | 运行方式 | 默认位置 |
 | --- | --- |
@@ -60,9 +60,11 @@ pnpm --filter @noltri/extension build
 
 在 Chrome 的 `chrome://extensions` 中开启开发者模式，加载 `apps/extension/.output`。通过右键菜单收集选中文字、网页或图片。Agent 可以连接应用设置页提供的本机 MCP 入口；默认开发地址为 `http://127.0.0.1:18890/mcp`，授权范围仍由本机服务控制。
 
-## 更新与首次打开
+## 安装与更新
 
-应用内更新需明确检查、下载验证、安装和重启。更新前保存草稿、等待在途工作结束并关闭规则调试窗，详见[应用内更新](docs/application-updates.md)。隔离测试包已完成正常升级和安装失败后的人工恢复。3.0.0 的隔离迭代验收已用合成资料验证实体文字／截图采集、原件保存与正常重开回读；当前发行候选另已验证人工归档稿、方向及审核页在完整重开后正确回填。模型未配置，未验证 AI 整理或 OCR。生产工件已完成项目更新签名与版本核验，下载和更新清单以正式 Release 为准；旧构建的截图权限结论不替代当前候选的系统授权。
+0.1.0 通过手动 DMG 安装，不含签名更新归档、签名文件或 `latest.json`。本版没有可用的应用内更新源；检查更新遇到缺失清单时会安全失败，不能把该错误视为“已是最新版本”。未来签名更新流程仍要求明确检查、下载验证、安装和重启，详见[应用内更新](docs/application-updates.md)。
+
+3.0.0 的隔离采集与更新验收仅适用于对应历史构建，不代表 0.1.0 已通过同等产品验收。0.1.0 候选完成了本机应用／DMG 完整性检查；未完成完整产品验收、真实模型或 OCR 测试。当前构建为 ad-hoc 签名，没有 Apple Developer ID 签名或公证；构建主机的 Gatekeeper assessment 已关闭，因此无法在该主机上判断 Gatekeeper 接受结果。详见 [0.1.0 版本说明](docs/releases/0.1.0.md)。
 
 将来下载发行工件时，请先核对发布来源、校验值及签名说明。macOS 首次打开受阻时，请遵循 [Apple 官方安全打开应用指引](https://support.apple.com/en-us/102445)。更新包验签与 Apple Developer ID 签名、公证及系统授权是不同机制。
 
@@ -77,7 +79,7 @@ pnpm typecheck
 pnpm test
 ```
 
-构建、项目更新签名及限定平台验收已有记录。当前验证范围与剩余限制记录在 [3.0.0 版本说明](docs/releases/3.0.0.md)；历史测试数字不作为当前版本通过声明。随包 Node 运行时保持固定版本和校验，不分发内部计划、测试资料或用户配置。
+构建、历史项目更新签名及限定平台验收已有记录。当前候选验证范围与剩余限制记录在 [0.1.0 版本说明](docs/releases/0.1.0.md)；[3.0.0 说明](docs/releases/3.0.0.md) 是历史记录。随包 Node 运行时保持固定版本和校验，不分发内部计划、测试资料或用户配置。
 
 ## License
 

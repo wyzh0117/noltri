@@ -4,7 +4,7 @@
   "archiveSha256": "d02a9295ee630dbd59d1f6ef7c28775aca26f6d758738a77038aed4229edf8d7",
   "dependencyLocks": {
     "pnpm-lock.yaml": "df817540e9a0fb84a2452503c7c505401fb746bc967a1d01b574a95b1219b15a",
-    "apps/desktop/src-tauri/Cargo.lock": "88a46dde19b5894267d212d3fc8968b9afe9748f7a916e3ee33fc760ba885f2b"
+    "apps/desktop/src-tauri/Cargo.lock": "16a53f2c4ac561ae9315fd681f30067162f00e9514a1ec36b2f161b9a4096fc0"
   },
   "source": "Reviewed exact dependency notice/source-availability material already distributed with the isolated updater acceptance package; no private build paths or user configuration. Regenerate and review when either lock changes.",
   "files": [

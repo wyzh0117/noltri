@@ -14,7 +14,7 @@ import type { VaultService } from './notes/vault';
 export interface GraphNoteStore {
   legacyPath(topicId: string, chapterId: string | null): Promise<{ path: string; exists: boolean }>;
   getLegacyNote(topicId: string, chapterId: string | null): Promise<{ content: string; updatedAt: string | null; etag: string | null; path: string }>;
-  saveLegacyNote(topicId: string, chapterId: string | null, content: string, expectedEtag?: string): Promise<{ content: string; updatedAt: string; etag: string; path: string }>;
+  saveLegacyNote(topicId: string, chapterId: string | null, content: string, expectedEtag?: string, properties?: Record<string, unknown>): Promise<{ content: string; updatedAt: string; etag: string; path: string }>;
 }
 
 /**

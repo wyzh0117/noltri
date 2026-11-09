@@ -224,6 +224,12 @@ describe('IntakeWindow preview UI', () => {
     expect(html).toContain('aria-label="文字"');
     expect(html).toContain('aria-label="像素化遮盖"');
     expect(html).toContain('aria-label="撤销最后一个标注"');
+    expect(html.indexOf('class="intake-annotation-stage-wrap"')).toBeLessThan(html.indexOf('class="intake-annotation-toolbar"'));
+    expect(html).toContain('role="group" aria-label="标注工具"');
+    expect(html).toContain('role="group" aria-label="标注样式与操作"');
+    expect(html.indexOf('aria-label="撤销最后一个标注"')).toBeGreaterThan(html.indexOf('role="group" aria-label="标注样式与操作"'));
+    expect(html).toMatch(/aria-label="选择标注" title="选择标注" aria-pressed="true"/);
+    expect(html).toMatch(/aria-label="撤销最后一个标注" title="撤销最后一个标注" disabled=""/);
     expect(html).toContain('Esc 取消当前绘制');
     expect(html).not.toContain('保存为');
   });

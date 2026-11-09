@@ -1,4 +1,5 @@
 mod capture;
+mod ax_selection;
 mod commands;
 mod device_access;
 mod hotkey;
@@ -18,6 +19,8 @@ pub fn run() {
     let runtime = Arc::new(runtime::CoreRuntimeHandle::default());
     let runtime_for_setup = runtime.clone();
     let capture_state = Arc::new(capture::CaptureState::default());
+    let ax_selection_state = Arc::new(ax_selection::AxSelectionOfferState::default());
+    let ax_selection_state_for_setup = ax_selection_state.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -25,6 +28,7 @@ pub fn run() {
         .manage(processing_console::ConsoleWindowState::default())
         .manage(runtime.clone())
         .manage(capture_state.clone())
+        .manage(ax_selection_state.clone())
         .setup(move |app| {
             // The profile lock precedes every key registration and owned child.
             // An explicit different profile is independent; no PID-file guessing.
@@ -52,6 +56,7 @@ pub fn run() {
                     return Ok(());
                 }
             }
+            ax_selection::initialize(app.handle(), ax_selection_state_for_setup.as_ref());
             hotkey::register_global_shortcuts(app.handle().clone());
             runtime::start(app.handle().clone(), runtime_for_setup);
             Ok(())
@@ -66,6 +71,8 @@ pub fn run() {
                 hotkey::save_intake_shortcuts,
                 runtime::get_runtime_diagnostics,
                 capture::trace_capture_stage,
+                ax_selection::get_ax_selection_offer_status,
+                ax_selection::set_ax_selection_offers_enabled,
                 commands::get_settings,
                 commands::save_model_settings,
                 commands::use_model,
@@ -93,8 +100,10 @@ pub fn run() {
         .expect("failed to build Tauri app");
 
     let capture_state_for_exit = capture_state.clone();
+    let ax_selection_state_for_exit = ax_selection_state.clone();
     app.run(move |_app_handle, event| {
         if matches!(event, RunEvent::Exit) {
+            ax_selection::stop(ax_selection_state_for_exit.as_ref());
             hotkey::unregister_global_shortcuts();
             capture_state_for_exit.cancel_in_progress_capture();
             let _ = runtime.shutdown();

@@ -57,6 +57,33 @@ describe('topic and chapter graph', () => {
     expect(local.nodes.map((entry) => entry.id)).not.toContain(privateChapter.id);
   });
 
+  it('returns a shared topic by the same stable ID through its valid secondary direction path', async () => {
+    const harness = makeHarness();
+    const userId = harness.actor.userId;
+    const discipline = await node(harness, '认知科学', 'discipline');
+    const primaryBranch = await node(harness, '学习科学', 'subdiscipline', discipline.id);
+    const activeBranch = await node(harness, '脑科学', 'subdiscipline', discipline.id);
+    const sharedTopic = await node(harness, '记忆系统', 'topic', primaryBranch.id);
+    const chapter = await node(harness, '工作记忆', 'chapter', sharedTopic.id);
+    await harness.repository.createEdge({
+      userId,
+      fromNodeId: sharedTopic.id,
+      toNodeId: activeBranch.id,
+      relationType: 'part_of',
+      source: 'topic_subdiscipline',
+    });
+
+    const selection = await harness.core.selectGraph({
+      kind: 'subdiscipline',
+      disciplineId: discipline.id,
+      subdisciplineId: activeBranch.id,
+    }, harness.actor);
+
+    expect(selection.nodes.filter((entry) => entry.id === sharedTopic.id)).toHaveLength(1);
+    expect(selection.nodes.map((entry) => entry.id)).toEqual(expect.arrayContaining([sharedTopic.id, chapter.id]));
+    expect(selection.edges).toContainEqual(expect.objectContaining({ fromNodeId: sharedTopic.id, toNodeId: activeBranch.id, relationType: 'part_of' }));
+  });
+
   it('returns the complete API graph scope beyond the former 260-node window', async () => {
     const harness = makeHarness();
     const discipline = await node(harness, '图形学', 'discipline');

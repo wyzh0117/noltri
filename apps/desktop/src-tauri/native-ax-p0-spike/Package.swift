@@ -5,7 +5,7 @@ let package = Package(
     name: "NoltriAXP0Spike",
     platforms: [.macOS(.v13)],
     products: [
-        .library(name: "NoltriAXP0Spike", targets: ["NoltriAXP0Spike"]),
+        .library(name: "NoltriAXP0Spike", type: .static, targets: ["NoltriAXP0Spike"]),
         .executable(name: "noltri-ax-p0-probe", targets: ["NoltriAXProbe"]),
         .executable(name: "noltri-ax-p0-fixture", targets: ["NoltriAXFixture"]),
     ],

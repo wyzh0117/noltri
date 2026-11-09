@@ -661,7 +661,7 @@ async function dispatch(args: DispatchArgs): Promise<Response | undefined> {
       const input = parseWith(saveGraphNoteRequestSchema, await readJsonBody(request), 'save note');
       if (input.chapterId !== null) requireNodeAccess(grant, input.chapterId, '保存章节正文');
       if (vault !== undefined) {
-        const saved = await vault.saveLegacyNote(topicId, input.chapterId, input.content, input.expectedEtag, requestVaultRoot);
+        const saved = await vault.saveLegacyNote(topicId, input.chapterId, input.content, input.expectedEtag, input.properties, requestVaultRoot);
         return json(200, { topicId, chapterId: input.chapterId, ...saved }, cors);
       }
       return json(200, await core.saveGraphNote(topicId, input, actor), cors);

@@ -10,7 +10,7 @@ import type {
   LibraryItemKind,
   SourceType,
 } from '@noltri/schema';
-import { captureAssetBytesMatchMime, captureBatchRequestSchema, MAX_CAPTURE_ASSET_BYTES, MAX_CAPTURE_BATCH_BODY_BYTES, MAX_CAPTURE_BATCH_ITEMS, MIN_CAPTURE_TEXT_LENGTH } from '@noltri/schema';
+import { captureAssetBytesMatchMime, captureBatchRequestSchema, MAX_CAPTURE_ASSET_BYTES, MAX_CAPTURE_BATCH_BODY_BYTES, MAX_CAPTURE_BATCH_ITEMS, MAX_CAPTURE_TEXT_LENGTH, MIN_CAPTURE_TEXT_LENGTH } from '@noltri/schema';
 import { IDENTITY_IMAGE_EDIT, nextImageRotation, rotateAnnotationClockwise } from './image-edit-model';
 import type { ImageAnnotation, IntakeImageEdit } from './image-edit-model';
 
@@ -62,6 +62,7 @@ export interface IntakeSession {
   capturedAt: string;
   text: string;
   sourceType: SourceType;
+  sourceApp: string;
   sourceTitle: string;
   sourceUrl: string;
   kind: LibraryItemKind;
@@ -139,6 +140,7 @@ export function createIntakeSession(options: IntakeSessionOptions = {}): IntakeS
     capturedAt: now(),
     text: '',
     sourceType: 'manual',
+    sourceApp: '',
     sourceTitle: '',
     sourceUrl: '',
     kind: 'knowledge',
@@ -187,9 +189,45 @@ export function updateIntakeText(session: IntakeSession, text: string): IntakeSe
   return isEditable(session) ? { ...session, text } : session;
 }
 
+export type SelectedTextActivationResult =
+  | { accepted: true; duplicate: boolean; session: IntakeSession }
+  | { accepted: false; reason: 'invalid' | 'draft_exists' | 'locked'; session: IntakeSession };
+
+/** Preserve an existing draft while carrying the AX request ID into the eventual batch item. */
+export function applySelectedTextActivation(
+  session: IntakeSession,
+  selection: { requestId: string; text: string; sourceApp: string },
+): SelectedTextActivationResult {
+  if (!/^ax-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(selection.requestId)
+    || selection.text.trim().length === 0
+    || selection.text.length > MAX_CAPTURE_TEXT_LENGTH
+    || selection.sourceApp.trim().length === 0
+    || selection.sourceApp.length > 120) {
+    return { accepted: false, reason: 'invalid', session };
+  }
+  if (!isEditable(session)) return { accepted: false, reason: 'locked', session };
+  if (session.textRequestId === selection.requestId) {
+    return session.text === selection.text && session.sourceApp === selection.sourceApp
+      ? { accepted: true, duplicate: true, session }
+      : { accepted: false, reason: 'invalid', session };
+  }
+  if (session.text.trim().length > 0 || session.images.length > 0) return { accepted: false, reason: 'draft_exists', session };
+  return {
+    accepted: true,
+    duplicate: false,
+    session: {
+      ...session,
+      textRequestId: selection.requestId,
+      text: selection.text,
+      sourceType: 'desktop_app',
+      sourceApp: selection.sourceApp.trim(),
+    },
+  };
+}
+
 export function updateIntakeMetadata(
   session: IntakeSession,
-  update: Partial<Pick<IntakeSession, 'sourceType' | 'sourceTitle' | 'sourceUrl' | 'kind' | 'subjectPath' | 'researchPoint' | 'tags' | 'author' | 'citation' | 'doi' | 'page'>>,
+  update: Partial<Pick<IntakeSession, 'sourceType' | 'sourceApp' | 'sourceTitle' | 'sourceUrl' | 'kind' | 'subjectPath' | 'researchPoint' | 'tags' | 'author' | 'citation' | 'doi' | 'page'>>,
 ): IntakeSession {
   return isEditable(session) ? { ...session, ...update } : session;
 }
@@ -297,9 +335,11 @@ export function removeIntakeImage(session: IntakeSession, assetId: string): Inta
 
 function captureSource(session: IntakeSession) {
   const title = session.sourceTitle.trim();
+  const appName = session.sourceApp.trim();
   const url = session.sourceUrl.trim();
   return {
     type: session.sourceType,
+    ...(appName.length === 0 ? {} : { appName }),
     ...(title.length === 0 ? {} : { title }),
     ...(url.length === 0 ? {} : { url }),
   };

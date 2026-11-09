@@ -5,19 +5,30 @@ import WorkbenchApp from './WorkbenchApp';
 import type { WorkbenchApi } from './api';
 import { createReviewBrowser } from './review-headless-test';
 
+const restoredMarkdownPath = 'Restored/恢复后的笔记.md';
+const restoredMarkdownBody = '# 恢复后的笔记\n\n第一段恢复正文。\n\n第二段恢复正文。\n\n';
+
 it('offers a main workspace inbox alongside the preserved notes workspace', () => {
   const markup = renderToStaticMarkup(<WorkbenchApp api={{} as WorkbenchApi} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);
   expect(markup).toContain('aria-label="打开待确认资料"');
   expect(markup).toContain('aria-label="笔记工作区"');
-  expect(markup).toContain('全部笔记');
+  expect(markup).toContain('全部资料');
+  expect(markup).toContain('新建 Markdown 笔记');
   expect(markup).toContain('规则与处理记录');
 });
 
 const harness = `
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import { EditorView } from '@codemirror/view';
 import WorkbenchApp from ${JSON.stringify(fileURLToPath(new URL('./WorkbenchApp.tsx', import.meta.url)))};
-let root, calls, source, secondSource, bootstrap, direction, generation, rememberedNotes, holdItem, pendingItem, itemSettled;
+let root, calls, source, secondSource, bootstrap, direction, generation, rememberedNotes, holdItem, pendingItem, itemSettled, markdownFiles, confirms;
+const markdownBody=${JSON.stringify(restoredMarkdownBody)};
+const otherMarkdownBody='# 不同的同名笔记\\n\\n无关正文。\\n';
+const restoredPath=${JSON.stringify(restoredMarkdownPath)};
+const markdownMetadata={frontmatter:{},headings:[{heading:'恢复后的笔记',level:1,position:{start:{offset:0}}}],tags:[],links:[],blocks:{}};
+const markdownFile=path=>{const entry=markdownFiles.find(file=>file.path===path);if(!entry)throw Error('Unknown synthetic Vault path: '+path);return{path:entry.path,content:entry.content,mtime:1,ctime:1,size:new TextEncoder().encode(entry.content).length,etag:'synthetic-'+path,metadata:markdownMetadata};};
+window.confirm=message=>{confirms.push(String(message));return true;};
 const findSource=id=>[source,secondSource].find(s=>s?.id===id);
 let clipboardReads=[];
 Object.defineProperty(navigator,'clipboard',{configurable:true,value:{
@@ -31,10 +42,17 @@ const known = {
  tree:async()=>({rootId:null,totalNodes:bootstrap&&!direction?0:1,nodes:bootstrap&&!direction?[]:[{id:'subject-a',title:direction??'Synthetic subject',nodeType:'discipline',summary:null,status:'active',confidence:null,itemCount:0,descendantItemCount:0,childCount:0,children:[]}]}),
  health:async()=>({status:'ok',productId:'synthetic-test',instanceId:'synthetic-test',protocolVersion:'1',version:'0',storageDriver:'memory',storage:{driver:'memory',ok:true,detail:{}},aiProvider:'disabled',embeddingDim:0,requiresAiKey:false}),
  listItems:async()=>({items:[],limit:200,offset:0}),
- vaultSnapshot:async()=>({rootPath:'/synthetic-review-vault',files:[],revision:0}),
+ vaultSnapshot:async()=>({rootPath:'/synthetic-review-vault',files:markdownFiles.map(file=>({path:file.path,name:file.path.split('/').at(-1),kind:'file',extension:'md',mtime:1,size:file.content.length,frontmatter:{}})),revision:0}),
  vaultSettings:async()=>({newLinkFormat:'shortest',propertyTypes:{}}),
  vaultDiagnostics:async()=>({revision:0,indexing:false,queued:0,failedFiles:[],lastIndexedAt:null,cache:{loaded:true,persisted:false,entries:0},worker:{restarts:0,timeouts:0}}),
  vaultChanges:async()=>({revision:0,reset:false,events:[]}),
+ vaultFile:async path=>markdownFile(path),
+ vaultMetadata:async path=>({path,metadata:markdownFile(path).metadata}),
+ vaultBacklinks:async()=>({revision:0,backlinks:[]}),
+ vaultMentions:async()=>({mentions:[]}),
+ vaultHistory:async()=>({versions:[]}),
+ deletePreview:async path=>({path,etag:markdownFile(path).etag,backlinkCount:0,kind:'file',descendantCount:1,orphanAttachments:[]}),
+ deleteVaultFile:async path=>{markdownFiles=markdownFiles.filter(file=>file.path!==path);return{path,deletedAttachments:[]};},
  inbox:async(query={})=>({entries:[source,secondSource].filter(s=>s&&(!query.reviewStatus||query.reviewStatus===s.reviewStatus)).map(s=>({...s,sourceTitle:bootstrap?s.sourceTitle:'Synthetic source '+generation,textPreview:s.rawText.slice(0,20),rawTextLength:s.rawText.length})),counts:{pending:0,processing:0,done:1,failed:0},reviewCounts:Object.fromEntries(['needs_review','deferred','rejected','confirmed'].map(status=>[status,[source,secondSource].filter(s=>s?.reviewStatus===status).length])),limit:50,offset:0}),
  rawSource:async id=>{const source=findSource(id);if(!source)throw Error('Wrong raw source identity');return structuredClone(source);},
  reviewSource:async(id,request)=>{const source=findSource(id);if(!source||bootstrap&&id==='source-seed')throw Error('Seed classification must not be confirmed again');source.reviewStatus='confirmed';source.reviewRevision++;source.reviewConfirmation={rawSourceId:source.id,reviewRevision:source.reviewRevision,knowledgeItemId:'knowledge-created',text:request.editedText,targetNodeId:request.nodeId,path:[{id:'historical-root',title:'Confirmed at review'},{id:request.nodeId,title:'Durable destination'}]};return {reviewStatus:'confirmed',reviewRevision:source.reviewRevision,duplicate:false,item:{id:'knowledge-created',rawSourceId:source.id,userId:'synthetic-user',normalizedText:request.editedText,summary:null,confidence:1,status:'active',isAiDerived:false,createdAt:source.createdAt,updatedAt:source.createdAt}};},
@@ -46,7 +64,7 @@ const known = {
 };
 const api=new Proxy({}, {get(_target,name){return (...args)=>{calls.push([String(name),...structuredClone(args)]);if(!(name in known))return Promise.reject(Error('Unexpected fake API call: '+String(name)));return known[name](...args);};}});
 window.harness={
- mount(empty=false){root?.unmount();calls=[];generation=1;bootstrap=empty;direction=null;secondSource=null;source=empty?{...initial(),id:'source-seed',sourceTitle:'Synthetic target seed',rawText:'Synthetic destination seed for manual review.',processingStatus:'failed'}:initial();rememberedNotes=null;holdItem=false;pendingItem=null;itemSettled=false;clipboardReads=[];localStorage.clear();root=createRoot(document.getElementById('root'));root.render(<WorkbenchApp api={api} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);},
+ mount(empty=false,withMarkdown=false){root?.unmount();calls=[];confirms=[];generation=1;bootstrap=empty;direction=null;secondSource=null;markdownFiles=withMarkdown?[{path:'Other/恢复后的笔记.md',content:otherMarkdownBody},{path:restoredPath,content:markdownBody}]:[];source=empty?{...initial(),id:'source-seed',sourceTitle:'Synthetic target seed',rawText:'Synthetic destination seed for manual review.',processingStatus:'failed'}:initial();rememberedNotes=null;holdItem=false;pendingItem=null;itemSettled=false;clipboardReads=[];localStorage.clear();root=createRoot(document.getElementById('root'));root.render(<WorkbenchApp api={api} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);},
  remountEmptyCatalog(){root.unmount();bootstrap=true;direction=null;localStorage.clear();root=createRoot(document.getElementById('root'));root.render(<WorkbenchApp api={api} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);},
  addSecondSource(){secondSource={...initial(),id:'source-second',sourceTitle:'Synthetic second source',rawText:'Independent second original for review.'};},
  input(selector,value){const el=document.querySelector(selector);const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));},
@@ -54,9 +72,10 @@ window.harness={
  settleItem(outcome){holdItem=false;if(!pendingItem)throw Error('No deferred item request');if(outcome==='reject')pendingItem.reject(Error('Synthetic deferred item failure'));else pendingItem.resolve();pendingItem=null;},
  itemSettled:()=>itemSettled,
  clipboardReads:()=>clipboardReads,
+ confirmMessages:()=>[...confirms],
  addIntakeDraft(){const el=document.querySelector('#intake-original-text');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,'Unsubmitted synthetic intake draft');el.dispatchEvent(new Event('input',{bubbles:true}));const file=new File([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aV8AAAAASUVORK5CYII='),x=>x.charCodeAt(0))],'synthetic.png',{type:'image/png'});const transfer=new DataTransfer();transfer.items.add(file);const input=document.querySelector('input[aria-label="添加图片文件"]');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));},
  calls:()=>calls, text:()=>document.body.innerText,
- click(label){const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===label||b.textContent.trim()===label||b.textContent.trim().endsWith(label));if(!b)throw Error('Missing button: '+label);b.click();},
+ click(label){const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===label||b.title===label||b.textContent.trim()===label||b.textContent.trim().endsWith(label));if(!b)throw Error('Missing button: '+label);b.click();},
  rememberNotes(){rememberedNotes=document.querySelector('[aria-label="笔记工作区"]');},
  sameNotes:()=>rememberedNotes===document.querySelector('[aria-label="笔记工作区"]'),
  notesActive:()=>!document.querySelector('[aria-label="笔记工作区"]').classList.contains('vault-notes-hidden'),
@@ -64,15 +83,37 @@ window.harness={
  externalUpdate(){generation++;source.reviewRevision++;},
  target(value){const el=document.querySelector('#inbox-review-target');el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));},
  edit(value){const el=document.querySelector('#inbox-review-draft');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));},
+ openSearchPath(path){const button=[...document.querySelectorAll('.sidebar-search-results button')].find(button=>button.querySelector('small')?.textContent?.trim()===path);if(!button)throw Error('Missing unified-search path '+path);button.click();},
+ state(){
+  const main=document.querySelector('.vault-note-main');
+  const editor=main?.querySelector('.cm-editor');
+  const view=editor?EditorView.findFromDOM(editor):null;
+  return {
+   calls:[...calls],
+   navigationMode:document.querySelector('.library-sidebar')?.getAttribute('data-navigation-mode')??null,
+   notePath:main?.getAttribute('data-note-path')??null,
+   noteIdentity:main?.getAttribute('data-note-identity')??null,
+   toast:document.querySelector('.toast-message')?.textContent?.trim()??null,
+   activeLibraryButton:document.querySelector('.library-nav .nav-row-active')?.textContent?.trim()??null,
+   editorDoc:view?.state.doc.toString()??null,
+   editorLines:view?[...view.contentDOM.children].filter(line=>line.classList.contains('cm-line')).map(line=>line.textContent??''):[],
+   searchResultPaths:[...document.querySelectorAll('.sidebar-search-results button small')].map(path=>path.textContent?.trim()??''),
+   draftVisible:!!main?.querySelector('.vault-draft-recovery'),
+   saveStatus:main?.querySelector('.vault-save-indicator')?.textContent?.trim()??null,
+   readerBlocks:[...(main?.querySelectorAll('.vault-reader-markdown h1,.vault-reader-markdown h2,.vault-reader-markdown h3,.vault-reader-markdown p')??[])].map(block=>block.textContent??''),
+   text:document.body.innerText,
+  };
+ },
 };
 `;
 const browser = createReviewBrowser(harness, fileURLToPath(new URL('../..', import.meta.url)));
 const { evaluate, until } = browser;
 const text = () => evaluate<string>('window.harness.text()');
 const calls = () => evaluate<any[]>('window.harness.calls()');
+const appState = () => evaluate<any>('window.harness.state()');
 const click = (label: string) => evaluate(`window.harness.click(${JSON.stringify(label)})`);
-async function mount(empty = false): Promise<void> {
-  await evaluate(`window.harness.mount(${empty})`);
+async function mount(empty = false, withMarkdown = false): Promise<void> {
+  await evaluate(`window.harness.mount(${empty},${withMarkdown})`);
   await until(calls, value => value.some(call => call[0] === 'vaultSnapshot') && value.some(call => call[0] === 'listItems'));
   await evaluate('window.harness.rememberNotes()');
 }
@@ -84,6 +125,37 @@ async function openInbox(): Promise<void> {
 describe('real App Notes and Inbox navigation', () => {
   beforeAll(() => browser.start(), 30_000);
   afterAll(() => browser.close());
+
+  it('opens a restored Markdown search result with exact editor lines and reader paragraphs', async () => {
+    await mount(false, true);
+    await click('搜索');
+    await browser.until(appState, state => state.navigationMode === 'search');
+    await evaluate(`window.harness.input('input[aria-label="搜索知识与资料"]','恢复后的笔记')`);
+    const results = await browser.until(appState, state => state.searchResultPaths.length === 2);
+    expect(results.searchResultPaths).toEqual(['Other/恢复后的笔记.md', restoredMarkdownPath]);
+
+    await evaluate(`window.harness.openSearchPath(${JSON.stringify(restoredMarkdownPath)})`);
+    const opened = await browser.until(appState, state => state.notePath === restoredMarkdownPath && state.editorDoc === restoredMarkdownBody);
+    expect(opened.noteIdentity).toBe(`file:${restoredMarkdownPath}`);
+    expect(opened.editorDoc).toBe(restoredMarkdownBody);
+    expect(opened.saveStatus).toBe('已保存');
+    expect(opened.draftVisible).toBe(false);
+    expect(opened.calls.some((call: any[]) => call[0] === 'vaultFile' && call[1] === restoredMarkdownPath)).toBe(true);
+
+    await click('源码');
+    const source = await browser.until(appState, state => state.editorLines.length === restoredMarkdownBody.split('\n').length);
+    expect(source.editorLines).toEqual(restoredMarkdownBody.split('\n'));
+
+    await click('阅读');
+    const reader = await browser.until(appState, state => state.readerBlocks.length === 3);
+    expect(reader.readerBlocks).toEqual(['恢复后的笔记', '第一段恢复正文。', '第二段恢复正文。']);
+    await click('删除');
+    const deleted = await browser.until(appState, state => state.notePath === null && state.activeLibraryButton === '▦全部资料');
+    expect(deleted.toast).toBeNull();
+    expect(deleted.calls.some((call: any[]) => call[0] === 'deleteVaultFile' && call[1] === restoredMarkdownPath)).toBe(true);
+    expect(await evaluate('window.harness.confirmMessages()')).toEqual([expect.stringContaining(restoredMarkdownPath)]);
+    expect(browser.errors).toEqual([]);
+  });
 
   it('reads a persisted human result after the whole App remounts with an empty direction catalog', async () => {
     await mount();
@@ -189,7 +261,7 @@ describe('real App Notes and Inbox navigation', () => {
     await mount();
     await openInbox();
     expect(await evaluate('window.harness.notesActive()')).toBe(false);
-    await click('全部笔记');
+    await click('全部资料');
     await until(() => evaluate<boolean>('window.harness.notesActive()'), Boolean);
     expect(await evaluate('window.harness.inboxActive()')).toBe(false);
     expect(await evaluate('window.harness.sameNotes()')).toBe(true);
@@ -202,7 +274,7 @@ describe('real App Notes and Inbox navigation', () => {
     await until(text, value => value.includes('Original source body for direct detail'));
     await evaluate("window.harness.edit('Local review draft')");
     const before = (await calls()).filter(call => ['inbox', 'rawSource'].includes(call[0])).length;
-    await click('全部笔记');
+    await click('全部资料');
     await evaluate('window.harness.externalUpdate()');
     await click('打开待确认资料');
     await until(text, value => value.includes('Synthetic source 2'));

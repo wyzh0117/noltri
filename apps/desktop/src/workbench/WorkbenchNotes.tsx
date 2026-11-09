@@ -7,13 +7,12 @@ import type { WorkbenchApi } from './api';
 import { NotesEditor } from './NotesEditor';
 import { NoteBodyPresentation } from './NoteBodyPresentation';
 import { NoteInterpretationPanel } from './NoteInterpretationPanel';
-import { VaultRelationsGraph } from './VaultRelationsGraph';
+import type { RightTool, RightToolPanels } from './KnowledgeRightPanel';
 import { classifyNoteChange, classifyVaultDraftRecovery, createVaultDraftWriteQueue, decodeVaultDraftRecord, drainNoteFlush, extractSubpath, fuzzyMatchRanges, groupMarkdownTokens, historyDiffLines, incompleteWikiLinkAt, markdownBlockRanges, markdownReaderTarget, movedMarkdownHistoryPaths, normalizeTextRanges, remapVaultPath, replaceMentionAt, safeDecodeVaultFragment, safeNoteHref, saveLatestNoteWithEtag, setFrontmatterProperty, vaultContextMatches, vaultLinkPathCandidates, vaultPathContextMatches, vaultPathContains, writeVaultDraftRecord } from './notes-model';
 import type { TextRange, VaultContextIdentity, VaultDraftMetadata } from './notes-model';
 import './notes-workbench.css';
 
 type EditorMode = 'live' | 'source' | 'read';
-import { NoteSidebarTabs, type NotePanel } from './NoteSidebarTabs';
 type SaveState = 'saved' | 'saving' | 'dirty' | 'conflict' | 'error';
 type VaultLinkKind = 'wikilink' | 'markdown';
 
@@ -22,21 +21,32 @@ export interface RelatedSourceDocument { path: string; sourceId: string; title: 
 interface WorkbenchNotesProps {
   api: WorkbenchApi;
   active: boolean;
-  relationsGraph?: ReactNode;
-  requestedOpen: { path: string; intent: { newTab: boolean; split: boolean }; id: number; draftContent?: string; legacyDraft?: { topicId: string; chapterId: string | null; content: string } } | null;
+  displayMode?: 'cards' | 'editor';
+  contentView?: ReactNode;
+  commandRequestId?: number;
+  searchQuery?: string;
+  onRequestToolChange?: (tool: RightTool) => void;
+  onSearchRequest?: (query: string) => void;
+  onNavigateRequest?: (path: string | null, subpath?: string | null, intent?: { newTab: boolean; split: boolean }) => void;
+  requestedOpen: { path: string; intent: { newTab: boolean; split: boolean }; id: number; subpath?: string | null; draftContent?: string; legacyDraft?: { topicId: string; chapterId: string | null; content: string }; semanticIdentity?: SemanticNoteIdentity } | null;
   scopePaths: ReadonlySet<string> | null;
   scopeTitle: string | null;
   libraryView: 'all' | 'organize' | 'archive';
   previewRequest?: { path: string; anchor: DOMRect | null; id: number } | null;
+  assetRequest?: { path: string; id: number } | null;
   tagQuery: string | null;
   vaultTagCounts: ReadonlyMap<string, number>;
   onContextChange: (rootPath: string, selectedPath: string | null, revision: number, frontmatter: Record<string, unknown> | null, relatedSources: RelatedSourceDocument[]) => void;
   onUpdateSafetyChange?: (safe: boolean) => void;
   onVaultDocumentsChanged?: (paths: readonly string[]) => void;
+  onVaultEntriesChange?: (entries: readonly VaultEntry[]) => void;
+  onRegisterFlushHandler?: (handler: () => Promise<boolean>) => void | (() => void);
+  onRightPanelContentChange?: (content: { toolPanels: RightToolPanels; interpretationPanel: ReactNode }, signature: string) => void;
   onLegacyDraftSaved?: (draft: { topicId: string; chapterId: string | null; content: string }) => void;
 }
 
 interface TrustSettings { html: boolean; mermaid: boolean }
+interface SemanticNoteIdentity { topicId: string; chapterId: string | null }
 interface LoadedNoteOwner extends VaultContextIdentity { path: string; id: number }
 type PropertyType = 'text' | 'number' | 'boolean' | 'list' | 'yaml';
 const propertyTypeValues = new Set<PropertyType>(['text', 'number', 'boolean', 'list', 'yaml']);
@@ -84,11 +94,6 @@ function setDraft(root: string, path: string, content: string | null, metadata?:
 
 function sortedEntries(entries: readonly VaultEntry[]): VaultEntry[] {
   return [...entries].sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
-}
-
-function parentPath(path: string): string {
-  const slash = path.lastIndexOf('/');
-  return slash < 0 ? '' : path.slice(0, slash);
 }
 
 function basename(path: string): string {
@@ -500,6 +505,25 @@ function noteBody(content: string): string {
   return content.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, '');
 }
 
+const graphNoteSystemProperties = new Set(['id', 'noteType', 'topicId', 'chapterId', 'title']);
+
+function graphNoteProperties(content: string): Record<string, unknown> {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(content);
+  if (match === null) {
+    if (content.startsWith('---\n') || content.startsWith('---\r\n')) throw new Error('笔记属性 YAML 无法解析；修复语法后再保存。');
+    return {};
+  }
+  let parsed: unknown;
+  try { parsed = YAML.parse(match[1] ?? ''); }
+  catch { throw new Error('笔记属性 YAML 无法解析；修复语法后再保存。'); }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('笔记属性必须是 YAML 对象。');
+  return Object.fromEntries(Object.entries(parsed).filter(([key]) => !graphNoteSystemProperties.has(key)));
+}
+
+function sameProperties(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function NoteReader({ content, path, api, trustedHtml, trustMermaid, onOpenLink, onTrustMermaid, onHoverLink, onLeaveLink, jumpTo }: {
   content: string; path: string; api: WorkbenchApi; trustedHtml: boolean; trustMermaid: boolean;
   onOpenLink: (target: string, sourcePath?: string, kind?: VaultLinkKind) => void; onTrustMermaid: () => void;
@@ -629,42 +653,7 @@ function NoteReader({ content, path, api, trustedHtml, trustMermaid, onOpenLink,
   </div>;
 }
 
-function entryTree(entries: readonly VaultEntry[]): Array<VaultEntry & { depth: number }> {
-  const sorted = sortedEntries(entries);
-  const folders = new Set(sorted.filter((entry) => entry.kind === 'folder').map((entry) => entry.path));
-  const implicit = new Set<string>();
-  for (const entry of sorted) {
-    let parent = parentPath(entry.path);
-    while (parent !== '') { implicit.add(parent); parent = parentPath(parent); }
-  }
-  const all = new Map<string, VaultEntry>();
-  for (const folder of implicit) if (!folders.has(folder)) all.set(folder, { path: folder, name: basename(folder), kind: 'folder' });
-  for (const entry of sorted) all.set(entry.path, entry);
-  const childrenByParent = new Map<string, VaultEntry[]>();
-  for (const entry of all.values()) {
-    const parent = parentPath(entry.path);
-    const children = childrenByParent.get(parent);
-    if (children === undefined) childrenByParent.set(parent, [entry]);
-    else children.push(entry);
-  }
-  const sortChildren = (children: VaultEntry[]): void => {
-    children.sort((a, b) => Number(a.kind !== 'folder') - Number(b.kind !== 'folder')
-      || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-  };
-  for (const children of childrenByParent.values()) sortChildren(children);
-  const result: Array<VaultEntry & { depth: number }> = [];
-  const visit = (folder: string, depth: number): void => {
-    const children = childrenByParent.get(folder) ?? [];
-    for (const entry of children) {
-      result.push({ ...entry, depth });
-      if (entry.kind === 'folder') visit(entry.path, depth + 1);
-    }
-  };
-  visit('', 0);
-  return result;
-}
-
-export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOpen, scopePaths, scopeTitle, libraryView, previewRequest = null, tagQuery, vaultTagCounts, onContextChange, onVaultDocumentsChanged, onLegacyDraftSaved, onUpdateSafetyChange }: WorkbenchNotesProps): ReactElement {
+export function WorkbenchNotes({ api, active, displayMode = 'editor', contentView, requestedOpen, scopePaths, scopeTitle, libraryView, previewRequest = null, assetRequest = null, tagQuery, vaultTagCounts, onContextChange, onVaultDocumentsChanged, onVaultEntriesChange, onRegisterFlushHandler, onRightPanelContentChange, onLegacyDraftSaved, onUpdateSafetyChange, commandRequestId = 0, searchQuery: workspaceSearchQuery = '', onRequestToolChange, onSearchRequest, onNavigateRequest }: WorkbenchNotesProps): ReactElement {
   const [snapshot, setSnapshot] = useState<VaultSnapshot | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [tabs, setTabs] = useState<string[]>([]);
@@ -675,11 +664,6 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   const [transitioning, setTransitioning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<EditorMode>('live');
-  const [panel, setPanel] = useState<NotePanel>('outline');
-  const hasSemanticRelationsGraph = relationsGraph !== null && relationsGraph !== undefined && relationsGraph !== false;
-  const needsVaultRelationsGraph = !hasSemanticRelationsGraph && snapshot !== null && selectedPath !== null && /\.md$/i.test(selectedPath);
-  const hasRelationsGraph = hasSemanticRelationsGraph || needsVaultRelationsGraph;
-  useEffect(() => { if (!hasRelationsGraph && panel === 'graph') setPanel('outline'); }, [hasRelationsGraph, panel]);
   const [metadata, setMetadata] = useState<CachedNoteMetadata | null>(null);
   const [backlinks, setBacklinks] = useState<Awaited<ReturnType<WorkbenchApi['vaultBacklinks']>>['backlinks']>([]);
   const [mentions, setMentions] = useState<Awaited<ReturnType<WorkbenchApi['vaultMentions']>>['mentions']>([]);
@@ -692,10 +676,6 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   const [commandOpen, setCommandOpen] = useState(false);
   const [newNoteOpen, setNewNoteOpen] = useState(false);
   const [newNotePath, setNewNotePath] = useState('');
-  const [newFolderOpen, setNewFolderOpen] = useState(false);
-  const [newFolderPath, setNewFolderPath] = useState('');
-  const [treeRenameEntry, setTreeRenameEntry] = useState<VaultEntry | null>(null);
-  const [treeRenamePath, setTreeRenamePath] = useState('');
   const [deletedPaths, setDeletedPaths] = useState<string[]>([]);
   const [showDeletedHistory, setShowDeletedHistory] = useState(false);
   const [restorePath, setRestorePath] = useState<string | null>(null);
@@ -712,14 +692,12 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   const [interpretationSafeForUpdate, setInterpretationSafeForUpdate] = useState(true);
   const handleInterpretationUpdateSafety = useCallback((safe: boolean): void => { setInterpretationSafeForUpdate(safe); }, []);
   useEffect(() => {
-    onUpdateSafetyChange?.(propertySafeForUpdate && interpretationSafeForUpdate && saveState === 'saved' && !transitioning && !settingsBusy && !draftAvailable && !newNoteOpen && !newFolderOpen && treeRenameEntry === null && renamePath === '' && error === null);
-  }, [propertySafeForUpdate, interpretationSafeForUpdate, saveState, transitioning, settingsBusy, draftAvailable, newNoteOpen, newFolderOpen, treeRenameEntry, renamePath, error, onUpdateSafetyChange]);
+    onUpdateSafetyChange?.(propertySafeForUpdate && interpretationSafeForUpdate && saveState === 'saved' && !transitioning && !settingsBusy && !draftAvailable && !newNoteOpen && renamePath === '' && error === null);
+  }, [propertySafeForUpdate, interpretationSafeForUpdate, saveState, transitioning, settingsBusy, draftAvailable, newNoteOpen, renamePath, error, onUpdateSafetyChange]);
   const [jumpTo, setJumpTo] = useState<ReaderJumpTarget | null>(null);
   const [editorJumpRequest, setEditorJumpRequest] = useState<{ path: string; requestId: number; sourceOffset: number } | null>(null);
   const [previewTarget, setPreviewTarget] = useState<{ path: string; title: string; content: string; anchor: DOMRect } | null>(null);
   const [assetPreview, setAssetPreview] = useState<{ path: string; mimeType: string; dataUrl: string } | null>(null);
-  const [diagnostics, setDiagnostics] = useState<Awaited<ReturnType<WorkbenchApi['vaultDiagnostics']>> | null>(null);
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   const [localScopePaths, setLocalScopePaths] = useState<Set<string>>(() => new Set());
   const saveTimer = useRef<number | null>(null);
   const revisionRef = useRef(0);
@@ -727,11 +705,14 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   const backlinksRevisionRef = useRef(-1);
   const mentionsRevisionRef = useRef(-1);
   const noteRef = useRef<NoteFile | null>(null);
+  const semanticIdentityByPathRef = useRef(new Map<string, SemanticNoteIdentity>());
+  const semanticIdentityRootRef = useRef<string | null>(null);
   const contentRef = useRef(content);
   const rootPathRef = useRef<string | null>(snapshot?.rootPath ?? null);
   const vaultEpochRef = useRef(0);
   const noteOwnerRef = useRef<LoadedNoteOwner | null>(null);
   const noteContentColumnRef = useRef<HTMLElement | null>(null);
+  const returnToTextRef = useRef<() => void>(() => undefined);
   const noteOwnerIdRef = useRef(0);
   const saveChain = useRef<Promise<void>>(Promise.resolve());
   const mountedRef = useRef(true);
@@ -758,7 +739,7 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   const previewTimer = useRef<number | null>(null);
   const previewOpenTimer = useRef<number | null>(null);
   const modifierHeld = useRef(false);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const lastCommandRequestId = useRef(0);
   const lastOpenRequestId = useRef<number | null>(null);
   const legacyDraftRef = useRef<{ path: string; draft: { topicId: string; chapterId: string | null; content: string } } | null>(null);
   const noteLoadRequestId = useRef(0);
@@ -841,6 +822,12 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
     .filter((entry) => entry.kind === 'file' && entry.frontmatter?.noteType === 'source'
       && frontmatterStrings(entry.frontmatter.sourceIds).some((id) => associatedSourceIds.has(id)))
     .map((entry) => entry.path)), [associatedSourceIds, snapshot]);
+  const isCanonicalSemanticPath = (path: string): boolean => {
+    if (semanticIdentityByPathRef.current.has(path)) return true;
+    const frontmatter = snapshot?.files.find((entry) => entry.path === path)?.frontmatter
+      ?? (noteRef.current?.path === path ? noteRef.current.metadata?.frontmatter : undefined);
+    return frontmatter?.noteType === 'topic' || frontmatter?.noteType === 'chapter';
+  };
   const linkTargets = useMemo(() => (snapshot?.files ?? [])
     .filter((entry) => entry.kind === 'file' && entry.extension?.toLocaleLowerCase() === 'md' && !duplicateSourcePaths.has(entry.path))
     .map((entry) => ({ path: entry.path, title: frontmatterTitle(entry.frontmatter, entry.path) }))
@@ -913,13 +900,17 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   }, [snapshot?.rootPath]);
 
   useEffect(() => {
-    if (!active || snapshot === null) return undefined;
+    if (assetRequest === null || snapshot === null) return;
+    const context = captureVaultContext();
+    if (context === null || context.rootPath !== snapshot.rootPath) return;
     let cancelled = false;
-    const refresh = (): void => { void api.vaultDiagnostics().then((value) => { if (!cancelled) setDiagnostics(value); }).catch(() => undefined); };
-    refresh();
-    const timer = window.setInterval(refresh, 10_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [active, api, snapshot?.rootPath]);
+    void api.getVaultAsset(assetRequest.path).then((asset) => {
+      if (!cancelled && ownsVaultContext(context)) setAssetPreview(asset);
+    }).catch((cause) => {
+      if (!cancelled && ownsVaultContext(context)) setError(errorText(cause));
+    });
+    return () => { cancelled = true; };
+  }, [api, assetRequest?.id, captureVaultContext, ownsVaultContext, snapshot]);
 
   useEffect(() => {
     if (previewRequest === null) return;
@@ -1054,7 +1045,40 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
       let canContinue = true;
       pendingWritesRef.current.set(changeKey, pending + 1);
       const operation = saveChain.current.catch(() => undefined).then(async () => {
-        const outcome = await saveLatestNoteWithEtag((input) => api.saveVaultFile(input, root), path, () => {
+        const saveFile = async (input: { path: string; content: string; expectedEtag?: string }): Promise<NoteFile> => {
+          const current = noteRef.current;
+          let identity = semanticIdentityByPathRef.current.get(input.path);
+          let canonical: Awaited<ReturnType<WorkbenchApi['legacyNotePath']>> | null = null;
+          if (identity === undefined) {
+            const frontmatter = current?.path === input.path ? current.metadata?.frontmatter : null;
+            const noteType = frontmatter?.noteType;
+            if (noteType !== 'topic' && noteType !== 'chapter') return api.saveVaultFile(input, root);
+            const topicId = frontmatter?.topicId;
+            const chapterId = noteType === 'chapter' ? frontmatter?.chapterId : null;
+            if (typeof topicId !== 'string' || topicId.trim() === ''
+              || noteType === 'chapter' && (typeof chapterId !== 'string' || chapterId.trim() === '')) {
+              throw new Error('主题笔记身份信息不完整；为避免写入错误主题，正文未保存。');
+            }
+            identity = { topicId, chapterId: chapterId as string | null };
+            canonical = await api.legacyNotePath(identity.topicId, identity.chapterId);
+            if (!canonical.exists || canonical.path !== input.path) throw new Error('主题笔记路径与知识库映射不一致；正文未保存。');
+            semanticIdentityByPathRef.current.set(input.path, identity);
+          }
+          if (canonical === null) canonical = await api.legacyNotePath(identity.topicId, identity.chapterId);
+          if (!canonical.exists || canonical.path !== input.path) throw new Error('主题笔记路径与知识库映射不一致；正文未保存。');
+          const properties = graphNoteProperties(input.content);
+          const originalProperties = graphNoteProperties(current?.path === input.path ? current.content : '');
+          await api.saveGraphNote(identity.topicId, {
+            chapterId: identity.chapterId,
+            content: noteBody(input.content),
+            expectedEtag: input.expectedEtag,
+            ...(!sameProperties(properties, originalProperties) ? { properties } : {}),
+          }, root);
+          const saved = await api.vaultFile(input.path);
+          if (contentRef.current === input.content) commitContent(saved.content);
+          return saved;
+        };
+        const outcome = await saveLatestNoteWithEtag(saveFile, path, () => {
           if (!ownsNoteContext(context, path, owner.id)) return null;
           const current = noteRef.current;
           return current?.path === path ? current : null;
@@ -1111,7 +1135,24 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
         return canContinue && ownsNoteContext(context, path, owner.id);
       },
     );
-  }, [api, confirmLegacyDraftSaved, ownsNoteContext, reconcileChangedPath, selectedPath, snapshot?.rootPath, updateLoadedNote]);
+  }, [api, commitContent, confirmLegacyDraftSaved, ownsNoteContext, reconcileChangedPath, selectedPath, snapshot?.rootPath, updateLoadedNote]);
+
+  const flushForNavigation = useCallback(async (): Promise<boolean> => {
+    const path = contextPathRef.current;
+    if (path === null) return noteRef.current === null && noteOwnerRef.current === null;
+    return saveCurrent(path);
+  }, [saveCurrent]);
+  useEffect(() => onRegisterFlushHandler?.(flushForNavigation), [flushForNavigation, onRegisterFlushHandler]);
+  useEffect(() => {
+    if (snapshot !== null) onVaultEntriesChange?.(snapshot.files);
+  }, [onVaultEntriesChange, snapshot]);
+
+  useEffect(() => {
+    const root = snapshot?.rootPath ?? null;
+    if (semanticIdentityRootRef.current === root) return;
+    semanticIdentityRootRef.current = root;
+    semanticIdentityByPathRef.current.clear();
+  }, [snapshot?.rootPath]);
 
   useEffect(() => {
     if (saveTimer.current !== null) clearTimeout(saveTimer.current);
@@ -1216,7 +1257,8 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   useEffect(() => {
     if (active && snapshot !== null && requestedOpen !== null && requestedOpen.id !== lastOpenRequestId.current) {
       lastOpenRequestId.current = requestedOpen.id;
-      void openNote(requestedOpen.path, null, requestedOpen.intent).then(() => {
+      if (requestedOpen.semanticIdentity !== undefined) semanticIdentityByPathRef.current.set(requestedOpen.path, requestedOpen.semanticIdentity);
+      void openNote(requestedOpen.path, requestedOpen.subpath, requestedOpen.intent).then(() => {
         if (requestedOpen.draftContent === undefined || requestedOpen.intent.split || noteRef.current?.path !== requestedOpen.path) return;
         commitContent(requestedOpen.draftContent);
         setSaveState('dirty');
@@ -1251,8 +1293,19 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   }, [active, clearLoadedNote, commitContent, hasUnsavedContent, inCurrentScope, publishContext, requestedOpen?.path, saveCurrent, scopePaths, selectedPath, snapshot]);
 
   useEffect(() => {
-    if (tagQuery !== null && active) { setSearchQuery(tagQuery); setPanel('tags'); }
-  }, [active, tagQuery]);
+    if (tagQuery !== null && active) onSearchRequest?.(tagQuery);
+  }, [active, onSearchRequest, tagQuery]);
+
+  useEffect(() => {
+    if (!active || commandRequestId === 0 || commandRequestId === lastCommandRequestId.current) return;
+    lastCommandRequestId.current = commandRequestId;
+    setCommandOpen(true);
+    setSwitcherQuery('');
+  }, [active, commandRequestId]);
+
+  useEffect(() => {
+    setSearchQuery(workspaceSearchQuery);
+  }, [workspaceSearchQuery]);
 
   useEffect(() => {
     const snapshotRootPath = snapshot?.rootPath;
@@ -1331,37 +1384,16 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
     };
   }, [active, api, onVaultDocumentsChanged, ownsNoteContext, ownsVaultContext, reconcileChangedPath, reloadSnapshot, selectedPath, snapshot?.rootPath]);
 
-  const visibleEntries = useMemo(() => {
-    if (snapshot === null) return [];
-    const files = snapshot.files.filter((entry) => {
-      if (entry.kind !== 'file' || entry.extension?.toLocaleLowerCase() !== 'md') return false;
-      if (!inCurrentScope(entry.path)) return false;
-      if (duplicateSourcePaths.has(entry.path)) return false;
-      const frontmatter = entry.frontmatter ?? {};
-      if (libraryView === 'archive') return frontmatter.archived === true;
-      if (libraryView === 'organize') return frontmatter.archived !== true
-        && (frontmatter.noteType === 'source' || (frontmatter.aiStatus !== undefined && frontmatter.aiStatus !== 'ready'));
-      return frontmatter.archived !== true;
-    });
-    return entryTree(files).filter((entry) => {
-      let parent = parentPath(entry.path);
-      while (parent !== '') {
-        if (collapsedFolders.has(parent)) return false;
-        parent = parentPath(parent);
-      }
-      return true;
-    });
-  }, [collapsedFolders, duplicateSourcePaths, inCurrentScope, libraryView, snapshot]);
   const displayTitlesByPath = useMemo(() => {
-    const titles = visibleEntries.filter((entry) => entry.kind === 'file').map((entry) => ({
+    const titles = (snapshot?.files ?? []).filter((entry) => entry.kind === 'file').map((entry) => ({
       path: entry.path,
       title: frontmatterTitle(entry.frontmatter, entry.path),
     }));
     const counts = new Map<string, number>();
     for (const { title } of titles) counts.set(title.toLocaleLowerCase(), (counts.get(title.toLocaleLowerCase()) ?? 0) + 1);
     return new Map(titles.map(({ path, title }) => [path, (counts.get(title.toLocaleLowerCase()) ?? 0) > 1
-      ? `${title} · ${parentPath(path) || '根目录'}` : title]));
-  }, [visibleEntries]);
+      ? `${title} · ${path.split('/').slice(0, -1).join('/') || '根目录'}` : title]));
+  }, [snapshot]);
   const titleForPath = (path: string, frontmatter?: Record<string, unknown>): string =>
     frontmatterTitle(frontmatter ?? snapshot?.files.find((entry) => entry.path === path)?.frontmatter, path);
   const headings = metadata?.headings ?? [...content.matchAll(/^(#{1,6})\s+(.+)$/gm)].map((match) => ({ heading: match[2] ?? '', level: match[1]?.length ?? 1, position: { start: { line: 0, col: 0, offset: match.index ?? 0 }, end: { line: 0, col: 0, offset: (match.index ?? 0) + match[0].length } } }));
@@ -1376,15 +1408,6 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   const searchRanges = useMemo(() => search?.results.find((result) => result.path === selectedPath)?.matches
     .filter((range) => range.field === 'content')
     .map(({ start, end }) => ({ start, end })) ?? [], [search, selectedPath]);
-  const visibleSearchResults = useMemo(() => (search?.results ?? []).filter((result) => {
-    if (!inCurrentScope(result.path)) return false;
-    if (duplicateSourcePaths.has(result.path)) return false;
-    const frontmatter = snapshot?.files.find((entry) => entry.path === result.path)?.frontmatter ?? {};
-    if (libraryView === 'archive') return frontmatter.archived === true;
-    if (libraryView === 'organize') return frontmatter.archived !== true
-      && (frontmatter.noteType === 'source' || (frontmatter.aiStatus !== undefined && frontmatter.aiStatus !== 'ready'));
-    return frontmatter.archived !== true;
-  }), [duplicateSourcePaths, inCurrentScope, libraryView, search, snapshot]);
   const visibleSwitcherResults = useMemo(() => switcherResults.filter((result) => !duplicateSourcePaths.has(result.path)), [duplicateSourcePaths, switcherResults]);
 
   useEffect(() => {
@@ -1406,10 +1429,9 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   }, [api, commandOpen, switcherQuery]);
 
   useEffect(() => {
-    if (panel !== 'outline') return;
-    const activeHeading = document.querySelector<HTMLElement>('.vault-outline-list button.is-active');
+    const activeHeading = document.querySelector<HTMLElement>('.knowledge-right-tool-panel .vault-outline-list button.is-active');
     activeHeading?.scrollIntoView({ block: 'nearest' });
-  }, [outlineCursor, panel, selectedPath]);
+  }, [outlineCursor, selectedPath]);
 
   async function createNote(): Promise<void> {
     const context = captureVaultContext();
@@ -1422,75 +1444,13 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
       if (!ownsVaultContext(context)) return;
       if (scopePaths !== null) setLocalScopePaths((current) => new Set(current).add(created.path));
       if (!await reloadSnapshot(context) || !ownsVaultContext(context)) return;
-      setNewNoteOpen(false); setNewNotePath(''); await openNote(created.path);
+      setNewNoteOpen(false); setNewNotePath('');
+      if (onNavigateRequest !== undefined) onNavigateRequest(created.path); else await openNote(created.path);
     } catch (cause) { if (ownsVaultContext(context)) setError(errorText(cause)); }
-  }
-
-  async function createFolder(): Promise<void> {
-    const context = captureVaultContext();
-    if (context === null || snapshot?.rootPath !== context.rootPath) return;
-    const path = newFolderPath.trim().replace(/^\/+/, '').replace(/\/+/g, '/');
-    if (path === '' || path.includes('..') || path.startsWith('.')) { setError('请输入笔记库内的相对文件夹路径。'); return; }
-    try {
-      await api.createVaultFolder({ path }, context.rootPath);
-      if (!ownsVaultContext(context) || !await reloadSnapshot(context) || !ownsVaultContext(context)) return;
-      setNewFolderOpen(false); setNewFolderPath('');
-    } catch (cause) { if (ownsVaultContext(context)) setError(errorText(cause)); }
-  }
-
-  async function renameTreeEntry(): Promise<void> {
-    const entry = treeRenameEntry;
-    const context = captureVaultContext();
-    const sourceSnapshot = snapshot;
-    if (entry === null || sourceSnapshot === null || context === null || sourceSnapshot.rootPath !== context.rootPath) return;
-    const newPath = treeRenamePath.trim().replace(/^\/+/, '').replace(/\/{2,}/g, '/');
-    if (!newPath || newPath.split('/').some((part) => part === '.' || part === '..') || newPath === entry.path
-      || (entry.kind === 'folder' && newPath.startsWith(`${entry.path}/`))) {
-      setError('请输入有效的笔记库内新路径。');
-      return;
-    }
-    const releaseTransition = beginTransition();
-    try {
-      const current = noteRef.current;
-      if (current !== null && !(await saveCurrent(current.path))) return;
-      if (!ownsVaultContext(context)) return;
-      const preview = await api.deletePreview(entry.path);
-      if (!ownsVaultContext(context)) return;
-      if (preview.kind !== entry.kind || (entry.kind === 'folder' && preview.descendantCount === undefined)) {
-        setError('Core 没有返回匹配路径的安全路径预览，已取消改名。请更新 Core 后重试。');
-        return;
-      }
-      const result = await api.renameVaultFile({ path: entry.path, newPath, expectedEtag: preview.etag }, context.rootPath);
-      if (!ownsVaultContext(context)) return;
-      if (scopePaths !== null) {
-        const remappedScopePaths = sourceSnapshot.files
-          .filter((file) => file.kind === 'file' && file.extension?.toLocaleLowerCase() === 'md'
-            && vaultPathContains(file.path, entry.path) && inCurrentScope(file.path))
-          .map((file) => remapVaultPath(file.path, entry.path, result.path));
-        if (remappedScopePaths.length > 0) setLocalScopePaths((currentPaths) => new Set([...currentPaths, ...remappedScopePaths]));
-      }
-      rememberDeletedPaths(movedMarkdownHistoryPaths(sourceSnapshot.files, entry.path));
-      const mappedTabs = tabs.map((path) => remapVaultPath(path, entry.path, result.path));
-      setTabs(mappedTabs);
-      setCollapsedFolders((paths) => new Set([...paths].map((path) => remapVaultPath(path, entry.path, result.path))));
-      if (splitNote !== null && vaultPathContains(splitNote.path, entry.path)) {
-        const file = await api.vaultFile(remapVaultPath(splitNote.path, entry.path, result.path));
-        if (!ownsVaultContext(context)) return;
-        setSplitNote(file);
-      }
-      setAssetPreview((asset) => asset !== null && vaultPathContains(asset.path, entry.path)
-        ? { ...asset, path: remapVaultPath(asset.path, entry.path, result.path) }
-        : asset);
-      setTreeRenameEntry(null);
-      if (!await reloadSnapshot(context) || !ownsVaultContext(context)) return;
-      if (selectedPath !== null && vaultPathContains(selectedPath, entry.path)) {
-        await openNote(remapVaultPath(selectedPath, entry.path, result.path), null, {}, true);
-      }
-    } catch (cause) { if (ownsVaultContext(context)) setError(errorText(cause)); }
-    finally { releaseTransition(); }
   }
 
   async function deleteTreeEntry(entry: VaultEntry): Promise<void> {
+    if (isCanonicalSemanticPath(entry.path)) { setError('主题笔记路径由知识内容维护，不能通过文件删除。'); return; }
     const context = captureVaultContext();
     const sourceSnapshot = snapshot;
     if (sourceSnapshot === null || context === null || sourceSnapshot.rootPath !== context.rootPath) return;
@@ -1550,19 +1510,22 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
       });
       const remaining = tabs.filter((path) => !vaultPathContains(path, entry.path));
       setTabs(remaining);
-      setCollapsedFolders((paths) => new Set([...paths].filter((path) => !vaultPathContains(path, entry.path))));
       setSplitNote((currentSplit) => currentSplit !== null && vaultPathContains(currentSplit.path, entry.path) ? null : currentSplit);
       setAssetPreview((asset) => asset !== null && vaultPathContains(asset.path, entry.path) ? null : asset);
       if (!await reloadSnapshot(context) || !ownsVaultContext(context)) return;
       if (selectedPath !== null && vaultPathContains(selectedPath, entry.path)) {
         noteLoadRequestId.current += 1;
-        if (remaining.length > 0) await openNote(remaining.at(-1)!, null, {}, true);
+        if (remaining.length > 0) {
+          const nextPath = remaining.at(-1)!;
+          if (onNavigateRequest !== undefined) onNavigateRequest(nextPath); else await openNote(nextPath, null, {}, true);
+        }
         else {
           setSelectedPath(null); clearLoadedNote(); commitContent(''); setMetadata(null); setSaveState('saved');
           contextPathRef.current = null; mentionsPathRef.current = null;
           metadataRevisionRef.current = -1; backlinksRevisionRef.current = -1; mentionsRevisionRef.current = -1;
           setBacklinks([]); setMentions([]); setHistory([]);
           publishContext(sourceSnapshot, null);
+          onNavigateRequest?.(null);
         }
       }
     } catch (cause) { if (ownsVaultContext(context)) setError(errorText(cause)); }
@@ -1596,12 +1559,13 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
       });
       setRestorePath(null);
       if (!await reloadSnapshot(context) || !ownsVaultContext(context)) return;
-      if (/\.md$/i.test(path)) await openNote(path, null, {}, true);
+      if (/\.md$/i.test(path)) { if (onNavigateRequest !== undefined) onNavigateRequest(path); else await openNote(path, null, {}, true); }
     } catch (cause) { if (ownsVaultContext(context)) setError(errorText(cause)); }
     finally { releaseTransition(); }
   }
 
   async function renameCurrent(): Promise<void> {
+    if (note !== null && isCanonicalSemanticPath(note.path)) { setError('主题笔记路径由知识内容维护，不能通过文件改名更改身份。'); return; }
     const owner = noteOwnerRef.current;
     if (note === null || noteRef.current !== note || owner === null || owner.path !== note.path || !ownsNoteContext(owner, note.path, owner.id) || renamePath.trim() === '') return;
     const context: VaultContextIdentity = { rootPath: owner.rootPath, epoch: owner.epoch };
@@ -1619,12 +1583,13 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
       rememberDeletedPaths([path]);
       setRenamePath(''); setTabs((currentTabs) => currentTabs.map((tab) => tab === path ? next.path : tab));
       if (!await reloadSnapshot(context) || !ownsVaultContext(context)) return;
-      await openNote(next.path);
+      if (onNavigateRequest !== undefined) onNavigateRequest(next.path); else await openNote(next.path);
     } catch (cause) { if (ownsNoteContext(context, path, owner.id)) setError(errorText(cause)); }
     finally { releaseTransition(); }
   }
 
   async function deleteCurrent(): Promise<void> {
+    if (note !== null && isCanonicalSemanticPath(note.path)) { setError('主题笔记路径由知识内容维护，不能通过文件删除。'); return; }
     if (note === null || noteRef.current !== note || noteOwnerRef.current?.rootPath !== snapshot?.rootPath) return;
     const entry = snapshot?.files.find((file) => file.path === note.path) ?? { path: note.path, name: basename(note.path), kind: 'file' as const, extension: 'md' };
     await deleteTreeEntry(entry);
@@ -1650,6 +1615,7 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
       const resolved = await api.resolveVaultLink(linkpath, sourcePath ?? selectedPath ?? '', kind);
       if (!ownsVaultContext(context)) return;
       if (resolved.path === null) { setError(`找不到链接目标：${linkpath}`); return; }
+      if (onNavigateRequest !== undefined) { onNavigateRequest(resolved.path, subpath || null); return; }
       await openNote(resolved.path, subpath || null);
     } catch (cause) { if (ownsVaultContext(context)) setError(errorText(cause)); }
   }
@@ -1722,6 +1688,10 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
   }
 
   async function updateProperty(key: string, value: unknown): Promise<void> {
+    if (isCanonicalSemanticPath(noteRef.current?.path ?? '') && graphNoteSystemProperties.has(key)) {
+      setError('主题笔记身份属性由知识库维护，不能手动编辑。');
+      return;
+    }
     try { commitContent(setFrontmatterProperty(contentRef.current, key, value)); }
     catch (cause) { setError(errorText(cause)); }
   }
@@ -1853,26 +1823,16 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
     } finally { releaseTransition(); }
   }
 
-  async function openVaultEntry(entry: VaultEntry): Promise<void> {
-    const context = captureVaultContext();
-    if (context === null || snapshot?.rootPath !== context.rootPath) return;
-    if (entry.kind === 'folder') return;
-    if (entry.extension?.toLocaleLowerCase() === 'md') { await openNote(entry.path); return; }
-    try {
-      const asset = await api.getVaultAsset(entry.path);
-      if (ownsVaultContext(context)) setAssetPreview(asset);
-    } catch (cause) { if (ownsVaultContext(context)) setError(errorText(cause)); }
-  }
 
   const commandRegistry = useMemo(() => [
     { id: 'new-note', label: '新建笔记', shortcut: '⌘N', shortcutKey: 'n', shift: false, run: () => { setCommandOpen(false); setNewNotePath(''); setNewNoteOpen(true); } },
     { id: 'open-switcher', label: '快速切换笔记与命令', shortcut: '⌘P / ⌘O', shortcutKey: 'p', shift: false, run: () => { setCommandOpen(true); setSwitcherQuery(''); } },
-    { id: 'open-properties', label: '打开属性面板', shortcut: '', shortcutKey: '', shift: false, run: () => { setPanel('properties'); } },
+    { id: 'open-properties', label: '打开属性面板', shortcut: '', shortcutKey: '', shift: false, run: () => { onRequestToolChange?.('properties'); } },
     { id: 'reader', label: '切换到阅读视图', shortcut: '⌘⇧R', shortcutKey: 'r', shift: true, run: () => { setMode('read'); } },
     { id: 'live-preview', label: '切换到实时预览', shortcut: '⌘⇧M', shortcutKey: 'm', shift: true, run: () => { setMode('live'); } },
     { id: 'source', label: '切换到源码视图', shortcut: '⌘⇧U', shortcutKey: 'u', shift: true, run: () => { setMode('source'); } },
-    { id: 'focus-search', label: '聚焦 Vault 搜索', shortcut: '⌘K', shortcutKey: 'k', shift: false, run: () => { searchInputRef.current?.focus(); } },
-  ], []);
+    { id: 'focus-search', label: '打开搜索', shortcut: '⌘K', shortcutKey: 'k', shift: false, run: () => { setCommandOpen(false); onSearchRequest?.(''); } },
+  ], [onRequestToolChange, onSearchRequest]);
 
   const runCommand = useCallback((id: string): void => {
     const command = commandRegistry.find((item) => item.id === id);
@@ -1951,68 +1911,58 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
     }
   }, [commitContent, note]);
 
-  const retainedRelationsGraph = hasRelationsGraph ? <div className="vault-relations-graph" aria-label="笔记关系图谱" hidden={panel !== 'graph'} inert={panel !== 'graph'}>
-    {hasSemanticRelationsGraph ? relationsGraph : null}
-    <VaultRelationsGraph
-      api={api}
-      rootPath={snapshot?.rootPath ?? null}
-      selectedPath={selectedPath}
-      revision={snapshot?.revision ?? 0}
-      active={active && panel === 'graph' && needsVaultRelationsGraph}
-      onOpen={(path, intent) => { void openNote(path, null, intent); }}
-    />
-  </div> : null;
+  const emptyToolPanel = <p className="vault-tool-empty">选择一篇笔记以查看相关信息。</p>;
+  const rightToolPanels: RightToolPanels = {
+    outline: note === null ? emptyToolPanel : <div className="vault-outline-list">
+      {headings.map((heading, index) => <button key={`${heading.heading}:${index}`} type="button" className={outlineCursor >= heading.position.start.offset && outlineCursor < (headings[index + 1]?.position.start.offset ?? Number.MAX_SAFE_INTEGER) ? 'is-active' : ''} style={{ '--level': heading.level } as React.CSSProperties} onClick={() => { setMode('read'); setJumpTo({ subpath: heading.heading, sourceOffset: heading.position.start.offset }); }}>{heading.heading}</button>)}
+      {Object.values(metadata?.blocks ?? {}).map((block) => <div className="vault-block-row" key={block.id}><button type="button" onClick={() => { setMode('read'); setJumpTo({ subpath: `^${block.id}`, sourceOffset: block.position.start.offset }); }}>¶ ^{block.id}</button><button type="button" aria-label={`重命名块 ID ${block.id}`} onClick={() => void renameBlock(block.id)}>⋯</button></div>)}
+      {headings.length === 0 && Object.keys(metadata?.blocks ?? {}).length === 0 ? <p>正文中还没有标题或块 ID。</p> : null}
+    </div>,
+    backlinks: note === null ? emptyToolPanel : <div className="vault-link-list">
+      {backlinks.map((item) => <button type="button" key={item.sourcePath} onClick={() => onNavigateRequest?.(item.sourcePath)}><strong>{titleForPath(item.sourcePath)}</strong><small>{item.count} 处链接</small></button>)}
+      {mentions.map((item) => <div className="vault-mention-row" key={`mention:${item.sourcePath}`}><button type="button" onClick={() => onNavigateRequest?.(item.sourcePath)}><strong>{titleForPath(item.sourcePath)}</strong><small>{item.positions.length} 处提及</small></button>{item.positions.slice(0, 3).map((position, index) => <button className="vault-convert-mention" type="button" key={index} onClick={() => void convertMention(item.sourcePath, position)}>转为链接</button>)}</div>)}
+      {backlinks.length === 0 && mentions.length === 0 ? <p>暂无反向链接或未链接提及</p> : null}
+    </div>,
+    outgoing: note === null ? emptyToolPanel : <div className="vault-link-list">
+      {(metadata?.links ?? []).filter((link) => link.kind !== 'frontmatter').map((link, index) => <button type="button" key={`${link.kind}:${link.position.start.offset}:${index}`} onClick={() => void openLink(link.link, note.path, link.kind as VaultLinkKind)}><strong>{link.displayText ?? link.link}</strong><small>{link.kind} · {link.link}</small></button>)}
+      {(metadata?.links?.filter((link) => link.kind !== 'frontmatter').length ?? 0) === 0 ? <p>正文中还没有出链。</p> : null}
+    </div>,
+    tags: note === null ? emptyToolPanel : <div className="vault-tag-list">
+      {tags.map((tag) => <button className="vault-tag-chip" key={tag} type="button" onClick={() => onSearchRequest?.(`tag:${tag}`)}>#{tag}<small>{vaultTagCounts.get(tag) ?? tagCounts.get(tag)}</small></button>)}
+      {tags.length === 0 ? <p>尚无标签</p> : null}
+    </div>,
+    properties: note === null ? emptyToolPanel : <>
+      <PropertyPanel key={editorOwner?.id ?? note.path} hiddenKeys={isCanonicalSemanticPath(note.path) ? [...graphNoteSystemProperties] : []} onUpdateSafetyChange={reportPropertyUpdateSafety} content={content} metadata={metadata} propertyTypes={vaultSettings.propertyTypes ?? {}} disabled={!settingsReady || settingsBusy} onTypeChange={(key, type, current) => void updatePropertyType(key, type, current)} onUpdate={(key, value) => void updateProperty(key, value)} />
+      <HistoryPanel api={api} path={note.path} current={content} versions={history} onRestore={(id) => void restoreVersion(id)} />
+      <div className="vault-trust-settings"><strong>安全与信任</strong><label><input type="checkbox" checked={trust.html} onChange={(event) => setTrustValue({ ...trust, html: event.target.checked })} />允许渲染已清理的 HTML</label><small>脚本和事件属性始终被移除；设置仅作用于当前笔记库。</small><label><input type="checkbox" checked={trust.mermaid} onChange={(event) => setTrustValue({ ...trust, mermaid: event.target.checked })} />信任 Mermaid 图表</label><strong>新建链接格式</strong><label className="vault-setting-row"><select aria-label="新建链接格式" value={vaultSettings.newLinkFormat} disabled={!settingsReady || settingsBusy || snapshot === null} onChange={(event) => void updateLinkFormat(event.target.value as VaultSettings['newLinkFormat'])}><option value="shortest">最短路径</option><option value="relative">相对路径</option><option value="absolute">笔记库绝对路径</option></select></label>{settingsBusy ? <small role="status">正在同步笔记库设置…</small> : null}{settingsError !== null ? <small className="vault-setting-error" role="alert">笔记库设置未保存：{settingsError}</small> : null}</div>
+    </>,
+  };
+  const interpretationPanel = note === null ? emptyToolPanel : <NoteInterpretationPanel key={editorOwner?.id ?? note.path} api={api} path={note.path} content={content} onUpdateSafetyChange={handleInterpretationUpdateSafety} onReturnToSource={() => { returnToTextRef.current(); setMode('source'); requestAnimationFrame(() => { const column = noteContentColumnRef.current; const source = column?.querySelector<HTMLElement>('.cm-content[contenteditable="true"]'); source?.focus({ preventScroll: true }); if (source === null || document.activeElement !== source) column?.focus({ preventScroll: true }); }); }} />;
+  const canonicalIdentityForEditor = note === null ? undefined : semanticIdentityByPathRef.current.get(note.path);
+  const rightPanelSignature = JSON.stringify([note?.path, content, metadata?.headings, metadata?.links, metadata?.blocks, backlinks, mentions, history, tags, vaultSettings, settingsReady, settingsBusy, settingsError, trust, saveState]);
+  useEffect(() => onRightPanelContentChange?.({ toolPanels: rightToolPanels, interpretationPanel }, rightPanelSignature));
 
   return <div className={`vault-notes${active ? '' : ' vault-notes-hidden'}`} role="region" aria-label="笔记工作区">
-    <aside className="vault-file-sidebar" aria-label="当前范围笔记列表">
-      <div className="vault-sidebar-top">
-        <div className="vault-root-label" title={snapshot?.rootPath ?? ''}>本机 Markdown 笔记</div>
-      </div>
-      <label className="vault-search"><span aria-hidden="true">⌕</span><input ref={searchInputRef} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索笔记与来源…" aria-label="搜索 Markdown 笔记" /><kbd>⌘K</kbd></label>
-      {searchQuery.trim() !== '' ? <div className="vault-search-results" aria-label="搜索结果">
-        {visibleSearchResults.map((result) => <button type="button" key={result.path} onClick={() => { void openNote(result.path); setSearchQuery(''); }}><strong><FuzzyText value={titleForPath(result.path)} query={searchQuery} /></strong><small><FuzzyText value={result.path} ranges={result.matches.filter((match) => match.field === 'path')} /></small><span><FuzzyText value={result.snippet} ranges={result.snippetMatches} /></span></button>)}
-        {search !== null && visibleSearchResults.length === 0 ? <p>没有匹配笔记</p> : null}
-      </div> : <>
-        <div className="vault-tree-heading"><span>{scopeTitle ?? (libraryView === 'archive' ? '已归档' : libraryView === 'organize' ? '待整理' : '全部笔记')}</span><div><button type="button" onClick={() => { setNewFolderPath(selectedPath ? parentPath(selectedPath) : ''); setNewFolderOpen(true); }}>▣ 文件夹</button><button type="button" onClick={() => { setNewNotePath(selectedPath ? `${parentPath(selectedPath) ? `${parentPath(selectedPath)}/` : ''}` : ''); setNewNoteOpen(true); }}>＋ 笔记</button></div></div>
-        <nav className="vault-file-tree" aria-label="Markdown 文档列表">
-        {visibleEntries.map((entry) => <div className="vault-file-row-container" key={entry.path} style={{ '--depth': entry.depth } as React.CSSProperties}>
-          <button type="button" className={`vault-file-row ${entry.path === selectedPath ? 'is-active' : ''} ${entry.kind === 'folder' ? 'is-folder' : ''}`} title={entry.path} aria-expanded={entry.kind === 'folder' ? !collapsedFolders.has(entry.path) : undefined} onClick={() => entry.kind === 'file' ? void openVaultEntry(entry) : setCollapsedFolders((current) => { const next = new Set(current); if (next.has(entry.path)) next.delete(entry.path); else next.add(entry.path); return next; })}>
-            <span aria-hidden="true">{entry.kind === 'folder' ? collapsedFolders.has(entry.path) ? '▸' : '⌄' : entry.extension?.toLocaleLowerCase() === 'md' ? '✎' : '◦'}</span><span>{entry.kind === 'folder' ? entry.name : displayTitlesByPath.get(entry.path) ?? entry.name}</span>
-          </button>
-          <details className="vault-file-row-menu"><summary aria-label={`${entry.path} 文件操作`} title="文件操作">⋯</summary><div>
-            <button type="button" onClick={() => { setTreeRenameEntry(entry); setTreeRenamePath(entry.path); }}>重命名 / 移动</button>
-            <button type="button" className="is-danger" onClick={() => void deleteTreeEntry(entry)}>删除</button>
-          </div></details>
-        </div>)}
-          {visibleEntries.length === 0 ? <p className="vault-empty-tree">当前范围暂无文档。</p> : null}
-        </nav>
-      </>}
-      {diagnostics !== null && (diagnostics.indexing || diagnostics.failedFiles.length > 0) ? <details className="vault-index-status">
-        <summary role="status">{diagnostics.failedFiles.length > 0 ? `索引有 ${diagnostics.failedFiles.length} 项错误` : `正在索引 · 队列 ${diagnostics.queued}`}</summary>
-        {diagnostics.failedFiles.map((failure) => <p key={failure.path}><strong>{failure.path}</strong><span>{failure.error}</span></p>)}
-      </details> : null}
-      <div className="vault-sidebar-footer"><button type="button" onClick={() => { setCommandOpen(true); setSwitcherQuery(''); }}>⌘ 命令面板 <kbd>⌘P</kbd></button><span>{snapshot?.files.filter((entry) => entry.kind === 'file' && entry.extension?.toLocaleLowerCase() === 'md' && !duplicateSourcePaths.has(entry.path)).length ?? 0} 篇笔记</span>{deletedPaths.length > 0 ? <button type="button" onClick={() => setShowDeletedHistory(true)} aria-label={`恢复已删除项目，${deletedPaths.length} 项`}>恢复 · {deletedPaths.length}</button> : null}</div>
-    </aside>
-
-    <main className="vault-note-main">
-      {note === null ? <div className={`vault-empty-layout${hasRelationsGraph ? ' has-relations-graph' : ''}`}><div className="vault-empty-note">
+    <main className="vault-note-main" data-note-path={note?.path} data-note-identity={note === null ? undefined : canonicalIdentityForEditor !== undefined ? `${canonicalIdentityForEditor.topicId}:${canonicalIdentityForEditor.chapterId ?? 'overview'}` : isCanonicalSemanticPath(note.path) ? `${String(note.metadata?.frontmatter?.topicId ?? '')}:${String(note.metadata?.frontmatter?.chapterId ?? 'overview')}` : `file:${note.path}`}>
+      {displayMode === 'cards' ? <><div className="vault-card-actions"><button type="button" className="button-soft" onClick={() => { setNewNotePath(''); setNewNoteOpen(true); }}>＋ 新建 Markdown 笔记</button>{deletedPaths.length > 0 ? <button type="button" className="button-soft" onClick={() => setShowDeletedHistory(true)} aria-label={`恢复已删除项目，${deletedPaths.length} 项`}>恢复已删除项目 · {deletedPaths.length}</button> : null}</div>{contentView ?? <div className="vault-empty-note"><h1>{scopeTitle ?? '全部资料'}</h1><p>当前范围没有可显示的资料。</p></div>}</> : note === null ? <div className="vault-empty-layout"><div className="vault-empty-note">
         <div className="vault-empty-icon">知</div><h1>{snapshot === null ? '正在打开本机笔记' : scopeTitle ?? '选择一篇 Markdown 笔记'}</h1>
-        <p>{snapshot === null ? '正在读取资料库中的 Markdown 文件。' : '从当前范围的文档列表打开笔记，或创建新的 Markdown 文件。'}</p>
+        <p>{snapshot === null ? '正在读取资料库中的 Markdown 文件。' : '从左侧学科导航或全部资料卡片选择一篇笔记。'}</p>
         <div><button type="button" className="button-primary" onClick={() => { setNewNotePath(''); setNewNoteOpen(true); }}>新建笔记</button></div>
         {error !== null ? <p className="vault-error" role="alert">{error}</p> : null}
-      </div>{hasRelationsGraph ? <aside className="vault-organize-panel" aria-label="笔记组织工具"><NoteSidebarTabs panel={panel} onSelect={setPanel} hasGraph />{retainedRelationsGraph}{panel !== 'graph' ? <p>选择一篇笔记以查看属性或解读正文。</p> : null}</aside> : null}</div> : <>
+      </div></div> : <>
         <header className="vault-note-header">
           <div className="vault-note-breadcrumb"><span>本机笔记</span><span>/</span><strong title={note.path}>{displayTitlesByPath.get(note.path) ?? titleForPath(note.path, note.metadata?.frontmatter)}</strong></div>
           <div className="vault-note-actions"><span className={`vault-save-indicator save-${saveState}`} role="status">{saveState === 'saving' ? '保存中…' : saveState === 'saved' ? '已保存' : saveState === 'dirty' ? '未保存' : saveState === 'conflict' ? '外部冲突' : '保存失败'}</span>
-            <button type="button" className="vault-icon-button" title="重命名" onClick={() => setRenamePath(note.path)}>✎</button>
-            <button type="button" className="vault-icon-button" title="删除" onClick={() => void deleteCurrent()}>⌫</button>
+            <button type="button" className="vault-icon-button" title={isCanonicalSemanticPath(note.path) ? '主题笔记路径由知识内容维护' : '重命名'} disabled={isCanonicalSemanticPath(note.path)} onClick={() => setRenamePath(note.path)}>✎</button>
+            <button type="button" className="vault-icon-button" title={isCanonicalSemanticPath(note.path) ? '主题笔记路径由知识内容维护' : '删除'} disabled={isCanonicalSemanticPath(note.path)} onClick={() => void deleteCurrent()}>⌫</button>
+            {deletedPaths.length > 0 ? <button type="button" className="vault-icon-button" title="恢复已删除项目" aria-label={`恢复已删除项目，${deletedPaths.length} 项`} onClick={() => setShowDeletedHistory(true)}>↶</button> : null}
             <button type="button" className="vault-icon-button" title="刷新文件" onClick={() => {
               if (hasUnsavedContent(note.path) && !window.confirm('将从磁盘重新载入；本机恢复草稿会保留。继续？')) return;
               void openNote(note.path, null, {}, true);
             }}>↻</button>
           </div>
         </header>
-        {tabs.length > 0 ? <nav className="vault-note-tabs" aria-label="打开的笔记">{tabs.map((path) => { const title = displayTitlesByPath.get(path) ?? titleForPath(path); return <div className={path === selectedPath ? 'is-active' : ''} key={path}><button type="button" onClick={() => void openNote(path)} title={path}>{title}</button><button type="button" aria-label={`关闭 ${title}`} onClick={() => void closeTab(path)}>×</button></div>; })}{splitNote !== null ? <span className="vault-split-indicator">分屏：{titleForPath(splitNote.path, splitNote.metadata?.frontmatter)}<button type="button" onClick={() => setSplitNote(null)} aria-label="关闭分屏">×</button></span> : null}</nav> : null}
+        {tabs.length > 0 ? <nav className="vault-note-tabs" aria-label="打开的笔记">{tabs.map((path) => { const title = displayTitlesByPath.get(path) ?? titleForPath(path); return <div className={path === selectedPath ? 'is-active' : ''} key={path}><button type="button" onClick={() => onNavigateRequest !== undefined ? onNavigateRequest(path) : void openNote(path)} title={path}>{title}</button><button type="button" aria-label={`关闭 ${title}`} onClick={() => void closeTab(path)}>×</button></div>; })}{splitNote !== null ? <span className="vault-split-indicator">分屏：{titleForPath(splitNote.path, splitNote.metadata?.frontmatter)}<button type="button" onClick={() => setSplitNote(null)} aria-label="关闭分屏">×</button></span> : null}</nav> : null}
         {error !== null ? <div className="vault-inline-error" role="alert"><span>{error}</span>{saveState === 'conflict' ? <button type="button" onClick={() => { if (window.confirm('保留在本机的草稿仍可恢复。重新载入磁盘版本？')) void openNote(note.path, null, {}, true); }}>重新载入外部版本</button> : null}<button type="button" onClick={() => setError(null)}>关闭</button></div> : null}
         {draftAvailable ? <div className="vault-draft-recovery" role="status"><span>发现本机恢复草稿</span><button type="button" onClick={restoreLocalDraft}>恢复</button><button type="button" onClick={() => { const owner = noteOwnerRef.current; if (owner !== null && owner.path === note.path && draftWritesRef.current?.clear(owner.rootPath, note.path) !== false) setDraftAvailable(false); else setError('本机恢复草稿清除失败；恢复入口仍保留。'); }}>丢弃</button></div> : null}
         {renamePath !== '' ? <form className="vault-inline-form" onSubmit={(event) => { event.preventDefault(); void renameCurrent(); }}><label>新路径<input autoFocus value={renamePath} onChange={(event) => setRenamePath(event.target.value)} /></label><button className="button-primary" type="submit">重命名</button><button type="button" onClick={() => setRenamePath('')}>取消</button></form> : null}
@@ -2087,7 +2037,7 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
               setEditorJumpRequest({ path: note.path, requestId: ++editorJumpRequestId.current, sourceOffset });
             }
           }}
-        >{({ toggleButton, viewport, returnToText }) => <>
+        >{({ toggleButton, viewport, returnToText }) => { returnToTextRef.current = returnToText; return <>
         <div className="vault-editor-toolbar">
           <div className="vault-editor-toolbar-main">
           <div className="vault-mode-tabs" role="tablist" aria-label="笔记模式">
@@ -2096,51 +2046,35 @@ export function WorkbenchNotes({ api, active, relationsGraph = null, requestedOp
           {toggleButton}
           </div>
           {transitioning ? <span className="vault-transition-status" role="status">正在保存并切换…</span> : null}
-          <button type="button" className="vault-panel-toggle" onClick={() => setPanel((current) => current === 'outline' ? 'properties' : 'outline')}>组织面板</button>
         </div>
-        <div className={`vault-editor-layout panel-${panel}${hasRelationsGraph && panel === 'graph' ? ' has-relations-graph' : ''}${splitNote !== null ? ' has-split' : ''}`}>
+        <div className={`vault-editor-layout${splitNote !== null ? ' has-split' : ''}`}>
           <section ref={noteContentColumnRef} className="vault-editor-column" aria-label="笔记内容" tabIndex={-1}>{viewport}</section>
           {splitNote !== null ? <section className="vault-split-column" aria-label={`分屏阅读 ${titleForPath(splitNote.path, splitNote.metadata?.frontmatter)}`}><header><strong title={splitNote.path}>{titleForPath(splitNote.path, splitNote.metadata?.frontmatter)}</strong><button type="button" onClick={() => setSplitNote(null)}>关闭</button></header><NoteReader content={splitNote.content} path={splitNote.path} api={api} trustedHtml={trust.html} trustMermaid={trust.mermaid} onOpenLink={trustedLink} onTrustMermaid={() => undefined} /></section> : null}
-          <aside className="vault-organize-panel" aria-label="笔记组织工具">
-            <NoteSidebarTabs panel={panel} onSelect={setPanel} hasGraph={hasRelationsGraph} />
-            {retainedRelationsGraph}
-            {panel === 'outline' ? <div className="vault-outline-list">
-              {headings.map((heading, index) => <button key={`${heading.heading}:${index}`} type="button" className={outlineCursor >= heading.position.start.offset && outlineCursor < (headings[index + 1]?.position.start.offset ?? Number.MAX_SAFE_INTEGER) ? 'is-active' : ''} style={{ '--level': heading.level } as React.CSSProperties} onClick={() => { setMode('read'); setJumpTo({ subpath: heading.heading, sourceOffset: heading.position.start.offset }); }}>{heading.heading}</button>)}
-              {Object.values(metadata?.blocks ?? {}).map((block) => <div className="vault-block-row" key={block.id}><button type="button" onClick={() => { setMode('read'); setJumpTo({ subpath: `^${block.id}`, sourceOffset: block.position.start.offset }); }}>¶ ^{block.id}</button><button type="button" aria-label={`重命名块 ID ${block.id}`} onClick={() => void renameBlock(block.id)}>⋯</button></div>)}
-            </div> : null}
-            {panel === 'tags' ? <div className="vault-tag-list">{tags.map((tag) => <button key={tag} type="button" onClick={() => { setSearchQuery(`tag:${tag}`); }}><span>#</span>{tag}<small>{vaultTagCounts.get(tag) ?? tagCounts.get(tag)}</small></button>)}{tags.length === 0 ? <p>尚无标签</p> : null}</div> : null}
-            {panel === 'properties' ? <PropertyPanel key={editorOwner?.id ?? note.path} onUpdateSafetyChange={reportPropertyUpdateSafety} content={content} metadata={metadata} propertyTypes={vaultSettings.propertyTypes ?? {}} disabled={!settingsReady || settingsBusy} onTypeChange={(key, type, current) => void updatePropertyType(key, type, current)} onUpdate={(key, value) => void updateProperty(key, value)} /> : null}
-            {panel === 'backlinks' ? <div className="vault-link-list">{backlinks.map((item) => <button type="button" key={item.sourcePath} onClick={() => void openNote(item.sourcePath)}><strong>{titleForPath(item.sourcePath)}</strong><small>{item.count} 处链接</small></button>)}{backlinks.length === 0 ? <p>暂无反向链接</p> : null}</div> : null}
-            {panel === 'mentions' ? <div className="vault-link-list">{mentions.map((item) => <div className="vault-mention-row" key={item.sourcePath}><button type="button" onClick={() => void openNote(item.sourcePath)}><strong>{titleForPath(item.sourcePath)}</strong><small>{item.positions.length} 处提及</small></button>{item.positions.slice(0, 3).map((position, index) => <button className="vault-convert-mention" type="button" key={index} onClick={() => void convertMention(item.sourcePath, position)}>转为链接</button>)}</div>)}{mentions.length === 0 ? <p>暂无未链接提及</p> : null}</div> : null}
-            {panel === 'history' ? <HistoryPanel api={api} path={note.path} current={content} versions={history} onRestore={(id) => void restoreVersion(id)} /> : null}
-            {panel === 'interpretation' ? <NoteInterpretationPanel key={editorOwner?.id ?? note.path} api={api} path={note.path} content={content} onUpdateSafetyChange={handleInterpretationUpdateSafety} onReturnToSource={() => { returnToText(); requestAnimationFrame(returnFocusToSource); }} /> : null}
-            <div className="vault-trust-settings"><strong>安全与信任</strong><label><input type="checkbox" checked={trust.html} onChange={(event) => setTrustValue({ ...trust, html: event.target.checked })} />允许渲染已清理的 HTML</label><small>脚本和事件属性始终被移除；设置仅作用于当前笔记库。</small><label><input type="checkbox" checked={trust.mermaid} onChange={(event) => setTrustValue({ ...trust, mermaid: event.target.checked })} />信任 Mermaid 图表</label><strong>新建链接格式</strong><label className="vault-setting-row"><select aria-label="新建链接格式" value={vaultSettings.newLinkFormat} disabled={!settingsReady || settingsBusy || snapshot === null} onChange={(event) => void updateLinkFormat(event.target.value as VaultSettings['newLinkFormat'])}><option value="shortest">最短路径</option><option value="relative">相对路径</option><option value="absolute">笔记库绝对路径</option></select></label>{settingsBusy ? <small role="status">正在同步笔记库设置…</small> : null}{settingsError !== null ? <small className="vault-setting-error" role="alert">笔记库设置未保存：{settingsError}</small> : null}</div>
-          </aside>
         </div>
-        </>}
+        </>; }}
         </NoteBodyPresentation>
         {previewTarget !== null ? <div className="vault-hover-preview" style={{ left: Math.max(16, Math.min(window.innerWidth - 420, previewTarget.anchor.left)), top: Math.min(window.innerHeight - 300, previewTarget.anchor.bottom + 8) }} onMouseEnter={() => { if (previewTimer.current !== null) clearTimeout(previewTimer.current); }} onMouseLeave={schedulePreviewClose} role="dialog" aria-label={`预览 ${previewTarget.title}`}><strong>{previewTarget.title}</strong><NoteReader content={previewTarget.content} path={previewTarget.path} api={api} trustedHtml={trust.html} trustMermaid={trust.mermaid} onOpenLink={trustedLink} onTrustMermaid={() => undefined} /></div> : null}
       </>}
     </main>
 
     {newNoteOpen ? <div className="vault-modal-backdrop" role="presentation"><form className="vault-modal" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><h2>新建 Markdown 笔记</h2><label>笔记库内路径<input autoFocus value={newNotePath} onChange={(event) => setNewNotePath(event.target.value)} placeholder="Inbox/新笔记.md" /></label><p>正文会保存为本机 Markdown 笔记。</p><div><button type="button" className="button-soft" onClick={() => setNewNoteOpen(false)}>取消</button><button type="submit" className="button-primary">创建</button></div></form></div> : null}
-    {newFolderOpen ? <div className="vault-modal-backdrop" role="presentation"><form className="vault-modal" onSubmit={(event) => { event.preventDefault(); void createFolder(); }}><h2>新建文件夹</h2><label>笔记库内路径<input autoFocus value={newFolderPath} onChange={(event) => setNewFolderPath(event.target.value)} placeholder="Inbox/项目" /></label><div><button type="button" className="button-soft" onClick={() => setNewFolderOpen(false)}>取消</button><button type="submit" className="button-primary">创建文件夹</button></div></form></div> : null}
-    {treeRenameEntry !== null ? <div className="vault-modal-backdrop" role="presentation"><form className="vault-modal" onSubmit={(event) => { event.preventDefault(); void renameTreeEntry(); }}><h2>重命名或移动</h2><p>{treeRenameEntry.path}</p><label>笔记库内新路径<input autoFocus value={treeRenamePath} onChange={(event) => setTreeRenamePath(event.target.value)} /></label><div><button type="button" className="button-soft" onClick={() => setTreeRenameEntry(null)}>取消</button><button type="submit" className="button-primary">保存路径</button></div></form></div> : null}
     {showDeletedHistory ? <div className="vault-modal-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) setShowDeletedHistory(false); }}><div className="vault-modal vault-deleted-paths" role="dialog" aria-modal="true" aria-label="恢复已删除项目"><h2>恢复已删除项目</h2><p>选择路径查看并恢复保留的历史版本。</p>{deletedPaths.map((path) => <button type="button" key={path} onClick={() => { setShowDeletedHistory(false); setRestorePath(path); }}>{path}</button>)}<div><button type="button" className="button-soft" onClick={() => setShowDeletedHistory(false)}>关闭</button></div></div></div> : null}
     {restorePath !== null ? <DeletedHistoryDialog api={api} path={restorePath} onClose={() => setRestorePath(null)} onRestore={(versionId) => void restoreDeletedPath(restorePath, versionId)} /> : null}
     {assetPreview !== null ? <div className="vault-modal-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) setAssetPreview(null); }}><div className="vault-asset-modal" role="dialog" aria-modal="true" aria-label={`附件 ${assetPreview.path}`}><header><strong>{assetPreview.path}</strong><button type="button" onClick={() => setAssetPreview(null)} aria-label="关闭附件预览">×</button></header>{assetPreview.mimeType.startsWith('image/') ? <img src={assetPreview.dataUrl} alt={assetPreview.path} /> : assetPreview.mimeType.startsWith('audio/') ? <audio controls src={assetPreview.dataUrl} /> : assetPreview.mimeType.startsWith('video/') ? <video controls src={assetPreview.dataUrl} /> : <a href={assetPreview.dataUrl} download={assetPreview.path.split('/').at(-1)}>下载附件</a>}</div></div> : null}
     {commandOpen ? <div className="vault-modal-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) setCommandOpen(false); }}><div className="vault-command-modal" role="dialog" aria-modal="true" aria-label="命令面板"><label><span>⌕</span><input autoFocus value={switcherQuery} onChange={(event) => setSwitcherQuery(event.target.value)} placeholder="输入 > 筛选命令，或搜索笔记…" /></label><div className="vault-command-results">
       {commandRows.map((command) => <button type="button" key={command.id} onClick={() => runCommand(command.id)}><strong><FuzzyText value={command.label} query={commandQuery} /></strong><small>{command.shortcut || (recentCommandIds.includes(command.id) ? '最近使用' : '')}</small></button>)}
-      {visibleSwitcherResults.map((result) => { const title = titleForPath(result.path); const titleMatches = fuzzyMatchRanges(switcherQuery, title).length > 0; return <button type="button" key={result.path} onClick={() => { setCommandOpen(false); void openNote(result.path); }}><strong><FuzzyText value={titleMatches ? title : result.path} query={switcherQuery} /></strong><small>{titleMatches ? result.path : '匹配路径'}</small></button>; })}
+      {visibleSwitcherResults.map((result) => { const title = titleForPath(result.path); const titleMatches = fuzzyMatchRanges(switcherQuery, title).length > 0; return <button type="button" key={result.path} onClick={() => { setCommandOpen(false); if (onNavigateRequest !== undefined) onNavigateRequest(result.path); else void openNote(result.path); }}><strong><FuzzyText value={titleMatches ? title : result.path} query={switcherQuery} /></strong><small>{titleMatches ? result.path : '匹配路径'}</small></button>; })}
     </div></div></div> : null}
   </div>;
 }
 
-function PropertyPanel({ content, propertyTypes, disabled, onTypeChange, onUpdate, onUpdateSafetyChange }: { onUpdateSafetyChange?: (safe: boolean) => void; content: string; metadata: CachedNoteMetadata | null; propertyTypes: Record<string, PropertyType>; disabled: boolean; onTypeChange: (key: string, type: PropertyType, current: unknown) => void; onUpdate: (key: string, value: unknown) => void }): ReactElement {
+function PropertyPanel({ content, hiddenKeys = [], propertyTypes, disabled, onTypeChange, onUpdate, onUpdateSafetyChange }: { onUpdateSafetyChange?: (safe: boolean) => void; content: string; metadata: CachedNoteMetadata | null; hiddenKeys?: readonly string[]; propertyTypes: Record<string, PropertyType>; disabled: boolean; onTypeChange: (key: string, type: PropertyType, current: unknown) => void; onUpdate: (key: string, value: unknown) => void }): ReactElement {
   const frontmatter = readFrontmatter(content);
+  const visibleProperties = Object.entries(frontmatter).filter(([name]) => !hiddenKeys.includes(name));
   const [yamlDrafts, setYamlDrafts] = useState<Record<string, string>>({});
   const [key, setKey] = useState('');
   const [value, setValue] = useState('');
+  const [protectedKeyAttempt, setProtectedKeyAttempt] = useState(false);
   const yamlMatches = (raw: string, value: unknown): boolean => {
     try { return JSON.stringify(YAML.parse(raw)) === JSON.stringify(value); } catch { return false; }
   };
@@ -2166,13 +2100,14 @@ function PropertyPanel({ content, propertyTypes, disabled, onTypeChange, onUpdat
   }
 
   return <div className="vault-properties">
-    {Object.entries(frontmatter).map(([name, current]) => { const selectedType = propertyTypes[name] ?? typeFor(current); const yamlDraft = yamlDrafts[name]; let yamlValid = true; if (yamlDraft !== undefined) { try { YAML.parse(yamlDraft); } catch { yamlValid = false; } } return <label className="vault-property-row" key={name}><span>{name}<small>{selectedType}</small></span>
+    {visibleProperties.map(([name, current]) => { const selectedType = propertyTypes[name] ?? typeFor(current); const yamlDraft = yamlDrafts[name]; let yamlValid = true; if (yamlDraft !== undefined) { try { YAML.parse(yamlDraft); } catch { yamlValid = false; } } return <label className="vault-property-row" key={name}><span>{name}<small>{selectedType}</small></span>
       <select aria-label={`${name} 属性类型`} value={selectedType} disabled={disabled} onChange={(event) => { const type = event.target.value as PropertyType; if (type !== 'yaml') discardYamlDraft(name); onTypeChange(name, type, current); }}><option value="text">文本</option><option value="number">数字</option><option value="boolean">布尔</option><option value="list">列表</option><option value="yaml">YAML</option></select>
       {selectedType === 'boolean' ? <input type="checkbox" checked={Boolean(current)} onChange={(event) => onUpdate(name, event.target.checked)} /> : selectedType === 'number' ? <input type="number" value={typeof current === 'number' ? current : Number(current) || 0} onChange={(event) => onUpdate(name, Number(event.target.value))} /> : selectedType === 'list' ? <input value={Array.isArray(current) ? current.join(', ') : String(current ?? '')} onChange={(event) => onUpdate(name, event.target.value.split(',').map((part) => part.trim()).filter(Boolean))} /> : selectedType === 'yaml' ? <><textarea aria-invalid={!yamlValid} value={yamlDraft ?? YAML.stringify(current)} onChange={(event) => { const raw = event.target.value; setYamlDrafts((drafts) => ({ ...drafts, [name]: raw })); try { onUpdate(name, YAML.parse(raw)); } catch { /* Keep the in-progress YAML text until it parses. */ } }} />{!yamlValid ? <small role="status">YAML 格式尚未完整</small> : null}</> : <input value={String(current ?? '')} onChange={(event) => onUpdate(name, String(event.target.value))} />}
       <button type="button" aria-label={`删除属性 ${name}`} onClick={() => { discardYamlDraft(name); onUpdate(name, undefined); }}>×</button>
     </label>; })}
-    <form onSubmit={(event) => { event.preventDefault(); if (key.trim()) { onUpdate(key.trim(), value); setKey(''); setValue(''); } }}><input value={key} onChange={(event) => setKey(event.target.value)} placeholder="属性名" aria-label="新属性名称" /><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="值" aria-label="新属性值" /><button type="submit">＋</button></form>
-    {Object.keys(frontmatter ?? {}).length === 0 ? <p>添加属性会写入 Markdown YAML frontmatter。</p> : null}
+    <form onSubmit={(event) => { event.preventDefault(); if (!key.trim()) return; if (hiddenKeys.includes(key.trim())) { setProtectedKeyAttempt(true); return; } onUpdate(key.trim(), value); setKey(''); setValue(''); setProtectedKeyAttempt(false); }}><input value={key} onChange={(event) => { setKey(event.target.value); setProtectedKeyAttempt(false); }} placeholder="属性名" aria-label="新属性名称" /><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="值" aria-label="新属性值" /><button type="submit">＋</button></form>
+    {protectedKeyAttempt ? <p role="alert">系统属性由知识库维护，不能手动添加。</p> : null}
+    {visibleProperties.length === 0 ? <p>添加属性会写入 Markdown YAML frontmatter。</p> : null}
   </div>;
 }
 

@@ -93,6 +93,15 @@ describe('live preview tokenization', () => {
       '$yes$',
     ].join('\n');
     const tokens = parseLivePreviewTokens(source);
+    const propsRef = { current: { sourcePath: 'Topic.md', trustedHtml: false, trustMermaid: false, onOpenLink: () => undefined, isCurrent: () => true } } as any;
+    const field = createLivePreviewStateField(propsRef);
+    const state = EditorState.create({ doc: source, extensions: [notesSearchRangesField, field] });
+    const frontmatterEnd = source.indexOf('\n```md') + 1;
+    let frontmatterHidden = false;
+    state.field(field).decorations.between(0, frontmatterEnd, (from, to) => {
+      if (from === 0 && to === frontmatterEnd) frontmatterHidden = true;
+    });
+    expect(frontmatterHidden).toBe(true);
     expect(tokens.map((token) => token.kind)).toEqual(['code-block', 'math-inline']);
     expect(tokens[0]).toMatchObject({ language: 'md', block: true, text: '$not math$\n| not | a table |\n> [!tip] not a callout' });
     expect(source.slice(tokens[1]!.start, tokens[1]!.end)).toBe('$yes$');

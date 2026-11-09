@@ -86,6 +86,7 @@ export const saveGraphNoteRequestSchema = z.object({
   chapterId: z.string().min(1).max(128).nullable(),
   content: z.string().max(MAX_GRAPH_NOTE_CHARS, `正文不能超过 ${String(MAX_GRAPH_NOTE_CHARS)} 个字符`),
   expectedEtag: z.string().optional(),
+  properties: z.record(z.string(), z.unknown()).optional(),
 });
 export type SaveGraphNoteRequest = z.infer<typeof saveGraphNoteRequestSchema>;
 

@@ -5,7 +5,7 @@ import type { IntakeApi } from '../src/workbench/intake-session';
 import { IntakeWindow } from '../src/workbench/IntakeWindow';
 import type { IntakeActivation } from '../src/workbench/screenshot-entry';
 
-const pngData = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2f8AAAAASUVORK5CYII=';
+const pngData = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC';
 const pngBinary = atob(pngData);
 const pngBytes = Uint8Array.from(pngBinary, (value) => value.charCodeAt(0));
 const pngMime: CaptureAssetMime = 'image/png';
@@ -167,7 +167,7 @@ function Harness() {
   const nextRequest = useRef(1);
   const [activationError, setActivationError] = useState<{ requestId: string; message: string } | null>(null);
 
-  function activate(action: IntakeActivation['action']): void {
+  function activate(action: Exclude<IntakeActivation['action'], 'selectedText'>): void {
     const requestId = 'browser-' + nextRequest.current++;
     acceptActivation({ action, requestId });
   }
@@ -317,9 +317,14 @@ async function runReplay(): Promise<{ exitCode: number; checks: Array<{ name: st
 
     document.querySelector<HTMLButtonElement>('.harness-controls button')!.click();
     await waitFor(() => ledger.clipboardReads === 1 && document.querySelectorAll('.intake-image-row').length === 1, 'explicit clipboard import');
+    await waitFor(() => {
+      const preview = document.querySelector<HTMLImageElement>('.intake-annotation-stage img');
+      return preview !== null && preview.complete && preview.naturalWidth > 0;
+    }, 'annotation preview decodes the imported image');
     await waitFor(() => document.querySelector<HTMLButtonElement>('.intake-capture-screen')?.disabled === false, 'clipboard import completes');
     const text = document.querySelector<HTMLTextAreaElement>('#intake-original-text')?.value ?? '';
     check(checks, 'explicit panel open snapshots clipboard once and imports text/image', ledger.clipboardReads === 1 && text.includes('合成剪贴板原文'));
+    check(checks, 'imported image decodes in the annotation editor preview', document.querySelector<HTMLImageElement>('.intake-annotation-stage img')?.naturalWidth === 1);
 
     document.querySelector<HTMLButtonElement>('.intake-capture-screen')!.click();
     await waitFor(() => ledger.captures === 1 && document.querySelectorAll('.intake-image-row').length === 2, 'screenshot append');

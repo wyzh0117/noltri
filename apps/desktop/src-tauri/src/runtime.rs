@@ -1324,7 +1324,7 @@ mod managed_profile_tests {
                     } else if require_auth && !(has_token && accept_token) {
                         (401, "{}".into())
                     } else {
-                        let mut body = serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"noltri-knowledge","version":"3.0.0"}}});
+                        let mut body = serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"noltri-knowledge","version":"0.1.0"}}});
                         match reply {
                             "error" => {
                                 body = serde_json::json!({"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"synthetic"}})

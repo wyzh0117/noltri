@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { commands } from '../lib/tauri';
 import type { IntakeShortcutStatus, ShortcutBinding, ShortcutBindings } from '../lib/tauri';
+import { AxSelectionOffersPanel } from './AxSelectionOffersPanel';
 import { DEFAULT_SHORTCUT_BINDINGS, formatShortcutBinding, shortcutErrorMessage, shortcutValidation, validShortcutBindings } from './shortcut-bindings';
 import './global-shortcuts.css';
 
@@ -95,5 +96,6 @@ export function GlobalShortcutsPanel({ outsideTauri, onUpdateSafetyChange }: {
       <button type="button" className="button-soft" disabled={outsideTauri || busy || !loaded || dirty} onClick={() => void save(baseline)}>重新注册当前快捷键</button>
       <button type="button" className="text-action" disabled={outsideTauri || busy} onClick={() => void load()}>重新读取快捷键</button>
     </div>
+    <AxSelectionOffersPanel outsideTauri={outsideTauri} />
   </section>;
 }

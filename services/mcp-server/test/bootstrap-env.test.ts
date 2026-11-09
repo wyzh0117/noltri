@@ -45,7 +45,7 @@ describe('explicit Notes bootstrap environment selection', () => {
 });
 it('defaults MCP metadata and both endpoints to Notes3 while preserving explicit settings', () => {
   const defaults = loadMcpConfig({});
-  expect.soft(defaults.version).toBe('3.0.0');
+  expect.soft(defaults.version).toBe('0.1.0');
   expect.soft(defaults.port).toBe(18890);
   expect.soft(defaults.apiBaseUrl).toBe('http://127.0.0.1:18887');
   expect(loadMcpConfig({ MCP_VERSION: 'fixture-build', MCP_PORT: '19990', KNOWLEDGE_API_URL: 'http://127.0.0.1:8787' })).toMatchObject({ version: 'fixture-build', port: 19990, apiBaseUrl: 'http://127.0.0.1:8787' });

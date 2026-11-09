@@ -434,9 +434,10 @@ export async function saveGraphNote(
     }
   }
   if (deps.graphNoteStore !== undefined) {
-    const saved = await deps.graphNoteStore.saveLegacyNote(topicId, request.chapterId, request.content, request.expectedEtag);
+    const saved = await deps.graphNoteStore.saveLegacyNote(topicId, request.chapterId, request.content, request.expectedEtag, request.properties);
     return { topicId, chapterId: request.chapterId, ...saved };
   }
+  if (request.properties !== undefined) throw knowledgeError('invalid_request', '当前图谱笔记存储不支持 Markdown 属性');
   const saved = await deps.repository.saveKnowledgeNote({
     userId: actor.userId,
     topicId,

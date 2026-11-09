@@ -234,6 +234,13 @@ describe('classification', () => {
     const manualLeaf = await harness.repository.findNodeByTitle(harness.actor.userId, manualPath[1]!, manualRoot?.id);
     expect(manualRoot?.nodeType).toBe('discipline');
     expect(manualLeaf?.nodeType).toBe('topic');
+    const manualLeafGraph = await harness.core.selectGraph({
+      kind: 'topic',
+      disciplineId: manualRoot!.id,
+      anchorTopicId: manualLeaf!.id,
+    }, harness.actor);
+    expect(manualLeafGraph.scopeGraphNodeId).toBe(manualLeaf!.id);
+    expect(manualLeafGraph.nodes.map((node) => node.id)).toContain(manualLeaf!.id);
     const retried = await harness.core.reanalyzeCapture(item.id, harness.actor);
     expect(retried.items.every((entry) => entry.nodePath.join('/') === manualPath.join('/'))).toBe(true);
     expect(harness.provider.classifyInputs).toHaveLength(1);

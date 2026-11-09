@@ -14,6 +14,7 @@ final class AXSelectionReaderTests: XCTestCase {
         let result = reader.read(processID: pid)
 
         XCTAssertEqual(result?.processID, pid)
+        XCTAssertEqual(result?.focusedElementIdentity, "synthetic-focused-element")
         XCTAssertEqual(result?.text, "synthetic selection")
         XCTAssertEqual(result?.selectionRange, range)
         XCTAssertEqual(result?.bounds, bounds)
@@ -75,6 +76,8 @@ private final class FakeAXAPI: AXElementAPI {
         selectedTextCalls += 1
         return text
     }
+
+    func focusedElementIdentity(for element: String) -> String { element }
 
     func selectedRange(for element: String) -> NSRange? {
         selectedRangeCalls += 1

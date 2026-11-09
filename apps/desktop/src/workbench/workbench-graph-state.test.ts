@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { graphStateKey, readGraphState, writeGraphState } from './workbench-graph-state';
+import { graphStateKey, graphStateScopeIdentity, readGraphState, writeGraphState } from './workbench-graph-state';
 
 class MemoryStorage {
   private readonly values = new Map<string, string>();
@@ -46,5 +46,15 @@ describe('graph view state', () => {
   it('does not persist a placeholder when layout has not fit yet', () => {
     writeGraphState(scope, { camera: { x: 0, y: 0, scale: 0.5 }, cameraReady: false, positions: {}, settings: readGraphState(scope).settings });
     expect(JSON.parse(storage.getItem(graphStateKey(scope))!)).toMatchObject({ camera: null, cameraReady: false });
+  });
+
+  it('shares camera/layout identity across compact and expanded panel sizes and migrates old mode state', () => {
+    expect(graphStateScopeIdentity('subject:python', 'mini')).toBe(graphStateScopeIdentity('subject:python', 'expanded'));
+    storage.setItem(graphStateKey('subject:python\0mini'), JSON.stringify({
+      camera: { x: 14, y: -9, scale: 1.3 }, cameraReady: true, positions: { a: { x: 30, y: 40 } },
+    }));
+    expect(readGraphState('subject:python', 'expanded')).toMatchObject({
+      camera: { x: 14, y: -9, scale: 1.3 }, positions: { a: { x: 30, y: 40 } },
+    });
   });
 });

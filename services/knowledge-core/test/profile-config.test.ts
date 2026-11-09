@@ -17,7 +17,7 @@ describe('Notes product profile configuration', () => {
     expect(config.sqliteFile).toBe('/synthetic-home/.noltri-notes/data/noltri.sqlite');
     expect(config.vaultDir).toBe('/synthetic-home/.noltri-notes/data/vault');
     expect(config.grantFile).toBe('');
-    expect(config.version).toBe('3.0.0');
+    expect(config.version).toBe('0.1.0');
   });
 
   it('keeps an explicit data override and requires it to select a retired profile path', () => {
@@ -54,13 +54,13 @@ it('keeps distributed manifests and the runtime default on one Notes release ide
     'packages/shared/package.json', 'packages/storage/package.json', 'services/ai/package.json',
     'services/knowledge-core/package.json', 'services/mcp-server/package.json', 'apps/extension/src/manifest.json',
   ];
-  for (const manifest of manifests) expect(json(manifest).version, manifest).toBe('3.0.0');
+  for (const manifest of manifests) expect(json(manifest).version, manifest).toBe('0.1.0');
   const desktop = json('apps/desktop/src-tauri/tauri.conf.json');
   expect(desktop.version).toBe(loadCoreConfig({ STORAGE_DRIVER: 'memory', AI_PROVIDER: 'offline' }).version);
   expect(desktop.identifier).toBe('com.noltri.notes');
   const cargo = readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.toml'), 'utf8');
   const cargoVersion = cargo.match(/\[package\][\s\S]*?\nversion = "([^"]+)"/)?.[1];
-  expect(cargoVersion).toBe('3.0.0');
+  expect(cargoVersion).toBe('0.1.0');
   const lock = readFileSync(path.join(root, 'apps/desktop/src-tauri/Cargo.lock'), 'utf8');
   const lockVersion = lock.match(/\[\[package\]\]\nname = "noltri-companion"\nversion = "([^"]+)"/)?.[1];
   expect(lockVersion).toBe(cargoVersion);

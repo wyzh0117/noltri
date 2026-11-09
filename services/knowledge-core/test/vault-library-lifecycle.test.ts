@@ -3,8 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { silentLogger } from '@noltri/shared';
+import { saveGraphNoteRequestSchema } from '@noltri/schema';
 import { SqliteRepository } from '../../../packages/storage/src/sqlite';
 import { createKnowledgeCore } from '../src/core';
+import { parseFrontmatterValue } from '../src/notes/markdown';
 import { VaultService } from '../src/notes/vault';
 import { archiveLibraryItem, readLibraryItem } from '../src/services/library';
 import { captureOf, ScriptedProvider, testConfig } from './fakes';
@@ -53,6 +55,127 @@ async function makeFixture(label: string) {
 }
 
 describe('library Markdown lifecycle', () => {
+  it('saves custom graph-note properties without changing canonical identity or legacy YAML bytes', async () => {
+    const fixture = await makeFixture('graph-note-metadata');
+    const { vault, repository, core, actor, topic } = fixture;
+    try {
+      const mapped = await vault.legacyPath(topic.id, null);
+      const current = await vault.getFile(mapped.path);
+      const prefix = `---\n# Keep this comment and ordering on body-only saves\nid: ${topic.id}\nnoteType: topic\ntopicId: ${topic.id}\nchapterId: null\ntitle: ${topic.title}\nsummary: keep me\nremoveMe: remove me\n---\n`;
+      const seeded = await vault.writeFile(mapped.path, `${prefix}# Original body\n`, current.etag);
+
+      await core.saveGraphNote(topic.id, { chapterId: null, content: '# Body only\n', expectedEtag: seeded.etag }, actor);
+      const bodyOnly = await vault.getFile(mapped.path);
+      expect(bodyOnly.content).toBe(`${prefix}# Body only\n`);
+
+      const request = saveGraphNoteRequestSchema.parse({
+        chapterId: null,
+        content: '# Metadata update\n',
+        expectedEtag: bodyOnly.etag,
+        properties: {
+          summary: 'Updated by the user',
+          nested: { color: 'green' },
+          id: 'forged-id',
+          noteType: 'chapter',
+          topicId: 'forged-topic',
+          chapterId: 'forged-chapter',
+          title: 'Forged title',
+        },
+      });
+      await core.saveGraphNote(topic.id, request, actor);
+      const updated = await vault.getFile(mapped.path);
+      expect(parseFrontmatterValue(updated.content)).toMatchObject({
+        id: topic.id,
+        noteType: 'topic',
+        topicId: topic.id,
+        chapterId: null,
+        title: topic.title,
+        summary: 'Updated by the user',
+        nested: { color: 'green' },
+      });
+      expect(parseFrontmatterValue(updated.content)).not.toHaveProperty('removeMe');
+      expect(updated.content.slice(updated.content.indexOf('---', 3) + 3)).toContain('# Metadata update');
+
+      await core.saveGraphNote(topic.id, {
+        chapterId: null,
+        content: '# Explicit removal\n',
+        expectedEtag: updated.etag,
+        properties: { summary: 'Still here' },
+      }, actor);
+      const removed = await vault.getFile(mapped.path);
+      expect(parseFrontmatterValue(removed.content)).toMatchObject({ id: topic.id, topicId: topic.id, summary: 'Still here' });
+      expect(parseFrontmatterValue(removed.content)).not.toHaveProperty('nested');
+
+      const malformed = await vault.writeFile(mapped.path, `---\nid: ${topic.id}\ninvalid: [\n---\n# Keep this malformed file\n`, removed.etag);
+      await expect(core.saveGraphNote(topic.id, {
+        chapterId: null,
+        content: '# Must not replace malformed YAML\n',
+        expectedEtag: malformed.etag,
+        properties: { summary: 'unsafe update' },
+      }, actor)).rejects.toThrow(/Frontmatter YAML/);
+      expect((await vault.getFile(mapped.path)).content).toBe(malformed.content);
+    } finally {
+      await vault.close();
+      await repository.close();
+    }
+  });
+
+  it('keeps one shared chapter in separate Python, C++, and C Markdown identities', async () => {
+    const fixture = await makeFixture('shared-chapter-languages');
+    const { vault, repository, core, actor, userId, discipline, topic: python } = fixture;
+    const subdisciplineId = python.parentId;
+    if (subdisciplineId === null) throw new Error('fixture topic must belong to a subdiscipline');
+    const cpp = await repository.createNode({ userId, title: 'C++', nodeType: 'topic', parentId: subdisciplineId });
+    const c = await repository.createNode({ userId, title: 'C', nodeType: 'topic', parentId: subdisciplineId });
+    const chapter = await repository.createNode({ userId, title: '变量', nodeType: 'chapter', parentId: python.id });
+    const contexts = [
+      { language: 'Python', topicId: python.id, body: '# 变量\n\nPython sentinel: value: int = 1\n' },
+      { language: 'C++', topicId: cpp.id, body: '# 变量\n\nC++ sentinel: int value = 2;\n' },
+      { language: 'C', topicId: c.id, body: '# 变量\n\nC sentinel: int value = 3;\n' },
+    ];
+
+    try {
+      await core.connectChapter(chapter.id, cpp.id, actor);
+      await core.connectChapter(chapter.id, c.id, actor);
+      for (const context of contexts) {
+        await core.saveGraphNote(context.topicId, { chapterId: chapter.id, content: context.body }, actor);
+      }
+
+      const scope = { kind: 'subdiscipline' as const, disciplineId: discipline.id, subdisciplineId };
+      const graph = await core.selectGraph(scope, actor);
+      expect(graph.nodes.filter((node) => node.id === chapter.id)).toHaveLength(1);
+      expect(graph.edges.filter((edge) => edge.fromNodeId === chapter.id).map((edge) => edge.toNodeId).sort())
+        .toEqual(contexts.map((context) => context.topicId).sort());
+      expect(await core.resolveChapter({ chapterId: chapter.id, scope }, actor)).toEqual({
+        kind: 'choose-topic', chapterId: chapter.id, topicIds: contexts.map((context) => context.topicId).sort(),
+      });
+
+      const canonicalPaths = new Set<string>();
+      for (const context of contexts) {
+        const resolved = await core.resolveChapter({ chapterId: chapter.id, activeTopicId: context.topicId, scope }, actor);
+        expect(resolved).toEqual({ kind: 'resolved', topicId: context.topicId, chapterId: chapter.id });
+
+        const mapped = await vault.legacyPath(context.topicId, chapter.id);
+        expect(mapped.exists).toBe(true);
+        expect(canonicalPaths.has(mapped.path)).toBe(false);
+        canonicalPaths.add(mapped.path);
+
+        const file = await vault.getFile(mapped.path);
+        expect(file.content).toContain(context.body);
+        expect(parseFrontmatterValue(file.content)).toMatchObject({
+          id: chapter.id,
+          noteType: 'chapter',
+          topicId: context.topicId,
+          chapterId: chapter.id,
+        });
+      }
+      expect(canonicalPaths.size).toBe(contexts.length);
+    } finally {
+      await vault.close();
+      await repository.close();
+    }
+  });
+
   it('keeps moved source and item projections at their new paths through sync and archive', async () => {
     const fixture = await makeFixture('move');
     const { vault, repository, core, actor, rawSourceId, itemId, sourcePath, itemPath, userId, rawText, itemBody } = fixture;

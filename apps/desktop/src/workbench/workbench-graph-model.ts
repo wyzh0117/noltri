@@ -1,4 +1,4 @@
-import type { GraphEdge, GraphNode } from '@noltri/schema';
+import type { GraphRenderEdge, GraphRenderNode } from './workbench-graph-render-data';
 
 export interface GraphGroupMatch {
   query: string;
@@ -25,7 +25,7 @@ export interface GraphModelMatches {
 export interface GraphViewNode {
   id: string;
   title: string;
-  type: GraphNode['nodeType'];
+  type: GraphRenderNode['nodeType'];
   degree: number;
   weight: number;
   size: number;
@@ -38,7 +38,7 @@ export interface GraphViewEdge {
   target: string;
   count: number;
   width: number;
-  relationType: GraphEdge['relationType'];
+  relationType: GraphRenderEdge['relationType'];
 }
 
 export interface GraphModel {
@@ -47,12 +47,16 @@ export interface GraphModel {
 }
 
 const clamp = (value: number, minimum: number, maximum: number): number => Math.min(maximum, Math.max(minimum, value));
-const nodeTypeOrder: Record<GraphNode['nodeType'], number> = {
+const nodeTypeOrder: Record<GraphRenderNode['nodeType'], number> = {
   discipline: 0,
   subdiscipline: 1,
   domain: 2,
   topic: 3,
   chapter: 4,
+  note: 5,
+  attachment: 6,
+  unresolved: 7,
+  tag: 8,
 };
 
 export function graphNodeSize(weight: number, multiplier = 1): number {
@@ -64,12 +68,12 @@ function colorForGroup(nodeId: string, groups: readonly GraphGroupMatch[]): stri
 }
 
 export function buildGraphModel(
-  sourceNodes: readonly GraphNode[],
-  sourceEdges: readonly GraphEdge[],
+  sourceNodes: readonly GraphRenderNode[],
+  sourceEdges: readonly GraphRenderEdge[],
   options: GraphModelOptions,
   matches: GraphModelMatches = { filter: null, groups: [] },
 ): GraphModel {
-  const nodeById = new Map<string, GraphNode>();
+  const nodeById = new Map<string, GraphRenderNode>();
   for (const node of sourceNodes) if (!nodeById.has(node.id)) nodeById.set(node.id, node);
   const preserve = options.preserveNodeIds ?? new Set<string>();
   const visibleIds = new Set([...nodeById.keys()].filter((id) => matches.filter === null || matches.filter.nodeIds.has(id) || preserve.has(id)));
@@ -115,7 +119,7 @@ export function buildGraphModel(
 
 export function graphContextAnchorId(
   contextNodeId: string,
-  nodes: readonly GraphNode[],
+  nodes: readonly GraphRenderNode[],
 ): string | null {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   return byId.has(contextNodeId) ? contextNodeId : null;
@@ -125,7 +129,7 @@ export function graphContextAnchorId(
 export function graphContextPathIds(
   contextNodeId: string,
   selectedNodeId: string | null,
-  nodes: readonly GraphNode[],
+  nodes: readonly GraphRenderNode[],
 ): Set<string> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const ids = new Set<string>();
@@ -152,7 +156,7 @@ export function selectGraphWindow(
   model: GraphModel,
   contextNodeId: string,
   selectedNodeId: string | null,
-  allSemanticNodes: readonly GraphNode[],
+  allSemanticNodes: readonly GraphRenderNode[],
   limit = 40,
 ): GraphWindow {
   const nodeById = new Map(model.nodes.map((node) => [node.id, node]));

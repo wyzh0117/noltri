@@ -368,6 +368,34 @@ describe('Graph v3.1 over the local HTTP server and SQLite', () => {
         'domain', 'subdiscipline', 'topic',
       ]);
 
+      const manualBranchGraphResponse = await fetch(`${base}/api/graph/select`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${wideReadSecret}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'subdiscipline', disciplineId: manualRoot!.id, subdisciplineId: manualBranch!.id }),
+      });
+      expect(manualBranchGraphResponse.status).toBe(200);
+      expect(graphSelectionSchema.parse(await manualBranchGraphResponse.json()).nodes.map((node) => node.id)).toContain(manualLeaf!.id);
+
+      const twoLevelManualPath = ['工程学', '测量学'];
+      const twoLevelManualPathResponse = await fetch(`${base}/api/items/${captured.rawSourceId}`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${wideReadSecret}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ subjectPath: twoLevelManualPath }),
+      });
+      expect(twoLevelManualPathResponse.status).toBe(200);
+      const twoLevelRoot = await repository.findNodeByTitle(userId, twoLevelManualPath[0]!, null);
+      const twoLevelTopic = await repository.findNodeByTitle(userId, twoLevelManualPath[1]!, twoLevelRoot?.id);
+      expect([twoLevelRoot?.nodeType, twoLevelTopic?.nodeType]).toEqual(['discipline', 'topic']);
+      const twoLevelGraphResponse = await fetch(`${base}/api/graph/select`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${wideReadSecret}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'topic', disciplineId: twoLevelRoot!.id, anchorTopicId: twoLevelTopic!.id }),
+      });
+      expect(twoLevelGraphResponse.status).toBe(200);
+      const twoLevelGraph = graphSelectionSchema.parse(await twoLevelGraphResponse.json());
+      expect(twoLevelGraph.scopeGraphNodeId).toBe(twoLevelTopic!.id);
+      expect(twoLevelGraph.nodes.map((node) => node.id)).toContain(twoLevelTopic!.id);
+
       expect(await repository.findNode(legacyRoot.id, userId)).toEqual(legacyRoot);
       expect(await repository.findNode(legacyBranch.id, userId)).toEqual(legacyBranch);
       expect(await repository.findRawSource(originalSource.id, userId)).toEqual(originalSource);

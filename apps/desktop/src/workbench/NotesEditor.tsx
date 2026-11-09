@@ -741,7 +741,9 @@ function buildDecorations(state: EditorState, propsRef: { current: Omit<WidgetPr
   const mergedRevealRanges = mergeRevealRanges(revealRanges);
   const widgets: Range<Decoration>[] = [];
   const props = propsRef.current;
-  if (props === null) return { decorations: Decoration.none, atomic: Decoration.none, tokens, source };
+  const fmEnd = frontmatterEnd(source);
+  if (fmEnd > 0) widgets.push(Decoration.replace({}).range(0, fmEnd));
+  if (props === null) return { decorations: Decoration.set(widgets, true), atomic: Decoration.none, tokens, source };
   const atomic: Range<Decoration>[] = [];
   for (const token of tokens) {
     if (isRevealed(token, mergedRevealRanges)) continue;

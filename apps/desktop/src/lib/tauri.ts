@@ -5,6 +5,20 @@ import type { ClipboardIntakeAdapter, ScreenshotIntakeAdapter, ScreenshotIntakeR
 
 export const INTAKE_ACTIVATION_EVENT = 'noltri-intake-activation';
 export const SHORTCUTS_CHANGED_EVENT = 'noltri-shortcuts-changed';
+export const AX_SELECTION_ACCEPTED_EVENT = 'noltri-ax-selection-accepted';
+
+export interface AxSelectionOfferStatus {
+  enabled: boolean;
+  permission: 'not_checked' | 'granted' | 'denied' | 'unsupported' | 'unavailable';
+}
+
+export interface AxSelectionAccepted {
+  kind: 'accepted';
+  requestId: string;
+  text: string;
+  appName: string;
+  bundleId: string;
+}
 
 export interface ShortcutBinding {
   key: string;
@@ -392,6 +406,8 @@ export const commands = {
     invoke<ProviderModel[]>('fetch_available_models', { input }),
   getIntakeShortcutStatus: () => invoke<IntakeShortcutStatus>('get_intake_shortcut_status'),
   saveIntakeShortcuts: (bindings: ShortcutBindings) => invoke<IntakeShortcutStatus>('save_intake_shortcuts', { bindings }),
+  getAxSelectionOfferStatus: () => invoke<AxSelectionOfferStatus>('get_ax_selection_offer_status'),
+  setAxSelectionOffersEnabled: (enabled: boolean) => invoke<AxSelectionOfferStatus>('set_ax_selection_offers_enabled', { enabled }),
   getRuntimeDiagnostics: () => invoke<RuntimeDiagnostics>('get_runtime_diagnostics'),
   traceCaptureStage: (entry: CaptureTraceEntry) => invoke<void>('trace_capture_stage', {
     requestId: entry.requestId,

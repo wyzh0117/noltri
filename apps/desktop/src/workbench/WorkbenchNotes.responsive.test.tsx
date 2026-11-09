@@ -3,110 +3,79 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createReviewBrowser } from './review-headless-test';
 
-// A graph-only multi-column rule overriding the <=820px collapse must fail these cases.
-// These iframe viewports load the production cascade without grid/display fixture overrides.
 const css = ['workbench.css', 'notes-workbench.css'].map(name => readFileSync(new URL(name, import.meta.url), 'utf8')).join('\n');
 const harness = `
 let frame;
 const paint=()=>new Promise(resolve=>frame.contentWindow.requestAnimationFrame(()=>frame.contentWindow.requestAnimationFrame(resolve)));
 window.harness={
- async mount(width,shape,hasGraph){
-  frame?.remove();frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height='640px';frame.style.border='0';document.body.append(frame);
+ async mount(width,split){
+  frame?.remove();frame=document.createElement('iframe');frame.style.width=width+'px';frame.style.height='760px';frame.style.border='0';document.body.append(frame);
   const doc=frame.contentDocument;doc.open();doc.write('<!doctype html><html><head></head><body></body></html>');doc.close();
   const style=doc.createElement('style');style.textContent=${JSON.stringify(css)};doc.head.append(style);
-  const empty=shape==='empty',split=shape==='split';
-  const layout=empty?'vault-empty-layout':'vault-editor-layout panel-'+(hasGraph?'graph':'outline')+(split?' has-split':'');
-  const primary=empty?'<div class="vault-empty-note"><h1>Synthetic empty note</h1></div>':'<section class="vault-editor-column">Synthetic source</section>';
-  const secondary=split?'<section class="vault-split-column">Synthetic split source</section>':'';
-  const sidebar=(!empty||hasGraph)?'<aside class="vault-organize-panel">'+(hasGraph?'<div class="vault-relations-graph"><aside class="graph-panel graph-panel-mini"><div class="workbench-graph">Synthetic graph slot</div></aside></div>':'Synthetic outline')+'</aside>':'';
-  doc.body.innerHTML='<div class="library-shell-notes"><section class="vault-notes"><aside class="vault-file-sidebar">Synthetic files</aside><main class="vault-note-main"><div class="'+layout+(hasGraph?' has-relations-graph':'')+'">'+primary+secondary+sidebar+'</div></main></section></div>';
-  await paint();
+  const shell=doc.createElement('div');shell.className='library-shell library-shell-notes library-shell-graph-mini';shell.style.setProperty('--graph-panel-width','300px');
+  shell.innerHTML='<aside class="library-sidebar" data-navigation-mode="subjects"><nav class="sidebar-function-rail" aria-label="快速操作"><button>快速切换</button></nav><nav class="sidebar-mode-tabs" role="tablist" aria-label="知识导航方式"><button role="tab">学科与方向</button><button role="tab">搜索</button></nav><div class="sidebar-tree-head">学科与方向</div><nav class="subject-tree" aria-label="学科知识树">Topic</nav></aside><main class="library-main notes-workspace-main"><section class="vault-notes"><main class="vault-note-main"><div class="vault-editor-layout'+(split?' has-split':'')+'"><section class="vault-editor-column">正文</section>'+(split?'<section class="vault-split-column">分屏</section>':'')+'</div></main></section></main><aside class="graph-panel graph-panel-mini" aria-label="Graph 面板">关系</aside>';
+  doc.body.append(shell);await paint();
  },
- async graphWidth(width){frame.contentDocument.documentElement.style.setProperty('--graph-panel-width',width+'px');await paint();},
  state(){
-  const doc=frame.contentDocument,view=frame.contentWindow;
-  const layout=doc.querySelector('.vault-editor-layout,.vault-empty-layout'),primary=layout.firstElementChild,split=doc.querySelector('.vault-split-column'),sidebar=doc.querySelector('.vault-organize-panel'),graph=doc.querySelector('.graph-panel');
-  const style=view.getComputedStyle(layout),columns=style.gridTemplateColumns;
-  return {viewport:view.innerWidth,display:style.display,columns:columns==='none'?[]:columns.split(/\\s+/).map(parseFloat),width:layout.getBoundingClientRect().width,primaryWidth:primary.getBoundingClientRect().width,splitWidth:split?.getBoundingClientRect().width,sidebarDisplay:sidebar?view.getComputedStyle(sidebar).display:null,sidebarWidth:sidebar?.getBoundingClientRect().width??0,sidebarHeight:sidebar?.getBoundingClientRect().height??0,graphWidth:graph?.getBoundingClientRect().width??0,graphHeight:graph?.getBoundingClientRect().height??0};
+  const doc=frame.contentDocument,view=frame.contentWindow,shell=doc.querySelector('.library-shell-notes'),main=doc.querySelector('.notes-workspace-main'),sidebar=doc.querySelector('.library-sidebar'),graph=doc.querySelector('.graph-panel'),editor=doc.querySelector('.vault-editor-layout');
+  const shellStyle=view.getComputedStyle(shell),editorStyle=view.getComputedStyle(editor),cols=style=>style.gridTemplateColumns;
+  const columnCount=value=>value==='none'?0:value.split(/\\s+/).length;
+  return {viewport:view.innerWidth,shellDisplay:shellStyle.display,shellColumns:shellStyle.display==='grid'?columnCount(cols(shellStyle)):0,sidebarWidth:sidebar.getBoundingClientRect().width,mainWidth:main.getBoundingClientRect().width,graphWidth:graph.getBoundingClientRect().width,graphHeight:graph.getBoundingClientRect().height,editorColumns:columnCount(cols(editorStyle)),tablistDisplay:view.getComputedStyle(doc.querySelector('[role=tablist]')).display,treeDisplay:view.getComputedStyle(doc.querySelector('.subject-tree')).display,graphIsShellSibling:graph.parentElement===shell,legacyNestedGraph:doc.querySelector('.vault-relations-graph')!==null};
  }
 };
 `;
 const browser = createReviewBrowser(harness, fileURLToPath(new URL('../..', import.meta.url)));
 interface LayoutState {
   viewport: number;
-  display: string;
-  columns: number[];
-  width: number;
-  primaryWidth: number;
-  splitWidth?: number;
-  sidebarDisplay: string | null;
+  shellDisplay: string;
+  shellColumns: number;
   sidebarWidth: number;
-  sidebarHeight: number;
+  mainWidth: number;
   graphWidth: number;
   graphHeight: number;
+  editorColumns: number;
+  tablistDisplay: string;
+  treeDisplay: string;
+  graphIsShellSibling: boolean;
+  legacyNestedGraph: boolean;
 }
-const fixtures = [
-  { shape: 'normal', graph: true, wideColumns: 2 },
-  { shape: 'split', graph: true, wideColumns: 3 },
-  { shape: 'empty', graph: true, wideColumns: 2 },
-  { shape: 'normal', graph: false, wideColumns: 2 },
-  { shape: 'split', graph: false, wideColumns: 3 },
-  { shape: 'empty', graph: false, wideColumns: 0 },
-] as const;
 const state = () => browser.evaluate<LayoutState>('window.harness.state()');
-async function mount(width: number, shape: string, graph: boolean): Promise<LayoutState> {
-  await browser.evaluate(`window.harness.mount(${width},${JSON.stringify(shape)},${graph})`);
-  return state();
-}
 
-describe('production Notes responsive relationship columns', () => {
+describe('unified Notes shell responsive layout', () => {
   beforeAll(() => browser.start(), 30_000);
   afterAll(() => browser.close());
 
-  it.each(fixtures)('fills the narrow $shape body with graph=$graph when the sidebar is hidden', async ({ shape, graph }) => {
-    for (const width of [780, 820, 560]) {
-      const actual = await mount(width, shape, graph);
-      expect(actual.viewport).toBe(width);
-      expect(actual.sidebarDisplay).toBe(shape === 'empty' && !graph ? null : 'none');
-      expect(actual.sidebarWidth).toBe(0);
-      expect(actual.columns, JSON.stringify(actual)).toHaveLength(shape === 'empty' && !graph ? 0 : 1);
-      expect(Math.abs(actual.primaryWidth - actual.width), JSON.stringify(actual)).toBeLessThan(1);
-      if (shape === 'split') expect(Math.abs(actual.splitWidth! - actual.width), JSON.stringify(actual)).toBeLessThan(1);
-    }
+  it.each([780, 821, 1100])('keeps one outer navigation and Graph rail at %ipx', async (width) => {
+    await browser.evaluate(`window.harness.mount(${width},false)`);
+    const actual = await state();
+    expect(actual.viewport).toBe(width);
+    expect(actual.shellDisplay).toBe('grid');
+    expect(actual.shellColumns).toBe(3);
+    expect(actual.sidebarWidth).toBeGreaterThan(160);
+    expect(actual.mainWidth).toBeGreaterThan(0);
+    expect(actual.graphWidth).toBeCloseTo(300, 0);
+    expect(actual.graphIsShellSibling).toBe(true);
+    expect(actual.legacyNestedGraph).toBe(false);
+    expect(actual.editorColumns).toBe(1);
+    expect(actual.tablistDisplay).not.toBe('none');
+    expect(actual.treeDisplay).not.toBe('none');
     expect(browser.errors).toEqual([]);
   });
 
-  it.each(fixtures)('preserves wide $shape columns and sidebar with graph=$graph', async ({ shape, graph, wideColumns }) => {
-    for (const width of [821, 1100]) {
-      const actual = await mount(width, shape, graph);
-      expect(actual.viewport).toBe(width);
-      expect(actual.columns, JSON.stringify(actual)).toHaveLength(wideColumns);
-      expect(actual.sidebarDisplay).toBe(shape === 'empty' && !graph ? null : 'flex');
-      if (wideColumns === 0) {
-        expect(Math.abs(actual.primaryWidth - actual.width)).toBeLessThan(1);
-      } else {
-        expect(actual.sidebarWidth).toBeGreaterThan(180);
-        expect(actual.primaryWidth).toBeLessThan(actual.width - 180);
-      }
-      if (graph) {
-        expect(Math.abs(actual.graphWidth - actual.sidebarWidth)).toBeLessThan(2);
-        expect(actual.graphHeight).toBeGreaterThan(80);
-        expect(actual.graphHeight).toBeLessThanOrEqual(actual.sidebarHeight + 1);
-      }
-    }
-    expect(browser.errors).toEqual([]);
-  });
-
-  it.each(['normal', 'split', 'empty'])('retains the wide graph width variable for the %s layout', async (shape) => {
-    await mount(1100, shape, true);
-    await browser.evaluate('window.harness.graphWidth(280)');
-    const before = await state();
-    await browser.evaluate('window.harness.graphWidth(360)');
-    const after = await state();
-    expect(before.sidebarWidth).toBeCloseTo(280, 0);
-    expect(after.sidebarWidth).toBeCloseTo(360, 0);
-    expect(after.graphWidth - before.graphWidth).toBeCloseTo(80, 0);
-    expect(after.primaryWidth).toBeLessThan(before.primaryWidth);
+  it('stacks the right rail on narrow screens and collapses editor split columns', async () => {
+    await browser.evaluate('window.harness.mount(520,true)');
+    const actual = await state();
+    expect(actual.shellDisplay).toBe('block');
+    expect(actual.shellColumns).toBe(0);
+    expect(actual.sidebarWidth).toBeCloseTo(520, 0);
+    expect(actual.mainWidth).toBeGreaterThan(0);
+    expect(actual.graphWidth).toBeCloseTo(520, 0);
+    expect(actual.graphHeight).toBeGreaterThan(80);
+    expect(actual.editorColumns).toBe(1);
+    expect(actual.graphIsShellSibling).toBe(true);
+    expect(actual.legacyNestedGraph).toBe(false);
+    expect(actual.tablistDisplay).not.toBe('none');
+    expect(actual.treeDisplay).not.toBe('none');
     expect(browser.errors).toEqual([]);
   });
 });

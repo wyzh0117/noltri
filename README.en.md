@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>Noltri · Notes 3.0</h1>
+  <h1>Noltri · Notes 0.1</h1>
   <p>Write and read local Markdown while keeping collected originals on your computer.</p>
 </div>
 
@@ -7,7 +7,7 @@
 
 ## Current version
 
-The current source version is **3.0.0**, built around Markdown Notes. The formal Release is the source for installers, signed update artifacts and the production update manifest. Historical versions stay available in [Releases](https://github.com/wyzh0117/noltri/releases) as history.
+The current source version is **0.1.0**, built around Markdown Notes. The first release uses manual installation; the local build candidate is not yet published, and the corresponding [Release](https://github.com/wyzh0117/noltri/releases) is the source for official artifacts and checksums. Version 0.1.0 does not include a signed updater artifact or `latest.json` manifest. Historical versions remain available as history.
 
 The former course product line is no longer maintained. There is no course-workspace migration or compatibility commitment. Historical versions, verified artifacts and existing data are retained; this version change does not delete them.
 
@@ -33,9 +33,9 @@ Quick Collect accepts text, images and the desktop screenshot entry. The review 
 
 The default Core port is **18887**, and MCP is **18890**. Without `NOLTRI_ENV_FILE`, loaders probe only `.env.local`/`.env` under `~/.noltri-notes` and an explicitly selected `NOLTRI_DATA_DIR`; they do not search parent project directories. A selected file is exclusive, including when missing. Desktop does not reuse an external runtime by default; connecting requires explicit `NOLTRI_USE_EXTERNAL_RUNTIME=1`, a matching token and service verification.
 
-## Independent Notes profile
+## Notes profile
 
-All 3.x versions retain the same Notes namespace and profile:
+The desktop bundle identifier is `com.noltri.notes`. Version 0.1.0 uses the existing default macOS Notes profile location. Back up data and confirm profile ownership before manually replacing an existing installation. The retired course product line is not automatically migrated or imported:
 
 | Runtime | Default location |
 | --- | --- |
@@ -60,9 +60,11 @@ pnpm --filter @noltri/extension build
 
 Enable Developer mode at `chrome://extensions` and load `apps/extension/.output`. The context menu collects selected text, a page or an image. Agents can connect to the local MCP endpoint shown in application settings; its default development address is `http://127.0.0.1:18890/mcp`. The local service continues to enforce authorization scopes.
 
-## Updates and first launch
+## Installation and updates
 
-Updates require explicit checks, download verification, installation and restart. Save drafts, finish pending work and close the rules window first; see the [update workflow](docs/application-updates.md). Isolated test packages have covered a successful upgrade and manual recovery after an installation failure. Isolated 3.0.0 candidates have verified physical text/screenshot collection, original preservation and normal reopen with synthetic material. The current release candidate has also verified the saved human text, destination and confirmed Inbox display after a full restart. No model was configured, so AI processing and OCR were not verified. The production artifact has a verified project update signature and signed version. Downloads and the update manifest are provided by the formal Release. Screen permission evidence from an earlier build does not establish authorization for the current candidate.
+Version 0.1.0 installs from a manual DMG and includes no signed update archive, signature file or `latest.json`. There is no usable in-app update source for this version; if the manifest is missing, update checks fail safely, and that error must not be read as “already up to date.” Future signed updates still require explicit checks, download verification, installation and restart; see the [update workflow](docs/application-updates.md).
+
+The isolated 3.0.0 collection and updater checks apply only to their historical builds; they do not mean 0.1.0 passed the same product acceptance. The 0.1.0 candidate passed local app/DMG integrity checks, but full product acceptance, real-model processing and OCR were not completed. This build is ad-hoc signed, without Apple Developer ID signing or notarization. Gatekeeper assessment was disabled on the build host, so acceptance could not be evaluated there. See the [0.1.0 release notes](docs/releases/0.1.0.md).
 
 For release downloads, verify the source, checksums and signing information. If macOS blocks first launch, follow [Apple's official safe-opening guidance](https://support.apple.com/en-us/102445). Update signatures, Apple Developer ID signing, notarization and OS permissions are separate mechanisms.
 
@@ -77,7 +79,7 @@ pnpm typecheck
 pnpm test
 ```
 
-Build, project update signing and scoped platform verification are recorded. See the [3.0.0 version notes](docs/releases/3.0.0.md) for current checks and remaining limits; historical test counts are not a current-version success claim. The bundled Node runtime stays pinned and checksum-verified. Internal plans, test material and user configuration are not distributed.
+Build, historical project update signing and scoped platform verification are recorded. See the [0.1.0 version notes](docs/releases/0.1.0.md) for this candidate’s checks and limits; the [3.0.0 notes](docs/releases/3.0.0.md) are historical. The bundled Node runtime stays pinned and checksum-verified. Internal plans, test material and user configuration are not distributed.
 
 ## License
 

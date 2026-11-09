@@ -8,4 +8,8 @@
 .shortcut-modifiers, .shortcut-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .shortcut-modifiers label { display: flex; align-items: center; gap: 4px; }
 .shortcut-modifiers input { width: auto; }
+.ax-selection-preference { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border, #deded6); }
+.ax-selection-preference h3 { margin: 0 0 8px; font-size: 16px; }
+.ax-selection-toggle { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; }
+.ax-selection-permission { color: var(--danger, #a23d38); }
 @media (max-width: 620px) { .shortcut-selectors { grid-template-columns: 1fr; } }

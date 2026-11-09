@@ -1,9 +1,10 @@
-import type { GraphNode, GraphNoteIndexEntry, GraphScope, SearchHit, TreeNode } from '@noltri/schema';
+import type { GraphEdge, GraphNode, GraphNoteIndexEntry, GraphScope, SearchHit, TreeNode } from '@noltri/schema';
 import type { NoteIdentity } from './note-drafts';
 
 export type WorkbenchContent =
   | { kind: 'library' }
   | { kind: 'cards'; scope: GraphScope; selectedNodeId: string }
+  | { kind: 'file'; path: string }
   | { kind: 'topic'; topicId: string }
   | { kind: 'chapter'; topicId: string; chapterId: string };
 
@@ -12,6 +13,11 @@ export interface TreeSelection {
   scope: GraphScope;
   content: WorkbenchContent;
 }
+
+export type WorkbenchTreeNode = Omit<TreeNode, 'children'> & {
+  readonly referenceScope?: GraphScope;
+  readonly children?: WorkbenchTreeNode[];
+};
 
 /** Monotonic token shared by all user-initiated content navigation. */
 export class NavigationIntentClock {
@@ -67,15 +73,59 @@ export function findTreePath(nodes: readonly TreeNode[], id: string, parents: Tr
   return null;
 }
 
+/** Add a display-only path to an existing topic when its current Graph scope confirms another valid parent. */
+export function addTopicPathReference(
+  nodes: readonly TreeNode[],
+  scope: GraphScope | null,
+  topicId: string,
+  edges: readonly GraphEdge[],
+): WorkbenchTreeNode[] {
+  if (scope?.kind !== 'subdiscipline'
+    || !edges.some((edge) => edge.relationType === 'part_of' && edge.fromNodeId === topicId && edge.toNodeId === scope.subdisciplineId)) {
+    return nodes as WorkbenchTreeNode[];
+  }
+  const path = findTreePath(nodes, topicId);
+  if (path === null) return nodes as WorkbenchTreeNode[];
+  const topic = path.at(-1);
+  if (topic === undefined || path.some((node) => node.id === scope.subdisciplineId)) return nodes as WorkbenchTreeNode[];
+
+  const { children: _children, ...topicReference } = topic;
+  const appendReference = (branches: readonly TreeNode[]): WorkbenchTreeNode[] => branches.map((node) => {
+    const children = node.children === undefined ? [] : appendReference(node.children);
+    if (node.id === scope.subdisciplineId) {
+      return {
+        ...node,
+        children: [...children, { ...topicReference, referenceScope: scope }],
+      };
+    }
+    return node.children === undefined ? node : { ...node, children };
+  });
+  return appendReference(nodes);
+}
+
+export function contextualTopicPath(
+  nodes: readonly TreeNode[],
+  topicId: string,
+  referenceScopeId?: string | null,
+): string[] {
+  const topicPath = findTreePath(nodes, topicId);
+  if (topicPath === null) return [];
+  const referencePath = referenceScopeId === undefined || referenceScopeId === null ? null : findTreePath(nodes, referenceScopeId);
+  if (referencePath === null || topicPath.some((node) => node.id === referenceScopeId)) return topicPath.map((node) => node.title);
+  return [...referencePath.map((node) => node.title), topicPath.at(-1)!.title];
+}
+
 export function contextualChapterPath(
   nodes: readonly TreeNode[],
   topicId: string,
   chapterTitle: string,
+  referenceScopeId?: string | null,
 ): string[] {
-  return [...(findTreePath(nodes, topicId)?.map((node) => node.title) ?? []), chapterTitle];
+  return [...contextualTopicPath(nodes, topicId, referenceScopeId), chapterTitle];
 }
 
-export function contextualChapterSelectionId(nodes: readonly TreeNode[], topicId: string, chapterId: string): string {
+export function contextualChapterSelectionId(nodes: readonly TreeNode[], topicId: string, chapterId: string, referenceScopeId?: string | null): string {
+  if (referenceScopeId !== undefined && referenceScopeId !== null) return topicId;
   const canonicalTopicId = findTreePath(nodes, chapterId)?.slice().reverse().find((node) => node.nodeType === 'topic')?.id;
   return canonicalTopicId === topicId ? chapterId : topicId;
 }
@@ -125,7 +175,9 @@ export function selectionForTreeNode(nodes: readonly TreeNode[], id: string): Tr
     return { path, scope: { kind: 'discipline', disciplineId }, content: { kind: 'cards', scope: { kind: 'discipline', disciplineId }, selectedNodeId: id } };
   }
   if (path.length === 2) {
-    const scope: GraphScope = { kind: 'subdiscipline', disciplineId, subdisciplineId: id };
+    const scope: GraphScope = selected.nodeType === 'topic'
+      ? { kind: 'topic', disciplineId, anchorTopicId: id }
+      : { kind: 'subdiscipline', disciplineId, subdisciplineId: id };
     return { path, scope, content: { kind: 'cards', scope, selectedNodeId: id } };
   }
 
@@ -140,6 +192,32 @@ export function selectionForTreeNode(nodes: readonly TreeNode[], id: string): Tr
   if (topic === undefined) return null;
   const scope: GraphScope = { kind: 'topic', disciplineId, anchorTopicId: topic.id };
   return { path, scope, content: { kind: 'topic', topicId: topic.id } };
+}
+
+/** Resolve the local Graph focus for the currently open knowledge object. */
+export function graphScopeForContent(
+  content: WorkbenchContent,
+  currentScope: GraphScope | null,
+  nodes: readonly TreeNode[],
+): GraphScope | null {
+  if (content.kind === 'cards') return content.scope;
+  if (content.kind !== 'topic' && content.kind !== 'chapter') return null;
+  const disciplineId = currentScope?.disciplineId
+    ?? findTreePath(nodes, content.topicId)?.find((node) => node.nodeType === 'discipline')?.id;
+  return disciplineId === undefined
+    ? null
+    : { kind: 'topic', disciplineId, anchorTopicId: content.topicId };
+}
+
+/** Keep the deepest visible direction as context while the selected note keeps its stable topic ID. */
+export function graphContextScopeForTopic(nodes: readonly TreeNode[], topicId: string): GraphScope | null {
+  const path = findTreePath(nodes, topicId);
+  const disciplineId = path?.find((node) => node.nodeType === 'discipline')?.id;
+  if (path === null || disciplineId === undefined) return null;
+  const direction = [...path.slice(1)].reverse().find((node) => node.nodeType === 'subdiscipline' || node.nodeType === 'domain');
+  return direction === undefined
+    ? { kind: 'topic', disciplineId, anchorTopicId: topicId }
+    : { kind: 'subdiscipline', disciplineId, subdisciplineId: direction.id };
 }
 
 export function disciplineScopesForTopics(nodes: readonly TreeNode[], topicIds: readonly string[]): GraphScope[] {
@@ -159,10 +237,25 @@ export function graphScopeIdentity(scope: GraphScope): string {
   }
 }
 
+export function graphPanelScopeIdentity(
+  scope: GraphScope | null,
+  view: 'subject' | 'advanced',
+  subjectScope: 'local' | 'whole-discipline',
+  localFocusScope: GraphScope | null,
+  advancedScope: 'focus' | 'discipline' | 'all',
+): string {
+  if (view === 'advanced') return `advanced:${scope === null ? 'vault:all' : graphScopeIdentity(scope)}:${advancedScope}`;
+  if (scope === null) return 'subject:vault:all';
+  return subjectScope === 'whole-discipline'
+    ? `subject:whole:${graphScopeIdentity(scope)}`
+    : `subject:local:${graphScopeIdentity(scope)}:${localFocusScope === null ? 'none' : graphScopeIdentity(localFocusScope)}`;
+}
+
 export function contentIdentity(content: WorkbenchContent): string {
   switch (content.kind) {
     case 'library': return 'library';
     case 'cards': return `cards:${graphScopeIdentity(content.scope)}`;
+    case 'file': return `file:${JSON.stringify(content.path)}`;
     case 'topic': return `note:${JSON.stringify([content.topicId, null])}`;
     case 'chapter': return `note:${JSON.stringify([content.topicId, content.chapterId])}`;
   }

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { watch as watchDirectory, type FSWatcher } from 'node:fs';
 import { link, mkdir, open, readFile, readdir, realpath, rename as renameFile, rm, rmdir, stat, lstat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { parseDocument, stringify as stringifyYaml } from 'yaml';
+import { isMap, parseDocument, stringify as stringifyYaml } from 'yaml';
 import type {
   CachedNoteMetadata,
   RenameVaultBlockResponse,
@@ -74,7 +74,10 @@ const HISTORY_THROTTLE_MS = 60_000;
 const HASH_CACHE_TTL_MS = 600_000;
 const CHANGE_LIMIT = 2000;
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', 'node_modules', '.obsidian', '.noltri']);
+const GRAPH_NOTE_SYSTEM_PROPERTIES = new Set(['id', 'noteType', 'topicId', 'chapterId', 'title']);
 const idKey = (topicId: string, chapterId: string | null) => `${topicId}\u0000${chapterId ?? ''}`;
+const userGraphNoteProperties = (frontmatter: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(frontmatter).filter(([key]) => !GRAPH_NOTE_SYSTEM_PROPERTIES.has(key)));
 const sha256 = (content: string | Buffer) => createHash('sha256').update(content).digest('hex');
 const missing = (error: unknown) => ['ENOENT', 'ENOTDIR', 'not_found'].includes((error as NodeJS.ErrnoException).code ?? '');
 const positionIn = (content: string, start: number, end: number): NotePosition => {
@@ -400,13 +403,13 @@ export class VaultService {
     if (mapChanged) await this.saveLegacyMap();
   }
 
-  private documentWithFrontmatter(content: string, updates: Record<string, unknown>): string {
+  private documentWithFrontmatter(content: string, updates: Record<string, unknown>, replace = false): string {
     const parsed = parseFrontmatterValue(content);
     const match = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(content);
     if (match !== null && parseDocument(match[1] ?? '', { uniqueKeys: false }).errors.length > 0) {
       throw knowledgeError('invalid_request', 'Frontmatter YAML 无法解析；已停止更新元数据以保留原文');
     }
-    const merged = { ...parsed, ...updates };
+    const merged = replace ? updates : { ...parsed, ...updates };
     const serialized = stringifyYaml(merged, { lineWidth: 0 }).trimEnd();
     if (match !== null) return `---\n${serialized}\n---${content.slice(match[0].length)}`;
     return `---\n${serialized}\n---\n${content}`;
@@ -2440,32 +2443,64 @@ export class VaultService {
     return { content: markdownBody(note.content), updatedAt: new Date(note.mtime).toISOString(), etag: note.etag, path: note.path };
   }
 
-  async saveLegacyNote(topicId: string, chapterId: string | null, content: string, expectedEtag?: string, requestRoot?: string): Promise<{ content: string; updatedAt: string; etag: string; path: string }> {
+  async saveLegacyNote(
+    topicId: string,
+    chapterId: string | null,
+    content: string,
+    expectedEtag?: string,
+    properties?: Record<string, unknown>,
+    requestRoot?: string,
+  ): Promise<{ content: string; updatedAt: string; etag: string; path: string }> {
     const expectedRoot = await this.mutationRootForCall(requestRoot);
-    return await this.serializeMutation(() => this.saveLegacyNoteInternal(topicId, chapterId, content, expectedEtag), expectedRoot);
+    return await this.serializeMutation(() => this.saveLegacyNoteInternal(topicId, chapterId, content, expectedEtag, properties), expectedRoot);
   }
 
-  private async saveLegacyNoteInternal(topicId: string, chapterId: string | null, content: string, expectedEtag?: string): Promise<{ content: string; updatedAt: string; etag: string; path: string }> {
+  private async saveLegacyNoteInternal(
+    topicId: string,
+    chapterId: string | null,
+    content: string,
+    expectedEtag?: string,
+    properties?: Record<string, unknown>,
+  ): Promise<{ content: string; updatedAt: string; etag: string; path: string }> {
     const mapped = await this.legacyPathInternal(topicId, chapterId, false);
     let current: NoteFile | null = null;
     try { current = await this.getFileInternal(mapped.path); }
     catch (error) { if (!missing(error)) throw error; }
     if (expectedEtag !== undefined && current?.etag !== expectedEtag) throw knowledgeError('conflict', '文件已被其他编辑更新，请刷新后再保存');
     if (current === null && expectedEtag !== undefined) throw knowledgeError('conflict', '文件已被删除，请刷新后再保存');
-    let next = content;
-    if (current !== null) {
-      const prefix = /^---\r?\n[\s\S]*?\r?\n---(?=\r?\n|$)\r?\n?/.exec(current.content)?.[0] ?? '';
-      next = `${prefix}${content}`;
+    const currentContent = current?.content ?? '';
+    const frontmatterMatch = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)\r?\n?/.exec(currentContent);
+    if (currentContent.startsWith('---\n') || currentContent.startsWith('---\r\n')) {
+      const document = frontmatterMatch === null ? null : parseDocument(frontmatterMatch[1] ?? '');
+      if (document === null || document.errors.length > 0 || document.contents !== null && !isMap(document.contents)) {
+        throw knowledgeError('invalid_request', 'Frontmatter YAML 无法解析；已停止更新元数据以保留原文');
+      }
+    }
+    const currentFrontmatter = current === null ? {} : parseFrontmatterValue(current.content);
+    const identityMatches = currentFrontmatter.id === (chapterId ?? topicId)
+      && currentFrontmatter.noteType === (chapterId === null ? 'topic' : 'chapter')
+      && currentFrontmatter.topicId === topicId
+      && currentFrontmatter.chapterId === chapterId;
+    let next: string;
+    if (properties === undefined && current !== null && frontmatterMatch !== null && identityMatches) {
+      next = `${frontmatterMatch[0]}${content}`;
     } else {
       const topic = await this.repository.findNode(topicId, this.userId);
+      if (topic === null || topic.nodeType !== 'topic') throw knowledgeError('not_found', `主题 ${topicId} 不存在`);
       const chapter = chapterId === null ? null : await this.repository.findNode(chapterId, this.userId);
-      next = this.documentWithFrontmatter(content, {
+      if (chapterId !== null && (chapter === null || chapter.nodeType !== 'chapter')) throw knowledgeError('not_found', `章节 ${chapterId} 不存在`);
+      const nextProperties = properties === undefined
+        ? userGraphNoteProperties(currentFrontmatter)
+        : userGraphNoteProperties(properties);
+      const header = this.documentWithFrontmatter('', {
+        ...nextProperties,
         id: chapterId ?? topicId,
         noteType: chapterId === null ? 'topic' : 'chapter',
         topicId,
         chapterId,
-        title: chapter?.title ?? topic?.title ?? topicId,
-      });
+        title: chapter?.title ?? topic.title,
+      }, true);
+      next = `${header}${content}`;
     }
     const saved = await this.writeFileInternal(mapped.path, next, current?.etag, true);
     this.legacyMap[idKey(topicId, chapterId)] = mapped.path;

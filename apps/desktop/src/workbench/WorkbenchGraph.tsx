@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, ReactElement, WheelEvent } from 'react';
-import type { GraphEdge, GraphNode } from '@noltri/schema';
+import type { GraphNode } from '@noltri/schema';
 import { buildGraphModel, graphContextAnchorId, graphContextPathIds, graphStructureKey, selectGraphWindow } from './workbench-graph-model';
 import type { GraphModel, GraphQueryMatch, GraphViewNode } from './workbench-graph-model';
+import { isVaultGraphRenderNode } from './workbench-graph-render-data';
+import type { GraphRenderEdge, GraphRenderNode, VaultGraphRenderNode } from './workbench-graph-render-data';
 import { DEFAULT_GRAPH_SETTINGS, createGraphGroup, graphColorInputValue } from './workbench-graph-settings';
 import type { GraphColorGroup, GraphSettings } from './workbench-graph-settings';
 import { graphStateScopeIdentity, readGraphState, writeGraphState } from './workbench-graph-state';
@@ -14,8 +16,8 @@ import type { GraphPalette } from './workbench-graph-renderer';
 import './workbench-graph.css';
 
 export interface WorkbenchGraphProps {
-  readonly nodes: readonly GraphNode[];
-  readonly edges: readonly GraphEdge[];
+  readonly nodes: readonly GraphRenderNode[];
+  readonly edges: readonly GraphRenderEdge[];
   readonly scopeIdentity: string;
   readonly contextNodeId: string;
   readonly mode: 'mini' | 'expanded';
@@ -23,9 +25,12 @@ export interface WorkbenchGraphProps {
   readonly loading?: boolean;
   readonly error?: string | null;
   readonly onRefresh?: () => void;
+  readonly showModeControls?: boolean;
+  readonly graphLabel?: string;
   readonly evaluateQuery: (query: string) => Promise<ReadonlySet<string>>;
   readonly onModeChange: (mode: 'mini' | 'expanded') => void;
   readonly onNodeOpen: (node: GraphNode, intent: GraphOpenIntent) => void;
+  readonly onAuxiliaryNodeOpen?: (node: VaultGraphRenderNode, intent: GraphOpenIntent) => void;
   readonly onNodeMore?: (node: GraphNode) => void;
   readonly onNodeHover?: (node: GraphNode | null, anchor: DOMRect | null) => void;
 }
@@ -121,14 +126,17 @@ export function WorkbenchGraph({
   loading = false,
   error = null,
   onRefresh,
+  showModeControls = true,
+  graphLabel = '笔记关系图谱',
   evaluateQuery,
   onModeChange,
   onNodeOpen,
+  onAuxiliaryNodeOpen,
   onNodeMore,
   onNodeHover,
 }: WorkbenchGraphProps): ReactElement {
-  const scope = useMemo(() => graphStateScopeIdentity(scopeIdentity, mode), [scopeIdentity, mode]);
-  const initialState = useMemo(() => readGraphState(scope), [scope]);
+  const scope = useMemo(() => graphStateScopeIdentity(scopeIdentity), [scopeIdentity]);
+  const initialState = useMemo(() => readGraphState(scope, mode), [scope, mode]);
   const [settings, setSettingsState] = useState<GraphSettings>(initialState.settings);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -383,7 +391,7 @@ export function WorkbenchGraph({
   }, [scheduleDraw, schedulePersist]);
 
   useEffect(() => {
-    const state = readGraphState(scope);
+    const state = readGraphState(scope, mode);
     if (cameraFrameRef.current !== null) window.cancelAnimationFrame(cameraFrameRef.current);
     cameraFrameRef.current = null;
     cameraFrameTimeRef.current = 0;
@@ -400,7 +408,7 @@ export function WorkbenchGraph({
     fitInitialGraphIfReady();
     scheduleDraw();
     return () => persistNow(scope);
-  }, [scope, fitInitialGraphIfReady, persistNow, scheduleDraw]);
+  }, [scope, mode, fitInitialGraphIfReady, persistNow, scheduleDraw]);
 
   useEffect(() => {
     if (surfaceRef.current === null || webglCanvasRef.current === null || fallbackCanvasRef.current === null || labelCanvasRef.current === null) return;
@@ -539,12 +547,14 @@ export function WorkbenchGraph({
   }, [persistNow]);
 
   const nodeById = useMemo(() => new Map(model.nodes.map((node) => [node.id, node])), [model.nodes]);
-  const semanticNodeById = useMemo(() => new Map(semanticNodes.map((node) => [node.id, node])), [semanticNodes]);
+  const graphNodeById = useMemo(() => new Map(semanticNodes.map((node) => [node.id, node])), [semanticNodes]);
 
   const openNode = useCallback((node: GraphViewNode, intent: GraphOpenIntent = { newTab: false, split: false }): void => {
-    const semanticNode = semanticNodeById.get(node.id);
-    if (semanticNode !== undefined) onNodeOpen(semanticNode, intent);
-  }, [onNodeOpen, semanticNodeById]);
+    const graphNode = graphNodeById.get(node.id);
+    if (graphNode === undefined) return;
+    if (isVaultGraphRenderNode(graphNode)) onAuxiliaryNodeOpen?.(graphNode, intent);
+    else onNodeOpen(graphNode, intent);
+  }, [graphNodeById, onAuxiliaryNodeOpen, onNodeOpen]);
 
   const notifyNodeHover = useCallback((node: GraphViewNode | null): void => {
     const nextId = node?.id ?? null;
@@ -557,17 +567,17 @@ export function WorkbenchGraph({
       hoveredSemanticNodeRef.current = null;
       return;
     }
-    const semanticNode = semanticNodeById.get(nextId);
-    if (semanticNode === undefined) return;
-    hoveredSemanticNodeRef.current = semanticNode;
+    const graphNode = graphNodeById.get(nextId);
+    if (graphNode === undefined || isVaultGraphRenderNode(graphNode)) return;
+    hoveredSemanticNodeRef.current = graphNode;
     const surface = surfaceRef.current;
     const position = positionsRef.current[node.id];
     if (surface === null || position === undefined) return;
     const center = graphPointToScreen(position, cameraRef.current, viewportRef.current);
     const radius = graphNodeScreenRadius(node, cameraRef.current.scale);
     const bounds = surface.getBoundingClientRect();
-    onNodeHoverRef.current?.(semanticNode, new DOMRect(bounds.left + center.x - radius, bounds.top + center.y - radius, radius * 2, radius * 2));
-  }, [semanticNodeById]);
+    onNodeHoverRef.current?.(graphNode, new DOMRect(bounds.left + center.x - radius, bounds.top + center.y - radius, radius * 2, radius * 2));
+  }, [graphNodeById]);
 
   useEffect(() => () => {
     if (hoveredNodeIdRef.current !== null) onNodeHoverRef.current?.(hoveredSemanticNodeRef.current, null);
@@ -580,7 +590,7 @@ export function WorkbenchGraph({
       hoveredNodeIdRef.current = null;
       hoveredSemanticNodeRef.current = null;
     }
-  }, [model.nodes, semanticNodeById]);
+  }, [model.nodes, graphNodeById]);
 
   const fitGraph = useCallback((): void => {
     updateCamera(cameraForFit(modelRef.current.nodes, positionsRef.current, viewportRef.current));
@@ -767,12 +777,12 @@ export function WorkbenchGraph({
   const contextNode = contextMenu === null ? null : nodeById.get(contextMenu.nodeId) ?? null;
   const fullNodeCount = fullModel.nodes.length;
 
-  return <section className="workbench-graph" aria-label="笔记关系图谱">
+  return <section className="workbench-graph" aria-label={graphLabel}>
     <div className="workbench-graph-toolbar">
-      <div className="workbench-graph-mode" role="group" aria-label="图谱范围">
+      {showModeControls ? <div className="workbench-graph-mode" role="group" aria-label="图谱范围">
         <button type="button" aria-pressed={mode === 'mini'} onClick={() => onModeChange('mini')}>小图</button>
         <button type="button" aria-pressed={mode === 'expanded'} onClick={() => onModeChange('expanded')}>展开</button>
-      </div>
+      </div> : null}
       <button type="button" className="workbench-graph-control" aria-label="适配当前图谱窗口" title="适配当前图谱窗口" onClick={fitGraph}>适配</button>
       <button type="button" className="workbench-graph-control" aria-label="复制或下载图谱截图" title="复制截图；剪贴板不可用时下载" onClick={takeScreenshot}>截图</button>
       {onRefresh !== undefined ? <button type="button" className="workbench-graph-control" aria-label="刷新图谱" title="刷新图谱" onClick={onRefresh}>刷新</button> : null}
@@ -828,7 +838,7 @@ export function WorkbenchGraph({
       ref={surfaceRef}
       className="workbench-graph-surface"
       role="application"
-      aria-label={`${mode === 'mini' ? '小图' : '完整'}笔记关系图。方向键选择节点，回车打开，Home 适配画布。`}
+      aria-label={`${mode === 'mini' ? '小图' : '完整'}${graphLabel}。方向键选择节点，回车打开，Home 适配画布。`}
       tabIndex={0}
       onPointerDown={handlePointerDown}
       onPointerMove={updatePointer}
@@ -851,8 +861,8 @@ export function WorkbenchGraph({
       {contextMenu !== null && contextNode !== null ? <div className="workbench-graph-context" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
         <button type="button" role="menuitem" onClick={() => { openNode(contextNode); setContextMenu(null); }}>打开 {contextNode.title}</button>
         {onNodeMore !== undefined ? <button type="button" role="menuitem" onClick={() => {
-          const semanticNode = semanticNodeById.get(contextNode.id);
-          if (semanticNode !== undefined) onNodeMore(semanticNode);
+          const graphNode = graphNodeById.get(contextNode.id);
+          if (graphNode !== undefined && !isVaultGraphRenderNode(graphNode)) onNodeMore(graphNode);
           setContextMenu(null);
         }}>更多操作</button> : null}
       </div> : null}

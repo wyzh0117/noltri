@@ -13,8 +13,9 @@ export interface SavedGraphState {
 const STORAGE_PREFIX = 'noltri:knowledge-graph-v1:';
 const INITIAL_CAMERA: GraphCamera = { x: 0, y: 0, scale: 0.5 };
 
-export function graphStateScopeIdentity(scopeIdentity: string, mode: 'mini' | 'expanded'): string {
-  return `${scopeIdentity}\0${mode}`;
+export function graphStateScopeIdentity(scopeIdentity: string, _mode?: 'mini' | 'expanded'): string {
+  // The viewport mode is panel geometry; the graph camera and layout belong to its scope.
+  return scopeIdentity;
 }
 
 export function graphStateKey(scopeIdentity: string): string {
@@ -25,9 +26,12 @@ function emptyGraphState(): SavedGraphState {
   return { camera: null, cameraReady: false, positions: {}, settings: { ...DEFAULT_GRAPH_SETTINGS, groups: [] } };
 }
 
-export function readGraphState(scopeIdentity: string): SavedGraphState {
+export function readGraphState(scopeIdentity: string, legacyMode?: 'mini' | 'expanded'): SavedGraphState {
   try {
-    const raw = window.localStorage.getItem(graphStateKey(scopeIdentity));
+    const storage = window.localStorage;
+    const raw = storage.getItem(graphStateKey(scopeIdentity))
+      ?? (legacyMode === undefined ? null : storage.getItem(graphStateKey(`${scopeIdentity}\0${legacyMode}`)))
+      ?? (legacyMode === undefined ? null : storage.getItem(graphStateKey(`${scopeIdentity}\0${legacyMode === 'mini' ? 'expanded' : 'mini'}`)));
     if (raw === null) return emptyGraphState();
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== 'object') return emptyGraphState();

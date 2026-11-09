@@ -4,6 +4,7 @@ import type { CaptureBatchRequest, CaptureBatchStatus, CaptureBatchStatusItem } 
 import * as intakeModule from './intake-session';
 import {
   buildCaptureBatchRequest,
+  applySelectedTextActivation,
   cancelIntakeWindow,
   createIntakeSession,
   enqueueIntakeImages,
@@ -69,6 +70,36 @@ describe('selected intake image preview', () => {
 
     expect(selectedIntakeImageChanged(empty.images, first.images, null)).toBe(true);
     expect(selectedIntakeImageChanged(second.images, withoutSelected.images, second.images[1]!.assetId)).toBe(true);
+  });
+});
+
+describe('selected text offer intake', () => {
+  const offer = {
+    requestId: 'ax-123e4567-e89b-12d3-a456-426614174000',
+    text: 'Synthetic selected text from another app.',
+    sourceApp: 'TextEdit',
+  };
+
+  it('uses the accepted request ID and app name in the existing capture batch path', () => {
+    const result = applySelectedTextActivation(freshSession(), offer);
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error('expected accepted synthetic selection');
+    const request = buildCaptureBatchRequest(result.session);
+    expect(request.items).toEqual([expect.objectContaining({
+      requestId: offer.requestId,
+      kind: 'text',
+      text: offer.text,
+      source: { type: 'desktop_app', appName: 'TextEdit' },
+    })]);
+
+    const repeated = applySelectedTextActivation(result.session, offer);
+    expect(repeated).toMatchObject({ accepted: true, duplicate: true, session: result.session });
+  });
+
+  it('rejects stale or invalid offers without replacing an existing draft', () => {
+    const draft = updateIntakeText(freshSession(), 'Existing human draft stays here.');
+    expect(applySelectedTextActivation(draft, offer)).toEqual({ accepted: false, reason: 'draft_exists', session: draft });
+    expect(applySelectedTextActivation(freshSession(), { ...offer, text: '  ' })).toMatchObject({ accepted: false, reason: 'invalid' });
   });
 });
 

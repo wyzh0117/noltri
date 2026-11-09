@@ -1,7 +1,6 @@
-export type IntakeActivation = {
-  action: 'openIntake' | 'capture';
-  requestId: string;
-};
+export type IntakeActivation =
+  | { action: 'openIntake' | 'capture'; requestId: string }
+  | { action: 'selectedText'; requestId: string; text: string; sourceApp: string };
 
 export type ScreenshotCaptureFailureStatus =
   | 'cancelled'

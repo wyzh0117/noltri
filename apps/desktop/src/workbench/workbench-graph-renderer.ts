@@ -162,6 +162,10 @@ function nodeColor(node: GraphModel['nodes'][number], input: GraphRenderInput): 
     case 'domain': return input.palette.domain;
     case 'topic': return input.palette.topic;
     case 'chapter': return input.palette.chapter;
+    case 'note': return input.palette.chapter;
+    case 'attachment': return input.palette.muted;
+    case 'unresolved': return input.palette.muted;
+    case 'tag': return input.palette.domain;
   }
 }
 
