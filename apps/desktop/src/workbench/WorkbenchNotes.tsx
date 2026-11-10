@@ -660,9 +660,19 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
   const [splitNote, setSplitNote] = useState<NoteFile | null>(null);
   const [note, setNote] = useState<NoteFile | null>(null);
   const [content, setContent] = useState('');
-  const [saveState, setSaveState] = useState<SaveState>('saved');
+  const [saveState, setSaveStateState] = useState<SaveState>('saved');
+  const saveStateRef = useRef<SaveState>('saved');
+  const setSaveState = useCallback((next: SaveState): void => {
+    saveStateRef.current = next;
+    setSaveStateState(next);
+  }, []);
   const [transitioning, setTransitioning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<string | null>(null);
+  const errorOwnerRef = useRef<'conflict' | 'other' | null>(null);
+  const setError = useCallback((next: string | null, owner: 'conflict' | 'other' = 'other'): void => {
+    errorOwnerRef.current = next === null ? null : owner;
+    setErrorState(next);
+  }, []);
   const [mode, setMode] = useState<EditorMode>('live');
   const [metadata, setMetadata] = useState<CachedNoteMetadata | null>(null);
   const [backlinks, setBacklinks] = useState<Awaited<ReturnType<WorkbenchApi['vaultBacklinks']>>['backlinks']>([]);
@@ -722,9 +732,8 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
     750,
     (root, path, metadata) => {
       if (!mountedRef.current || rootPathRef.current !== root || noteRef.current?.path !== path) return;
-      setError(metadata?.conflict
-        ? '本机恢复草稿写入失败；当前存在外部冲突且不会自动覆盖磁盘。请立即复制当前内容。'
-        : '本机恢复草稿未能写入或清除；笔记保存状态见上方（非冲突时自动保存仍可继续）。请复制重要内容。');
+      if (metadata?.conflict) setError('本机恢复草稿写入失败；当前存在外部冲突且不会自动覆盖磁盘。请立即复制当前内容。', 'conflict');
+      else setError('本机恢复草稿未能写入或清除；笔记保存状态见上方（非冲突时自动保存仍可继续）。请复制重要内容。');
     },
   );
   const pendingWritesRef = useRef(new Map<string, number>());
@@ -868,7 +877,7 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
       }
       setSnapshot(next);
       revisionRef.current = next.revision;
-      setError(null);
+      if (saveStateRef.current !== 'conflict' || errorOwnerRef.current !== 'conflict') setError(null);
       const selected = contextPathRef.current;
       const frontmatter = selected === null
         ? null
@@ -881,7 +890,7 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
       const stillCurrent = context === null
         ? rootPathRef.current === null && vaultEpochRef.current === unboundEpoch
         : ownsVaultContext(context);
-      if (stillCurrent) setError(errorText(cause));
+      if (stillCurrent && (saveStateRef.current !== 'conflict' || errorOwnerRef.current !== 'conflict')) setError(errorText(cause));
       return false;
     }
   }, [api, captureVaultContext, ownsVaultContext, publishContext]);
@@ -1006,7 +1015,7 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
         else setError(null);
       } else {
         setSaveState('conflict');
-        setError('文件在外部发生更改。请重新载入或复制草稿，当前内容不会覆盖外部版本。');
+        setError('文件在外部发生更改。请重新载入或复制草稿，当前内容不会覆盖外部版本。', 'conflict');
         draftWritesRef.current?.flush(context.rootPath, path, contentRef.current, { baseEtag: noteRef.current?.path === path ? noteRef.current.etag : null, conflict: true });
       }
     } catch { /* A deleted file stays open so the user can copy its draft. */ }
@@ -1097,7 +1106,7 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
           canContinue = false;
           if (ownsCurrentContext) {
             setSaveState('conflict');
-            setError('文件在外部发生更改。请重新载入或复制草稿，当前内容不会覆盖外部版本。');
+            setError('文件在外部发生更改。请重新载入或复制草稿，当前内容不会覆盖外部版本。', 'conflict');
             draftWritesRef.current?.flush(root, path, contentRef.current, { baseEtag: noteRef.current?.etag ?? null, conflict: true });
           }
           return;
@@ -1479,7 +1488,7 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
       if (currentAfterSave !== null && latestCurrent?.path !== currentAfterSave.path) return;
       if (previewKind === 'file' && latestCurrent?.path === entry.path && preview.etag !== latestCurrent.etag) {
         setSaveState('conflict');
-        setError('文件在外部发生更改，已取消删除；请重新载入后再试。');
+        setError('文件在外部发生更改，已取消删除；请重新载入后再试。', 'conflict');
         return;
       }
       const descendants = preview.descendantCount;
@@ -1904,7 +1913,7 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
     commitContent(draft);
     if (recovery === 'conflict') {
       setSaveState('conflict');
-      setError('恢复草稿基于较旧的磁盘版本或此前发生过外部冲突。草稿已保留，不会自动覆盖磁盘内容；请复制草稿，或重新载入外部版本。');
+      setError('恢复草稿基于较旧的磁盘版本或此前发生过外部冲突。草稿已保留，不会自动覆盖磁盘内容；请复制草稿，或重新载入外部版本。', 'conflict');
     } else {
       setSaveState('dirty');
       setError(null);
