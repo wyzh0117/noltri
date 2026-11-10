@@ -1444,7 +1444,14 @@ export default function WorkbenchApp({
       }
       activateIntake({ action: 'selectedText', requestId: event.payload.requestId, text: event.payload.text, sourceApp: event.payload.appName });
     })
-      .then(keepListener)
+      .then((stopListening) => {
+        keepListener(stopListening);
+        if (!cancelled) {
+          void commands.startAxSelectionOffersIfEnabled().catch(() => {
+            if (!cancelled) setNotice('无法启动或接收系统选中文本；请重新打开应用后重试。');
+          });
+        }
+      })
       .catch(() => { if (!cancelled) setNotice('无法接收系统选中文本；请重新打开应用后重试。'); });
     return () => {
       cancelled = true;

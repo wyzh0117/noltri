@@ -12,7 +12,7 @@ mod updates;
 
 use std::sync::Arc;
 
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,7 +20,6 @@ pub fn run() {
     let runtime_for_setup = runtime.clone();
     let capture_state = Arc::new(capture::CaptureState::default());
     let ax_selection_state = Arc::new(ax_selection::AxSelectionOfferState::default());
-    let ax_selection_state_for_setup = ax_selection_state.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -56,7 +55,6 @@ pub fn run() {
                     return Ok(());
                 }
             }
-            ax_selection::initialize(app.handle(), ax_selection_state_for_setup.as_ref());
             hotkey::register_global_shortcuts(app.handle().clone());
             runtime::start(app.handle().clone(), runtime_for_setup);
             Ok(())
@@ -71,6 +69,7 @@ pub fn run() {
                 hotkey::save_intake_shortcuts,
                 runtime::get_runtime_diagnostics,
                 capture::trace_capture_stage,
+                ax_selection::start_ax_selection_offers_if_enabled,
                 ax_selection::get_ax_selection_offer_status,
                 ax_selection::set_ax_selection_offers_enabled,
                 commands::get_settings,
@@ -102,11 +101,18 @@ pub fn run() {
     let capture_state_for_exit = capture_state.clone();
     let ax_selection_state_for_exit = ax_selection_state.clone();
     app.run(move |_app_handle, event| {
-        if matches!(event, RunEvent::Exit) {
-            ax_selection::stop(ax_selection_state_for_exit.as_ref());
-            hotkey::unregister_global_shortcuts();
-            capture_state_for_exit.cancel_in_progress_capture();
-            let _ = runtime.shutdown();
+        match event {
+            RunEvent::WindowEvent { label, event: WindowEvent::Destroyed, .. } if label == "main" => {
+                // The AX observer is app-wide; stop it when its consumer webview disappears.
+                ax_selection::stop(ax_selection_state_for_exit.as_ref());
+            }
+            RunEvent::Exit => {
+                ax_selection::stop(ax_selection_state_for_exit.as_ref());
+                hotkey::unregister_global_shortcuts();
+                capture_state_for_exit.cancel_in_progress_capture();
+                let _ = runtime.shutdown();
+            }
+            _ => {}
         }
     });
 }

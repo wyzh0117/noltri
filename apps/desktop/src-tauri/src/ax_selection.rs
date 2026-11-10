@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::{c_char, c_void, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 pub const AX_SELECTION_ACCEPTED_EVENT: &str = "noltri-ax-selection-accepted";
 const MAX_SELECTION_CHARS: usize = 20_000;
@@ -142,17 +142,35 @@ fn start_if_enabled(_app: &AppHandle, _state: &AxSelectionOfferState) -> AxSelec
     AxSelectionOfferStatus { enabled: false, permission: "unsupported" }
 }
 
-pub fn initialize(app: &AppHandle, state: &AxSelectionOfferState) {
-    #[cfg(target_os = "macos")]
-    { let _ = start_if_enabled(app, state); }
-}
-
 pub fn stop(state: &AxSelectionOfferState) {
     #[cfg(target_os = "macos")]
     {
         unsafe { noltri_ax_offer_stop(); }
         if let Some(context) = state.context().take() { free_context(context); }
     }
+}
+
+#[tauri::command]
+pub async fn start_ax_selection_offers_if_enabled(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, Arc<AxSelectionOfferState>>,
+) -> Result<AxSelectionOfferStatus, String> {
+    if window.label() != "main" {
+        return Err("window_command_forbidden".to_owned());
+    }
+    let state = Arc::clone(state.inner());
+    let scheduled_app = app.clone();
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    app.run_on_main_thread(move || {
+        let result = if scheduled_app.get_webview_window("main").is_some() {
+            Ok(start_if_enabled(&scheduled_app, state.as_ref()))
+        } else {
+            Err("main_window_unavailable".to_owned())
+        };
+        let _ = sender.try_send(result);
+    }).map_err(|_| "ax_offer_main_thread_unavailable".to_owned())?;
+    receiver.recv().await.ok_or_else(|| "ax_offer_main_thread_unavailable".to_owned())?
 }
 
 #[tauri::command]

@@ -406,6 +406,7 @@ export const commands = {
     invoke<ProviderModel[]>('fetch_available_models', { input }),
   getIntakeShortcutStatus: () => invoke<IntakeShortcutStatus>('get_intake_shortcut_status'),
   saveIntakeShortcuts: (bindings: ShortcutBindings) => invoke<IntakeShortcutStatus>('save_intake_shortcuts', { bindings }),
+  startAxSelectionOffersIfEnabled: () => invoke<AxSelectionOfferStatus>('start_ax_selection_offers_if_enabled'),
   getAxSelectionOfferStatus: () => invoke<AxSelectionOfferStatus>('get_ax_selection_offer_status'),
   setAxSelectionOffersEnabled: (enabled: boolean) => invoke<AxSelectionOfferStatus>('set_ax_selection_offers_enabled', { enabled }),
   getRuntimeDiagnostics: () => invoke<RuntimeDiagnostics>('get_runtime_diagnostics'),
