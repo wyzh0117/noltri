@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { fileURLToPath } from 'node:url';
+import { ApiClientError } from '@noltri/api-client';
 import WorkbenchApp from './WorkbenchApp';
+import { searchVaultWithLiteralFallback } from './WorkbenchNotes';
 import type { WorkbenchApi } from './api';
 import { createReviewBrowser } from './review-headless-test';
 
@@ -17,17 +19,40 @@ it('offers a main workspace inbox alongside the preserved notes workspace', () =
   expect(markup).toContain('规则与处理记录');
 });
 
+it('keeps valid compound search syntax and only retries invalid input as literal text', async () => {
+  const calls: string[] = [];
+  const scope = '[noteType=item] [isAiDerived=false] -[archived=true]';
+  let failure: ApiClientError | null = null;
+  const api = { searchVault: async (query: string) => {
+    calls.push(query);
+    if (failure !== null) { const error = failure; failure = null; throw error; }
+    return { revision: 0, query, results: [] };
+  } } as unknown as WorkbenchApi;
+  await searchVaultWithLiteralFallback(api, 'ordinary tag:synthetic OR path:folder', 80, scope);
+  expect(calls).toEqual([`${scope} (ordinary tag:synthetic OR path:folder)`]);
+  failure = new ApiClientError(400, 'invalid_request', 'unsupported operator');
+  await searchVaultWithLiteralFallback(api, 'Category: schedule.', 80, scope);
+  expect(calls.slice(-2)).toEqual([`${scope} (Category: schedule.)`, `${scope} (/Category: schedule\\./i)`]);
+  failure = new ApiClientError(503, 'internal_error', 'offline');
+  await expect(searchVaultWithLiteralFallback(api, 'unavailable', 80, scope)).rejects.toThrow('offline');
+  expect(calls.at(-1)).toBe(`${scope} (unavailable)`);
+  failure = new ApiClientError(400, 'invalid_request', 'stale');
+  await expect(searchVaultWithLiteralFallback(api, 'old', 80, scope, () => false)).rejects.toThrow('stale');
+  expect(calls.at(-1)).toBe(`${scope} (old)`);
+});
+
 const harness = `
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { EditorView } from '@codemirror/view';
+import { ApiClientError } from '@noltri/api-client';
 import WorkbenchApp from ${JSON.stringify(fileURLToPath(new URL('./WorkbenchApp.tsx', import.meta.url)))};
-let root, calls, source, secondSource, bootstrap, direction, generation, rememberedNotes, holdItem, pendingItem, itemSettled, markdownFiles, confirms;
+let root, calls, source, secondSource, bootstrap, direction, generation, rememberedNotes, holdItem, pendingItem, itemSettled, markdownFiles, confirms, heldSearch, slowSearchFinished;
 const markdownBody=${JSON.stringify(restoredMarkdownBody)};
 const otherMarkdownBody='# 不同的同名笔记\\n\\n无关正文。\\n';
 const restoredPath=${JSON.stringify(restoredMarkdownPath)};
 const markdownMetadata={frontmatter:{},headings:[{heading:'恢复后的笔记',level:1,position:{start:{offset:0}}}],tags:[],links:[],blocks:{}};
-const markdownFile=path=>{const entry=markdownFiles.find(file=>file.path===path);if(!entry)throw Error('Unknown synthetic Vault path: '+path);return{path:entry.path,content:entry.content,mtime:1,ctime:1,size:new TextEncoder().encode(entry.content).length,etag:'synthetic-'+path,metadata:markdownMetadata};};
+const markdownFile=path=>{const entry=markdownFiles.find(file=>file.path===path);if(!entry)throw Error('Unknown synthetic Vault path: '+path);return{path:entry.path,content:entry.content,mtime:1,ctime:1,size:new TextEncoder().encode(entry.content).length,etag:'synthetic-'+path,metadata:{...markdownMetadata,frontmatter:entry.frontmatter??{}}};};
 window.confirm=message=>{confirms.push(String(message));return true;};
 const findSource=id=>[source,secondSource].find(s=>s?.id===id);
 let clipboardReads=[];
@@ -42,7 +67,8 @@ const known = {
  tree:async()=>({rootId:null,totalNodes:bootstrap&&!direction?0:1,nodes:bootstrap&&!direction?[]:[{id:'subject-a',title:direction??'Synthetic subject',nodeType:'discipline',summary:null,status:'active',confidence:null,itemCount:0,descendantItemCount:0,childCount:0,children:[]}]}),
  health:async()=>({status:'ok',productId:'synthetic-test',instanceId:'synthetic-test',protocolVersion:'1',version:'0',storageDriver:'memory',storage:{driver:'memory',ok:true,detail:{}},aiProvider:'disabled',embeddingDim:0,requiresAiKey:false}),
  listItems:async()=>({items:[],limit:200,offset:0}),
- vaultSnapshot:async()=>({rootPath:'/synthetic-review-vault',files:markdownFiles.map(file=>({path:file.path,name:file.path.split('/').at(-1),kind:'file',extension:'md',mtime:1,size:file.content.length,frontmatter:{}})),revision:0}),
+ vaultSnapshot:async()=>({rootPath:'/synthetic-review-vault',files:markdownFiles.map(file=>({path:file.path,name:file.path.split('/').at(-1),kind:'file',extension:'md',mtime:1,size:file.content.length,frontmatter:file.frontmatter??{}})),revision:0}),
+ searchVault:async query=>{const itemSearch=query.startsWith('[noteType=item]');if(itemSearch&&query.includes('slow-unique')){await new Promise(resolve=>{heldSearch=resolve;});slowSearchFinished=true;}const term=itemSearch?query.slice(query.indexOf('(')+1,-1):query;if(term.startsWith('Category:'))throw new ApiClientError(400,'invalid_request','不支持的搜索运算符：category');if(term==='offline-unique')throw new ApiClientError(503,'internal_error','Synthetic Vault offline');const start=term.indexOf('/');const end=term.lastIndexOf('/');const needle=start>=0&&end>start?new RegExp(term.slice(start+1,end),'i'):null;const results=markdownFiles.filter(file=>(!itemSearch||(file.frontmatter?.noteType==='item'&&file.frontmatter?.isAiDerived===false))&&(needle?needle.test(file.content):file.content.toLocaleLowerCase().includes(term.toLocaleLowerCase()))).map(file=>({path:file.path,title:'Synthetic image',score:1,matches:[],snippet:'',titleMatches:[],snippetMatches:[],matchedTags:[]}));return{revision:0,query,results:itemSearch&&results.length?[...results,results[0]]:results};},
  vaultSettings:async()=>({newLinkFormat:'shortest',propertyTypes:{}}),
  vaultDiagnostics:async()=>({revision:0,indexing:false,queued:0,failedFiles:[],lastIndexedAt:null,cache:{loaded:true,persisted:false,entries:0},worker:{restarts:0,timeouts:0}}),
  vaultChanges:async()=>({revision:0,reset:false,events:[]}),
@@ -64,7 +90,11 @@ const known = {
 };
 const api=new Proxy({}, {get(_target,name){return (...args)=>{calls.push([String(name),...structuredClone(args)]);if(!(name in known))return Promise.reject(Error('Unexpected fake API call: '+String(name)));return known[name](...args);};}});
 window.harness={
- mount(empty=false,withMarkdown=false){root?.unmount();calls=[];confirms=[];generation=1;bootstrap=empty;direction=null;secondSource=null;markdownFiles=withMarkdown?[{path:'Other/恢复后的笔记.md',content:otherMarkdownBody},{path:restoredPath,content:markdownBody}]:[];source=empty?{...initial(),id:'source-seed',sourceTitle:'Synthetic target seed',rawText:'Synthetic destination seed for manual review.',processingStatus:'failed'}:initial();rememberedNotes=null;holdItem=false;pendingItem=null;itemSettled=false;clipboardReads=[];localStorage.clear();root=createRoot(document.getElementById('root'));root.render(<WorkbenchApp api={api} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);},
+ mount(empty=false,withMarkdown=false){root?.unmount();calls=[];confirms=[];generation=1;bootstrap=empty;direction=null;secondSource=null;markdownFiles=withMarkdown?[{path:'Other/恢复后的笔记.md',content:otherMarkdownBody},{path:restoredPath,content:markdownBody}]:[];source=empty?{...initial(),id:'source-seed',sourceTitle:'Synthetic target seed',rawText:'Synthetic destination seed for manual review.',processingStatus:'failed'}:initial();rememberedNotes=null;holdItem=false;pendingItem=null;itemSettled=false;heldSearch=null;slowSearchFinished=false;clipboardReads=[];localStorage.clear();root=createRoot(document.getElementById('root'));root.render(<WorkbenchApp api={api} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);},
+ mountKnowledgeFixture(){root?.unmount();calls=[];confirms=[];generation=1;bootstrap=false;direction=null;secondSource=null;const item=(id,content,archived=false,isAiDerived=false)=>({path:'_library/Items/'+id+'.md',content,frontmatter:{noteType:'item',id,title:'Synthetic image',sourceIds:['source-original'],isAiDerived,archived}});markdownFiles=[item('one','Category: schedule.'),item('two','Category: schedule. second'),item('archived','Category: schedule.',true),item('automatic','Category: schedule.',false,true),item('slow','slow-unique'),item('fast','fast-unique')];source={...initial(),rawText:'',reviewStatus:'confirmed',reviewRevision:1,reviewConfirmation:{rawSourceId:'source-original',reviewRevision:1,knowledgeItemId:'one',text:'Category: schedule.',targetNodeId:'subject-a',path:[{id:'subject-a',title:'Synthetic subject'}]}};rememberedNotes=null;holdItem=false;pendingItem=null;itemSettled=false;heldSearch=null;slowSearchFinished=false;clipboardReads=[];localStorage.clear();root=createRoot(document.getElementById('root'));root.render(<WorkbenchApp api={api} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);},
+ releaseSlowSearch(){if(!heldSearch)throw Error('No synthetic search is held');const resolve=heldSearch;heldSearch=null;resolve();},
+ slowSearchFinished:()=>slowSearchFinished,
+ sourceState:()=>structuredClone(source),
  remountEmptyCatalog(){root.unmount();bootstrap=true;direction=null;localStorage.clear();root=createRoot(document.getElementById('root'));root.render(<WorkbenchApp api={api} apiBaseUrl="http://127.0.0.1:1" mcpEndpoint="" tokenConfigured={false} outsideTauri />);},
  addSecondSource(){secondSource={...initial(),id:'source-second',sourceTitle:'Synthetic second source',rawText:'Independent second original for review.'};},
  input(selector,value){const el=document.querySelector(selector);const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));},
@@ -84,6 +114,7 @@ window.harness={
  target(value){const el=document.querySelector('#inbox-review-target');el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));},
  edit(value){const el=document.querySelector('#inbox-review-draft');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));},
  openSearchPath(path){const button=[...document.querySelectorAll('.sidebar-search-results button')].find(button=>button.querySelector('small')?.textContent?.trim()===path);if(!button)throw Error('Missing unified-search path '+path);button.click();},
+ openKnowledgePath(path){const button=[...document.querySelectorAll('.sidebar-search-results button')].find(button=>button.querySelector('small')?.textContent?.trim()==='人工知识稿 · '+path);if(!button)throw Error('Missing knowledge-search path '+path);button.click();},
  state(){
   const main=document.querySelector('.vault-note-main');
   const editor=main?.querySelector('.cm-editor');
@@ -125,6 +156,66 @@ async function openInbox(): Promise<void> {
 describe('real App Notes and Inbox navigation', () => {
   beforeAll(() => browser.start(), 30_000);
   afterAll(() => browser.close());
+
+  it('finds distinct active human knowledge by literal body and opens the matched item in reading mode', async () => {
+    await evaluate('window.harness.mountKnowledgeFixture()');
+    await until(calls, value => value.some(call => call[0] === 'vaultSnapshot'));
+    await click('搜索');
+    await browser.until(appState, state => state.navigationMode === 'search');
+    await evaluate(`window.harness.input('input[aria-label="搜索知识与资料"]','Category: schedule.')`);
+    const results = await browser.until(appState, state => state.searchResultPaths.length === 2);
+    expect(results.searchResultPaths).toEqual(['人工知识稿 · _library/Items/one.md', '人工知识稿 · _library/Items/two.md']);
+    expect(results.text).not.toContain('知识稿搜索暂不可用');
+    expect(results.calls.some((call: any[]) => call[0] === 'searchVault' && call[1] === 'Category: schedule.')).toBe(true);
+    expect(results.calls.some((call: any[]) => call[0] === 'searchVault' && String(call[1]).startsWith('/Category:'))).toBe(true);
+    await evaluate(`window.harness.openKnowledgePath('_library/Items/one.md')`);
+    const opened = await browser.until(appState, state => state.notePath === '_library/Items/one.md' && state.readerBlocks.includes('Category: schedule.'));
+    expect(opened.editorDoc).toBeNull();
+    expect(opened.calls.some((call: any[]) => call[0] === 'vaultFile' && call[1] === '_library/Items/one.md')).toBe(true);
+    expect(opened.calls.some((call: any[]) => call[0] === 'reviewSource' || call[0] === 'writeVaultFile')).toBe(false);
+    const source = await evaluate<any>('window.harness.sourceState()');
+    expect(source.rawText).toBe('');
+    expect(source.reviewConfirmation.text).toBe('Category: schedule.');
+    expect(browser.errors).toEqual([]);
+  });
+
+  it('preserves explicit tag and path Vault query operators', async () => {
+    await evaluate('window.harness.mountKnowledgeFixture()');
+    await until(calls, value => value.some(call => call[0] === 'vaultSnapshot'));
+    await click('搜索');
+    for (const query of ['tag:synthetic', 'path:folder', 'ordinary tag:synthetic', 'ordinary path:folder']) {
+      await evaluate(`window.harness.input('input[aria-label="搜索知识与资料"]',${JSON.stringify(query)})`);
+      const observed = await until(calls, value => value.some(call => call[0] === 'searchVault' && call[1] === query)
+        && value.some(call => call[0] === 'searchVault' && String(call[1]).startsWith('[noteType=item]') && String(call[1]).includes(`(${query})`)));
+      expect(observed.filter((call: any[]) => call[0] === 'searchVault' && String(call[1]).includes(query)).every((call: any[]) => call[2] === 80)).toBe(true);
+      expect(observed.filter((call: any[]) => call[0] === 'searchVault' && String(call[1]).includes(query)).every((call: any[]) => !String(call[1]).includes(`/${query}/`))).toBe(true);
+    }
+  });
+
+  it('reports Vault failures instead of retrying them as literal input or claiming no matches', async () => {
+    await evaluate('window.harness.mountKnowledgeFixture()');
+    await until(calls, value => value.some(call => call[0] === 'vaultSnapshot'));
+    await click('搜索');
+    await evaluate(`window.harness.input('input[aria-label="搜索知识与资料"]','offline-unique')`);
+    const result = await browser.until(appState, state => state.text.includes('知识稿搜索暂不可用：Synthetic Vault offline'));
+    expect(result.text).not.toContain('没有匹配的知识或资料');
+    expect(result.calls.filter((call: any[]) => call[0] === 'searchVault' && String(call[1]).includes('offline-unique'))).toHaveLength(2);
+  });
+
+  it('ignores an older knowledge-body search response after the user changes the query', async () => {
+    await evaluate('window.harness.mountKnowledgeFixture()');
+    await until(calls, value => value.some(call => call[0] === 'vaultSnapshot'));
+    await click('搜索');
+    await evaluate(`window.harness.input('input[aria-label="搜索知识与资料"]','slow-unique')`);
+    await until(calls, value => value.some(call => call[0] === 'searchVault' && String(call[1]).startsWith('[noteType=item]') && String(call[1]).includes('slow-unique')));
+    await evaluate(`window.harness.input('input[aria-label="搜索知识与资料"]','fast-unique')`);
+    await browser.until(appState, state => state.searchResultPaths.includes('人工知识稿 · _library/Items/fast.md'));
+    await evaluate('window.harness.releaseSlowSearch()');
+    await until(() => evaluate<boolean>('window.harness.slowSearchFinished()'), Boolean);
+    const results = await appState();
+    expect(results.searchResultPaths).toEqual(['人工知识稿 · _library/Items/fast.md']);
+    expect(browser.errors).toEqual([]);
+  });
 
   it('opens a restored Markdown search result with exact editor lines and reader paragraphs', async () => {
     await mount(false, true);

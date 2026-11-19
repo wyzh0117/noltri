@@ -61,6 +61,31 @@ final class OfferTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.observe(snapshot: selected, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start.addingTimeInterval(2)), .none)
     }
 
+    func testDismissedSelectionStaysDismissedWhenItsBoundsMove() {
+        let start = Date(timeIntervalSince1970: 4_000)
+        let tracker = AXSelectionOfferTracker(stabilityInterval: 0, makeRequestID: { "ax-dismissed" })
+        let selected = snapshot()
+        _ = tracker.observe(snapshot: selected, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start)
+        guard case .presented = tracker.observe(snapshot: selected, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start) else {
+            return XCTFail("expected offer")
+        }
+
+        tracker.dismiss(requestID: "stale-request")
+        let moved = AXSelectionSnapshot(processID: selected.processID, focusedElementIdentity: selected.focusedElementIdentity, text: selected.text, selectionRange: selected.selectionRange, bounds: CGRect(x: 21, y: 30, width: 140, height: 20))
+        guard case .moved = tracker.observe(snapshot: moved, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start) else {
+            return XCTFail("a stale dismissal must not consume the current offer")
+        }
+        tracker.dismiss(requestID: "ax-dismissed")
+        XCTAssertEqual(tracker.observe(snapshot: selected, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start), .none)
+        XCTAssertEqual(tracker.observe(snapshot: nil, bundleIdentifier: nil, applicationName: nil, now: start), .none)
+        XCTAssertEqual(tracker.observe(snapshot: moved, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start), .none)
+        let next = snapshot(text: "Another synthetic selection")
+        XCTAssertEqual(tracker.observe(snapshot: next, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start), .none)
+        guard case .presented = tracker.observe(snapshot: next, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: start) else {
+            return XCTFail("a different selection should produce a new offer")
+        }
+    }
+
     func testOnlyExplicitlyAllowlistedDesktopAppsAreObserved() {
         XCTAssertTrue(AXSupportedApplications.contains("com.apple.TextEdit"))
         XCTAssertTrue(AXSupportedApplications.contains("com.apple.Notes"))

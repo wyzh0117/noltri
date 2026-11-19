@@ -19,7 +19,7 @@ const CASES: readonly (readonly [string, string | undefined])[] = [
   ['chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html', 'pdf_viewer'],
   ['moz-extension://1b2c-3d4f/pdfjs/web/viewer.html', 'pdf_viewer'],
   ['chrome-extension://abcdefghijklmnopabcdefghijklmnop/home.html', 'other_extension'],
-  ['file:///Users/youngi/notes.md', 'local_file'],
+  ['file:///tmp/noltri-fixture/notes.md', 'local_file'],
   ['data:text/plain,hello', 'unsupported_scheme'],
   ['blob:https://example.com/1f2e3d4c', 'unsupported_scheme'],
   ['not-a-url', 'unsupported_scheme'],

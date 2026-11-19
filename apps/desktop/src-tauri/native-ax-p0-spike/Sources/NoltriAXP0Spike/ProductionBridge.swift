@@ -59,7 +59,11 @@ private final class AXSelectionOfferService {
         ) {
         case .presented(let offer), .moved(let offer):
             if panel == nil { panel = SelectionOfferPanel() }
-            panel?.present(offer) { [weak self] requestID in self?.accept(requestID: requestID) }
+            panel?.present(offer, onAccept: { [weak self] requestID in
+                self?.accept(requestID: requestID)
+            }, onDismiss: { [weak self] requestID in
+                self?.tracker.dismiss(requestID: requestID)
+            })
         case .cancelled:
             panel?.dismiss()
         case .none:

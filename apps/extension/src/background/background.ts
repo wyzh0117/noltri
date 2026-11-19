@@ -18,13 +18,15 @@ import { loadSettings, localArea, syncArea, type ExtensionSettings } from '../se
 import { ensureDeviceId } from './device-id';
 import { requestFromMenuImage, requestFromMenuPage, requestFromMenuSelection, requestFromPillSelection, type CaptureIntent, type CaptureRequestMeta } from '../capture/pipeline';
 import { captureIntent, type CaptureOutcome } from '../api/client';
-import { createOutbox, disabledOutbox, type Outbox } from '../outbox/outbox';
+import { OUTBOX_STORAGE_KEY, createOutbox, disabledOutbox, type Outbox } from '../outbox/outbox';
 import { drainOutbox, queueCapture, shouldQueue, type DrainReport } from '../outbox/drain';
 import { CAPTURE_IMAGE_MENU_ID, CAPTURE_MENU_ID, CAPTURE_PAGE_MENU_ID, registerCaptureContextMenu } from '../context-menu/register';
 
 interface AcceptedReply {
   readonly accepted: boolean;
 }
+
+const OUTBOX_RETRY_ALARM = 'noltri.outbox.retry';
 
 void registerCaptureContextMenu();
 chrome.runtime.onInstalled.addListener(() => {
@@ -36,6 +38,17 @@ chrome.runtime.onStartup.addListener(() => {
   // The browser coming back is the moment a queue written before a restart should be tried again.
   void flushOutbox();
 });
+
+chrome.alarms.onAlarm.addListener(({ name }) => {
+  if (name === OUTBOX_RETRY_ALARM) {
+    void flushOutbox().catch(() => console.warn('Noltri could not retry its capture queue.'));
+  }
+});
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && OUTBOX_STORAGE_KEY in changes) void syncOutboxRetryAlarm();
+});
+// Chrome may clear alarms across restarts; the stored queue is the source of truth.
+void syncOutboxRetryAlarm();
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if ([CAPTURE_MENU_ID, CAPTURE_PAGE_MENU_ID, CAPTURE_IMAGE_MENU_ID].includes(String(info.menuItemId))) void handleMenuClick(info, tab);
@@ -63,9 +76,8 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
     if (isOutboxCommand(message, MESSAGE_CLEAR_OUTBOX)) {
-      sendResponse({ accepted: true });
-      void outboxOf().clear();
-      return false;
+      void outboxOf().clear().then(() => sendResponse({ accepted: true }), () => sendResponse({ accepted: false }));
+      return true;
     }
     return false;
   },
@@ -156,6 +168,24 @@ async function requestMeta(): Promise<CaptureRequestMeta> {
  */
 function outboxOf(): Outbox {
   return chrome.extension?.inIncognitoContext === true ? disabledOutbox() : createOutbox(localArea());
+}
+
+async function syncOutboxRetryAlarm(): Promise<void> {
+  const outbox = outboxOf();
+  if (!outbox.enabled) return;
+  try {
+    // Writes from the popup and worker use this same lock.
+    await outbox.withLock(async () => {
+      const { entries } = await outbox.read();
+      if (entries.length === 0) {
+        await chrome.alarms.clear(OUTBOX_RETRY_ALARM);
+      } else if (!(await chrome.alarms.get(OUTBOX_RETRY_ALARM))) {
+        await chrome.alarms.create(OUTBOX_RETRY_ALARM, { periodInMinutes: 1 });
+      }
+    });
+  } catch {
+    console.warn('Noltri could not schedule its capture queue retry.');
+  }
 }
 
 async function sendCapture(request: CaptureRequest, tabId: number | undefined): Promise<void> {

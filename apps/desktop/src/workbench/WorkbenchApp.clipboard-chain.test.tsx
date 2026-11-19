@@ -18,7 +18,7 @@ window.__TAURI_INTERNALS__={transformCallback:callback=>{callbacks.set(++nextCal
  if(command==='plugin:event|unlisten')return;
  if(command==='start_ax_selection_offers_if_enabled'){listenerSequence.push('start:ax-listener='+[...listeners.values()].includes('noltri-ax-selection-accepted'));return {enabled:false,permission:'not_checked'};}
  if(command==='get_intake_shortcut_status')return {screenshot:'registered',openIntake:'registered'};
- if(command==='trace_capture_stage'){traces.push({stage:args.stage,errorCode:args.errorCode});return;}
+ if(command==='trace_capture_stage'){traces.push({requestId:args.requestId,stage:args.stage,errorCode:args.errorCode});return;}
  if(command==='snapshot_system_clipboard'){if(holdSnapshot)await new Promise(resolve=>releaseSnapshot=resolve);return structuredClone(snapshot);}
  if(command==='take_clipboard_snapshot'){if(imageFailure)throw Error('Synthetic image handoff failure');return Array.from(png);}
  if(command==='begin_screen_capture')return {status:'captured',captureId:'synthetic-screen',mimeType:'image/png',byteLength:png.length,capturedAt:'2026-11-04T00:00:00Z',clipboardCopied:true,source:null};
@@ -44,7 +44,7 @@ window.harness={
 `;
 const browser = createReviewBrowser(harness, fileURLToPath(new URL('../..', import.meta.url)));
 const { evaluate, until } = browser;
-type State = { text: string | null; images: number; notice: string; same: boolean; calls: string[]; traces: Array<{ stage: string; errorCode?: string }>; clipboardAPICalls: number; listenerSequence: string[] };
+type State = { text: string | null; images: number; notice: string; same: boolean; calls: string[]; traces: Array<{ requestId: string; stage: string; errorCode?: string }>; clipboardAPICalls: number; listenerSequence: string[] };
 const state = () => evaluate<State>('window.harness.state()');
 const available = (text?: string, image = false) => ({ status: 'available', snapshotId: 'synthetic-clipboard', capturedAt: '2026-11-04T00:00:00Z', source: null, ...(text === undefined ? {} : { text }), ...(image ? { imageMimeType: 'image/png' } : {}) });
 async function mount(snapshot: object, hold = false, failImage = false): Promise<void> {
@@ -55,8 +55,8 @@ const activate = (action: string, id: string) => evaluate(`window.harness.activa
 async function finishV(): Promise<State> {
   return until(state, value => value.calls.includes('snapshot_system_clipboard') && value.notice.length > 0);
 }
-async function finishS(): Promise<State> {
-  return until(state, value => value.images > 0 && value.traces.some(trace => trace.stage === 'busy_release'));
+async function finishS(requestId: string, expectedImages = 1): Promise<State> {
+  return until(state, value => value.images >= expectedImages && value.traces.some(trace => trace.requestId === requestId && trace.stage === 'busy_release'));
 }
 
 describe('synthetic native clipboard to real intake editor', () => {
@@ -90,7 +90,7 @@ describe('synthetic native clipboard to real intake editor', () => {
     expect((await finishV()).text).toBe('Synthetic V text retained through S.');
     await evaluate('window.harness.remember();window.harness.rerender();new Promise(resolve=>setTimeout(resolve,3000))');
     await activate('capture', 'synthetic-s-normal');
-    const result = await finishS();
+    const result = await finishS('synthetic-s-normal');
     expect(result).toMatchObject({ text: 'Synthetic V text retained through S.', images: 1, same: true, clipboardAPICalls: 0 });
     expect(result.calls.filter(call => call === 'snapshot_system_clipboard')).toHaveLength(1);
   });
@@ -105,7 +105,7 @@ describe('synthetic native clipboard to real intake editor', () => {
     await evaluate('window.harness.release()');
     expect((await finishV()).text).toBe('Synthetic deferred V text.');
     await activate('capture', 'synthetic-s-after-v');
-    expect(await finishS()).toMatchObject({ text: 'Synthetic deferred V text.', images: 1, clipboardAPICalls: 0 });
+    expect(await finishS('synthetic-s-after-v')).toMatchObject({ text: 'Synthetic deferred V text.', images: 1, clipboardAPICalls: 0 });
   });
 
   it.each(['empty', 'denied', 'failed', 'image-only', 'whitespace'])('leaves raw text empty for %s V and preserves S image', async (kind) => {
@@ -115,7 +115,7 @@ describe('synthetic native clipboard to real intake editor', () => {
     expect(before.text).toBe('');
     if (kind === 'image-only') expect(before.images).toBe(1);
     await activate('capture', 'synthetic-s-' + kind);
-    const after = await finishS();
+    const after = await finishS('synthetic-s-' + kind, kind === 'image-only' ? 2 : 1);
     expect(after.text).toBe('');
     expect(after.images).toBe(kind === 'image-only' ? 2 : 1);
     expect(after.notice).toContain('截图已复制到剪贴板');
@@ -127,6 +127,6 @@ describe('synthetic native clipboard to real intake editor', () => {
     await activate('openIntake', 'synthetic-v-image-failure');
     expect((await finishV()).text).toBe('Synthetic mixed snapshot text.');
     await activate('capture', 'synthetic-s-after-image-failure');
-    expect(await finishS()).toMatchObject({ text: 'Synthetic mixed snapshot text.', images: 1, clipboardAPICalls: 0 });
+    expect(await finishS('synthetic-s-after-image-failure')).toMatchObject({ text: 'Synthetic mixed snapshot text.', images: 1, clipboardAPICalls: 0 });
   });
 });

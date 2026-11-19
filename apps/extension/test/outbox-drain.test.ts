@@ -65,6 +65,59 @@ function outboxWith(entries: readonly OutboxEntry[]) {
   return { area, outbox: createOutbox(area) };
 }
 
+it('retries the shared queue on an alarm and stops after Core acknowledges it', async () => {
+  const alarmName = 'noltri.outbox.retry';
+  const alarms = new Map<string, chrome.alarms.AlarmCreateInfo>();
+  const send = vi.fn().mockResolvedValueOnce(unreachable).mockResolvedValue(stored(true));
+  const events = { addListener: vi.fn() };
+  const onAlarm = { addListener: vi.fn<(listener: (alarm: { name: string }) => void) => void>() };
+  const onChanged = { addListener: vi.fn<(listener: (changes: Record<string, unknown>, area: string) => void) => void>() };
+  const area = fakeArea();
+  const local = {
+    ...area,
+    set: async (items: Record<string, unknown>) => {
+      await area.set(items);
+      onChanged.addListener.mock.calls[0]?.[0](items, 'local');
+    },
+  };
+  vi.stubGlobal('chrome', {
+    storage: { local, sync: fakeArea(), onChanged },
+    alarms: {
+      onAlarm,
+      get: async (name: string) => alarms.get(name),
+      create: async (name: string, options: chrome.alarms.AlarmCreateInfo) => { alarms.set(name, options); },
+      clear: async (name: string) => alarms.delete(name),
+    },
+    runtime: { onInstalled: events, onStartup: events, onMessage: events },
+    contextMenus: { onClicked: events, removeAll: async () => {}, create: vi.fn() },
+  });
+  vi.doMock('../src/api/client', () => ({ captureIntent: send }));
+  try {
+    await import('../src/background/background');
+    const fireAlarm = onAlarm.addListener.mock.calls[0]?.[0];
+    expect(fireAlarm).toBeDefined();
+    const outbox = createOutbox(local);
+    const entry = entryOf('req-alarm-retry');
+    expect(alarms.size).toBe(0);
+    await queueCapture(outbox, entry);
+    await vi.waitFor(() => expect(alarms.get(alarmName)).toEqual({ periodInMinutes: 1 }));
+
+    fireAlarm?.({ name: alarmName });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect((await outbox.read()).entries).toEqual([entry]);
+    fireAlarm?.({ name: alarmName });
+    fireAlarm?.({ name: alarmName });
+    await vi.waitFor(() => expect(alarms.size).toBe(0));
+
+    expect((await outbox.read()).entries).toEqual([]);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenNthCalledWith(2, expect.anything(), entry.request);
+  } finally {
+    vi.doUnmock('../src/api/client');
+    vi.unstubAllGlobals();
+  }
+});
+
 describe('drainOutbox resends with the key it queued', () => {
   it('walks the queue oldest-first and sends each entry its own stored requestId', async () => {
     const { outbox } = outboxWith([entryOf('req-drain-aaaa'), entryOf('req-drain-bbbb')]);
@@ -168,6 +221,44 @@ describe('shouldQueue separates a refusal from an outage', () => {
 });
 
 describe('queueCapture tells the page what actually happened', () => {
+  it('keeps concurrent captures and does not overwrite them during a drain', async () => {
+    const area = fakeArea();
+    const first = createOutbox(area);
+    const second = createOutbox(area);
+    await Promise.all([
+      queueCapture(first, entryOf('req-concurrent-a')),
+      queueCapture(second, entryOf('req-concurrent-b')),
+    ]);
+    expect((await first.read()).entries.map((entry) => entry.id)).toEqual(['req-concurrent-a', 'req-concurrent-b']);
+
+    let releaseSend!: () => void;
+    let sendStarted!: () => void;
+    const started = new Promise<void>((resolve) => { sendStarted = resolve; });
+    const pending = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const drain = drainOutbox({ outbox: first, send: async () => { sendStarted(); await pending; return stored(); } });
+    await started;
+    await queueCapture(second, entryOf('req-during-drain'));
+    releaseSend();
+    await drain;
+    expect((await first.read()).entries.map((entry) => entry.id)).toEqual(['req-during-drain']);
+  });
+
+  it('does not restore a cleared entry when an in-flight drain fails', async () => {
+    const area = fakeArea({ [OUTBOX_STORAGE_KEY]: [entryOf('req-before-clear')] });
+    const first = createOutbox(area);
+    const second = createOutbox(area);
+    let releaseSend!: () => void;
+    let sendStarted!: () => void;
+    const started = new Promise<void>((resolve) => { sendStarted = resolve; });
+    const pending = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const drain = drainOutbox({ outbox: first, send: async () => { sendStarted(); await pending; return refused; } });
+    await started;
+    await second.clear();
+    releaseSend();
+    await drain;
+    expect((await first.read()).entries).toEqual([]);
+  });
+
   it('promises a retry only when the entry is really in the queue', async () => {
     const outbox = createOutbox(fakeArea());
     const report = await queueCapture(outbox, entryOf('req-q-0001'));

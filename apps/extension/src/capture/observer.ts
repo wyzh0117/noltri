@@ -18,6 +18,7 @@ export interface ObserverHandlers {
 
 export interface SelectionObserver {
   readonly refresh: () => void;
+  readonly hide: () => void;
   readonly freeze: () => void;
   readonly unfreeze: () => void;
   readonly currentIntent: () => SelectionIntent | undefined;
@@ -131,6 +132,7 @@ export function createSelectionObserver(handlers: ObserverHandlers, initialRules
 
   return {
     refresh: evaluate,
+    hide,
     freeze(): void {
       frozen = true;
     },

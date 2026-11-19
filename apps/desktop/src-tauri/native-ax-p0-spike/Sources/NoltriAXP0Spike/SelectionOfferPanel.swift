@@ -9,6 +9,7 @@ final class SelectionOfferPanel: NonActivatingCapturePanel {
     private let dismissButton = NSButton(title: "关闭", target: nil, action: nil)
     private var requestID: String?
     var onAccept: ((String) -> Void)?
+    var onDismiss: ((String) -> Void)?
 
     init() {
         super.init(contentRect: CGRect(x: 0, y: 0, width: 340, height: 112))
@@ -40,9 +41,10 @@ final class SelectionOfferPanel: NonActivatingCapturePanel {
         contentView?.addSubview(collectButton)
     }
 
-    func present(_ offer: AXSelectionOffer, onAccept: @escaping (String) -> Void) {
+    func present(_ offer: AXSelectionOffer, onAccept: @escaping (String) -> Void, onDismiss: @escaping (String) -> Void) {
         requestID = offer.requestID
         self.onAccept = onAccept
+        self.onDismiss = onDismiss
         selection.stringValue = String(offer.snapshot.text.prefix(240))
 
         let displays = NSScreen.screens.compactMap { screen -> AXDisplayGeometry? in
@@ -67,6 +69,7 @@ final class SelectionOfferPanel: NonActivatingCapturePanel {
     func dismiss() {
         requestID = nil
         onAccept = nil
+        onDismiss = nil
         orderOut(nil)
     }
 
@@ -76,7 +79,9 @@ final class SelectionOfferPanel: NonActivatingCapturePanel {
     }
 
     @objc private func dismissSelection(_ sender: NSButton) {
+        guard let requestID else { return }
+        let onDismiss = onDismiss
         dismiss()
-        // Dismissal consumes this visible offer; no capture is submitted.
+        onDismiss?(requestID)
     }
 }

@@ -53,18 +53,27 @@ export interface DrainOptions {
  */
 export async function drainOutbox(options: DrainOptions): Promise<DrainReport> {
   const now = options.nowMs?.() ?? Date.now();
-  const read = await options.outbox.read();
-  const { entries: alive, expired } = pruneExpired(read.entries, now, options.ttlMs);
+  const { alive, expired, corrupt } = await options.outbox.withLock(async () => {
+    const read = await options.outbox.read();
+    const pruned = pruneExpired(read.entries, now, options.ttlMs);
+    if (pruned.expired > 0 || read.dropped > 0) await options.outbox.write(pruned.entries);
+    return { alive: pruned.entries, expired: pruned.expired, corrupt: read.dropped };
+  });
 
-  let entries = alive;
   let sent = 0;
   let alreadyStored = 0;
   let stoppedEarly = false;
 
   for (const entry of alive) {
+    // A clear may have removed this entry since the snapshot was taken.
+    const present = await options.outbox.withLock(async () => (await options.outbox.read()).entries.some((item) => item.id === entry.id));
+    if (!present) continue;
     const outcome = await options.send(entry.request);
     if (outcome.ok) {
-      entries = removeEntry(entries, entry.id);
+      await options.outbox.withLock(async () => {
+        const read = await options.outbox.read();
+        await options.outbox.write(removeEntry(read.entries, entry.id));
+      });
       if (outcome.result.duplicate) alreadyStored += 1;
       else sent += 1;
       continue;
@@ -73,12 +82,14 @@ export async function drainOutbox(options: DrainOptions): Promise<DrainReport> {
       stoppedEarly = true;
       break;
     }
-    entries = bumpAttempt(entries, entry.id, outcome.message);
+    await options.outbox.withLock(async () => {
+      const read = await options.outbox.read();
+      await options.outbox.write(bumpAttempt(read.entries, entry.id, outcome.message));
+    });
   }
 
-  if (expired > 0) entries = pruneExpired(entries, now, options.ttlMs).entries;
-  await options.outbox.write(entries);
-  return { sent, alreadyStored, kept: entries.length, expired, corrupt: read.dropped, stoppedEarly };
+  const kept = await options.outbox.withLock(async () => (await options.outbox.read()).entries.length);
+  return { sent, alreadyStored, kept, expired, corrupt, stoppedEarly };
 }
 
 export interface EnqueueOptions {
@@ -103,13 +114,15 @@ export async function queueCapture(
   options: EnqueueOptions = {},
 ): Promise<EnqueueReport> {
   if (!outbox.enabled) return { accepted: false, queued: false, message: QUEUE_DISABLED_MESSAGE };
-  const read = await outbox.read();
-  const pruned = pruneExpired(read.entries, Date.parse(options.nowIso?.() ?? new Date().toISOString()));
-  const result = enqueueEntry(pruned.entries, entry);
-  if (!result.accepted) {
-    if (result.rejected === 'full') return { accepted: false, rejected: 'full', queued: false, message: QUEUE_FULL_MESSAGE };
-    return { accepted: false, rejected: 'duplicate', queued: true, message: QUEUE_DUPLICATE_MESSAGE };
-  }
-  await outbox.write(result.entries);
-  return { accepted: true, queued: true, message: WAITING_FOR_CORE_MESSAGE };
+  return outbox.withLock(async () => {
+    const read = await outbox.read();
+    const pruned = pruneExpired(read.entries, Date.parse(options.nowIso?.() ?? new Date().toISOString()));
+    const result = enqueueEntry(pruned.entries, entry);
+    if (!result.accepted) {
+      if (result.rejected === 'full') return { accepted: false, rejected: 'full', queued: false, message: QUEUE_FULL_MESSAGE };
+      return { accepted: false, rejected: 'duplicate', queued: true, message: QUEUE_DUPLICATE_MESSAGE };
+    }
+    await outbox.write(result.entries);
+    return { accepted: true, queued: true, message: WAITING_FOR_CORE_MESSAGE };
+  });
 }

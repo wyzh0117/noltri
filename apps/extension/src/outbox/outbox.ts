@@ -38,6 +38,7 @@ export interface OutboxRead {
 
 export interface Outbox {
   readonly enabled: boolean;
+  withLock<T>(task: () => Promise<T>): Promise<T>;
   read(): Promise<OutboxRead>;
   write(entries: readonly OutboxEntry[]): Promise<void>;
   clear(): Promise<void>;
@@ -121,15 +122,18 @@ export function bumpAttempt(entries: readonly OutboxEntry[], id: string, message
 }
 
 export function createOutbox(area: OutboxStorageArea): Outbox {
+  // Popup and service worker share an extension origin, so Web Locks protects both contexts.
+  const withLock = async <T>(task: () => Promise<T>): Promise<T> => await navigator.locks.request(OUTBOX_STORAGE_KEY, task);
   return {
     enabled: true,
+    withLock,
     read: async () => readOutboxEntries((await area.get(OUTBOX_STORAGE_KEY))?.[OUTBOX_STORAGE_KEY]),
     write: async (entries) => {
       await area.set({ [OUTBOX_STORAGE_KEY]: entries });
     },
-    clear: async () => {
+    clear: async () => withLock(async () => {
       await area.set({ [OUTBOX_STORAGE_KEY]: [] });
-    },
+    }),
   };
 }
 
@@ -140,6 +144,7 @@ export function createOutbox(area: OutboxStorageArea): Outbox {
 export function disabledOutbox(): Outbox {
   return {
     enabled: false,
+    withLock: (task) => task(),
     read: async () => ({ entries: [], dropped: 0 }),
     write: async () => undefined,
     clear: async () => undefined,

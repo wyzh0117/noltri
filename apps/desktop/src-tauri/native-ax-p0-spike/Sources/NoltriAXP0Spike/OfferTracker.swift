@@ -113,6 +113,13 @@ public final class AXSelectionOfferTracker {
         return AXSelectionOffer(requestID: offer.requestID, snapshot: currentSnapshot, bundleIdentifier: currentBundleIdentifier, applicationName: offer.applicationName)
     }
 
+    public func dismiss(requestID: String) {
+        guard let offer, offer.requestID == requestID else { return }
+        self.offer = nil
+        candidate = nil
+        consumedIdentity = SelectionIdentity(snapshot: offer.snapshot, bundleIdentifier: offer.bundleIdentifier)
+    }
+
     public func reset() -> String? {
         candidate = nil
         consumedIdentity = nil

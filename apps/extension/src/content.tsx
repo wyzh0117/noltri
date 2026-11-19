@@ -52,7 +52,7 @@ function start(): void {
       timer = undefined;
     }
     observer.unfreeze();
-    controller.hidePill();
+    observer.hide();
     controller.showResult(outcome);
   }
 

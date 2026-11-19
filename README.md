@@ -7,7 +7,7 @@
 
 ## 当前版本
 
-当前源码版本为 **0.1.0**，以 Markdown Notes 为主线。首发采用手动安装；本地构建候选尚未发布，正式工件与校验值以对应的 [Release](https://github.com/wyzh0117/noltri/releases) 为准。0.1.0 不提供签名 updater 工件或 `latest.json` 更新清单。历史版本仍保留为历史记录。
+当前源码版本为 **0.1.5**，以 Markdown Notes 为主线。工件与校验值以对应的 [GitHub Release](https://github.com/wyzh0117/noltri/releases) 为准。
 
 旧课程产品线不再维护，也不提供课程工作区迁移或兼容承诺。历史版本、已验证工件和原有数据均保留，不会因本轮版本调整而删除。
 
@@ -35,7 +35,7 @@ Core 默认端口为 **18887**，MCP 为 **18890**。未指定 `NOLTRI_ENV_FILE`
 
 ## Notes profile
 
-桌面 bundle identifier 为 `com.noltri.notes`。0.1.0 使用 macOS Notes profile 的既有默认位置；手动替换已有安装前，请备份数据并确认 profile 归属。旧课程产品线不自动迁移或导入：
+桌面 bundle identifier 为 `com.noltri.notes`。默认资料目录如下。
 
 | 运行方式 | 默认位置 |
 | --- | --- |
@@ -62,11 +62,9 @@ pnpm --filter @noltri/extension build
 
 ## 安装与更新
 
-0.1.0 通过手动 DMG 安装，不含签名更新归档、签名文件或 `latest.json`。本版没有可用的应用内更新源；检查更新遇到缺失清单时会安全失败，不能把该错误视为“已是最新版本”。未来签名更新流程仍要求明确检查、下载验证、安装和重启，详见[应用内更新](docs/application-updates.md)。
+0.1.5 在 Apple Silicon Mac 上通过 DMG 全新手动安装。App 采用 ad-hoc 签名，未获 Apple 公证。默认 Gatekeeper 下的实际安装与首次启动未验证，macOS 首次打开时可能警告或阻止启动。请从对应的 Release 下载并核对 SHA256，再按版本说明安装。[0.1.5 安装说明](docs/releases/0.1.5.md) [Apple 支持](https://support.apple.com/en-us/102445)
 
-3.0.0 的隔离采集与更新验收仅适用于对应历史构建，不代表 0.1.0 已通过同等产品验收。0.1.0 候选完成了本机应用／DMG 完整性检查；未完成完整产品验收、真实模型或 OCR 测试。当前构建为 ad-hoc 签名，没有 Apple Developer ID 签名或公证；构建主机的 Gatekeeper assessment 已关闭，因此无法在该主机上判断 Gatekeeper 接受结果。详见 [0.1.0 版本说明](docs/releases/0.1.0.md)。
-
-将来下载发行工件时，请先核对发布来源、校验值及签名说明。macOS 首次打开受阻时，请遵循 [Apple 官方安全打开应用指引](https://support.apple.com/en-us/102445)。更新包验签与 Apple Developer ID 签名、公证及系统授权是不同机制。
+签名更新清单与归档的格式见[应用内更新](docs/application-updates.md)。
 
 ## 开发验证
 
@@ -79,7 +77,7 @@ pnpm typecheck
 pnpm test
 ```
 
-构建、历史项目更新签名及限定平台验收已有记录。当前候选验证范围与剩余限制记录在 [0.1.0 版本说明](docs/releases/0.1.0.md)；[3.0.0 说明](docs/releases/3.0.0.md) 是历史记录。随包 Node 运行时保持固定版本和校验，不分发内部计划、测试资料或用户配置。
+随包 Node 运行时保持固定版本和校验。内部计划、测试资料及用户配置保留在本机。各版验收范围见版本说明。[0.1.5](docs/releases/0.1.5.md) [0.1.0](docs/releases/0.1.0.md) [3.0.0](docs/releases/3.0.0.md)
 
 ## License
 

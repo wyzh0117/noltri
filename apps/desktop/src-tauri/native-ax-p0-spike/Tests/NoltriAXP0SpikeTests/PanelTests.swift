@@ -87,4 +87,23 @@ final class PanelTests: XCTestCase {
         XCTAssertEqual(panel.level, .floating)
         XCTAssertFalse(panel.hidesOnDeactivate)
     }
+
+    @MainActor
+    func testDismissButtonConsumesTheOfferWithoutAcceptingIt() throws {
+        let selected = AXSelectionSnapshot(processID: 42, focusedElementIdentity: "synthetic", text: "synthetic", selectionRange: NSRange(location: 0, length: 9), bounds: CGRect(x: 20, y: 30, width: 140, height: 20))
+        let tracker = AXSelectionOfferTracker(stabilityInterval: 0, makeRequestID: { "ax-dismissed" })
+        let now = Date(timeIntervalSince1970: 4_000)
+        _ = tracker.observe(snapshot: selected, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: now)
+        guard case .presented(let offer) = tracker.observe(snapshot: selected, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: now) else {
+            return XCTFail("expected offer")
+        }
+        let panel = SelectionOfferPanel()
+        defer { panel.dismiss() }
+        var accepted = false
+        panel.present(offer, onAccept: { _ in accepted = true }, onDismiss: { tracker.dismiss(requestID: $0) })
+        let button = try XCTUnwrap(panel.contentView?.subviews.compactMap { $0 as? NSButton }.first { $0.title == "关闭" })
+        button.performClick(nil)
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(tracker.observe(snapshot: selected, bundleIdentifier: "com.apple.TextEdit", applicationName: "TextEdit", now: now), .none)
+    }
 }

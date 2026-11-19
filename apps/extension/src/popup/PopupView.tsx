@@ -39,7 +39,7 @@ export async function captureManualText(input: ManualCaptureInput): Promise<Manu
   return { request, outcome: await captureIntent(input.settings, request) };
 }
 
-/** Same storage the service worker uses; a concurrent drain is harmless because the Core dedupes by key. */
+/** The popup and service worker coordinate access to their shared local queue. */
 function popupOutbox(): Outbox {
   return chrome.extension?.inIncognitoContext === true ? disabledOutbox() : createOutbox(localArea());
 }

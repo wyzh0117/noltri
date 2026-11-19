@@ -57,7 +57,7 @@ export function loadMcpConfig(env: EnvSource = currentEnv()): McpHttpConfig {
     );
   }
   return {
-    version: envString(env, 'MCP_VERSION', '0.1.0'),
+    version: envString(env, 'MCP_VERSION', '0.1.5'),
     apiBaseUrl: envString(env, 'KNOWLEDGE_API_URL').trim() || 'http://127.0.0.1:18887',
     accessToken,
     authRequired,

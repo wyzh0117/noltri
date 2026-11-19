@@ -23,7 +23,7 @@ import type { RightSection, RightTool, RightToolPanels } from './KnowledgeRightP
 import type { VaultGraphRenderNode } from './workbench-graph-render-data';
 import { mergeSemanticGraphSelections } from './workbench-semantic-graph-projection';
 import type { GraphOpenIntent } from './WorkbenchGraph';
-import { WorkbenchNotes } from './WorkbenchNotes';
+import { searchVaultWithLiteralFallback, WorkbenchNotes } from './WorkbenchNotes';
 import { WorkbenchInbox } from './WorkbenchInbox';
 import type { RelatedSourceDocument } from './WorkbenchNotes';
 import type { IntakeActivation } from './screenshot-entry';
@@ -139,6 +139,9 @@ export default function WorkbenchApp({
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [vaultEntries, setVaultEntries] = useState<VaultEntry[]>([]);
+  const [knowledgeSearch, setKnowledgeSearch] = useState<{ query: string; rootPath: string; revision: number; paths: string[] } | null>(null);
+  const [knowledgeSearchLoading, setKnowledgeSearchLoading] = useState(false);
+  const [knowledgeSearchError, setKnowledgeSearchError] = useState<string | null>(null);
   const [navigationMode, setNavigationMode] = useState<'subjects' | 'search'>('subjects');
   const [commandRequestId, setCommandRequestId] = useState(0);
   const [rightToolRequest, setRightToolRequest] = useState<{ tool: RightTool; id: number }>({ tool: 'properties', id: 0 });
@@ -187,7 +190,7 @@ export default function WorkbenchApp({
   const [activeNote, setActiveNote] = useState<ActiveGraphNote | null>(null);
   const [pendingDrafts, setPendingDrafts] = useState<NoteDraft[]>([]);
   const [chapterChoice, setChapterChoice] = useState<ChapterChoice | null>(null);
-  const [vaultOpenRequest, setVaultOpenRequest] = useState<{ path: string; intent: GraphOpenIntent; id: number; subpath?: string | null; draftContent?: string; legacyDraft?: { topicId: string; chapterId: string | null; content: string }; semanticIdentity?: { topicId: string; chapterId: string | null } } | null>(null);
+  const [vaultOpenRequest, setVaultOpenRequest] = useState<{ path: string; intent: GraphOpenIntent; id: number; subpath?: string | null; draftContent?: string; legacyDraft?: { topicId: string; chapterId: string | null; content: string }; semanticIdentity?: { topicId: string; chapterId: string | null }; readOnOpen?: boolean } | null>(null);
   const [vaultContext, setVaultContext] = useState<{ rootPath: string; selectedPath: string | null; revision: number; frontmatter: Record<string, unknown> | null; relatedSources: RelatedSourceDocument[] }>({ rootPath: '', selectedPath: null, revision: 0, frontmatter: null, relatedSources: [] });
   const [moreDetail, setMoreDetail] = useState<NodeDetail | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -385,8 +388,8 @@ export default function WorkbenchApp({
     setGraphScope(next);
   }
 
-  function requestMarkdownOpen(path: string, intent: GraphOpenIntent = { newTab: false, split: false }, draftContent?: string, legacyDraft?: { topicId: string; chapterId: string | null; content: string }, subpath?: string | null, semanticIdentity?: { topicId: string; chapterId: string | null }): void {
-    setVaultOpenRequest({ path, intent, id: ++vaultOpenRequestId.current, ...(subpath === undefined ? {} : { subpath }), ...(draftContent === undefined ? {} : { draftContent }), ...(legacyDraft === undefined ? {} : { legacyDraft }), ...(semanticIdentity === undefined ? {} : { semanticIdentity }) });
+  function requestMarkdownOpen(path: string, intent: GraphOpenIntent = { newTab: false, split: false }, draftContent?: string, legacyDraft?: { topicId: string; chapterId: string | null; content: string }, subpath?: string | null, semanticIdentity?: { topicId: string; chapterId: string | null }, readOnOpen = false): void {
+    setVaultOpenRequest({ path, intent, id: ++vaultOpenRequestId.current, ...(subpath === undefined ? {} : { subpath }), ...(draftContent === undefined ? {} : { draftContent }), ...(legacyDraft === undefined ? {} : { legacyDraft }), ...(semanticIdentity === undefined ? {} : { semanticIdentity }), ...(readOnOpen ? { readOnOpen } : {}) });
   }
 
   async function openLegacyMarkdown(topicId: string, chapterId: string | null, intent: number, openIntent: GraphOpenIntent = { newTab: false, split: false }, draftContent?: string, legacyDraft?: { topicId: string; chapterId: string | null; content: string }, subpath?: string | null): Promise<void> {
@@ -639,7 +642,7 @@ export default function WorkbenchApp({
     scrollToTreeNode(id, referenceParentId);
   }
 
-  async function navigateToMarkdownFile(path: string, intent = beginNavigationIntent(), addHistory = true, subpath: string | null = null, openIntent: GraphOpenIntent = { newTab: false, split: false }): Promise<void> {
+  async function navigateToMarkdownFile(path: string, intent = beginNavigationIntent(), addHistory = true, subpath: string | null = null, openIntent: GraphOpenIntent = { newTab: false, split: false }, readOnOpen = false): Promise<void> {
     const next: WorkbenchContent = { kind: 'file', path };
     if (!(await prepareContentTransition(next, addHistory, intent)) || !isCurrentNavigationIntent(intent)) return;
     updateContent(next);
@@ -652,7 +655,7 @@ export default function WorkbenchApp({
     setGraphMode('mini');
     setGraphQuery('');
     setNavCollapsed(false);
-    requestMarkdownOpen(path, openIntent, undefined, undefined, subpath);
+    requestMarkdownOpen(path, openIntent, undefined, undefined, subpath, undefined, readOnOpen);
   }
 
   async function navigateToTopic(topic: GraphNode, fromGraph = false, intent = beginNavigationIntent(), addHistory = true, openIntent: GraphOpenIntent = { newTab: false, split: false }, subpath?: string | null, effectiveScope?: GraphScope): Promise<void> {
@@ -1316,6 +1319,35 @@ export default function WorkbenchApp({
     };
   }, [api, itemsReloadVersion, kindFilter, query, selectedNodeId, view]);
 
+  useEffect(() => {
+    const requestQuery = query.trim();
+    if (navigationMode !== 'search' || requestQuery === '' || view === 'organize') {
+      setKnowledgeSearch(null);
+      setKnowledgeSearchLoading(false);
+      setKnowledgeSearchError(null);
+      return;
+    }
+    let cancelled = false;
+    setKnowledgeSearch(null);
+    setKnowledgeSearchLoading(true);
+    setKnowledgeSearchError(null);
+    const scope = `[noteType=item] [isAiDerived=false] ${view === 'archive' ? '[archived=true]' : '-[archived=true]'}`;
+    const expression = `${scope} (${requestQuery})`;
+    if (expression.length > 2000) {
+      setKnowledgeSearchLoading(false);
+      setKnowledgeSearchError('搜索内容过长，请缩短后重试。');
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void searchVaultWithLiteralFallback(api, requestQuery, 80, scope, () => !cancelled).then((result) => {
+        if (!cancelled) setKnowledgeSearch({ query: requestQuery, rootPath: vaultContext.rootPath, revision: vaultContext.revision, paths: result.results.map((hit) => hit.path) });
+      }).catch((error: unknown) => {
+        if (!cancelled) setKnowledgeSearchError(describeError(error));
+      }).finally(() => { if (!cancelled) setKnowledgeSearchLoading(false); });
+    }, 200);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [api, navigationMode, query, vaultContext.rootPath, vaultContext.revision, view]);
+
   const refreshTree = useCallback(async (): Promise<void> => {
     try {
       const result = await api.tree();
@@ -1581,6 +1613,16 @@ export default function WorkbenchApp({
     `${node.title} ${node.summary ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).slice(0, 12);
   const noteSearchResults = query.trim() === '' ? [] : standaloneMarkdown.filter((entry) =>
     `${vaultEntryTitle(entry)} ${entry.path}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).slice(0, 12);
+  const knowledgeSearchResults = useMemo(() => {
+    if (knowledgeSearch?.query !== query.trim() || knowledgeSearch.rootPath !== vaultContext.rootPath || knowledgeSearch.revision !== vaultContext.revision) return [];
+    const entries = new Map(vaultEntries.map((entry) => [entry.path, entry]));
+    return [...new Set(knowledgeSearch.paths)].flatMap((path) => {
+      const entry = entries.get(path);
+      if (entry?.kind !== 'file' || entry.frontmatter?.noteType !== 'item' || entry.frontmatter.isAiDerived !== false) return [];
+      if (view === 'archive' ? entry.frontmatter.archived !== true : entry.frontmatter.archived === true || view === 'organize') return [];
+      return [entry];
+    }).slice(0, 12);
+  }, [knowledgeSearch, query, vaultContext.rootPath, vaultContext.revision, vaultEntries, view]);
   const cardTopics = contentSelection.kind === 'cards'
     ? [...new Map(graphNodes.filter((node) => node.nodeType === 'topic').map((node) => [node.id, node])).values()]
     : contentSelection.kind === 'library' && view === 'all'
@@ -1905,8 +1947,10 @@ export default function WorkbenchApp({
           {query.trim() === '' ? <p>搜索学科主题、Markdown 笔记和已收集资料。</p> : <nav className="sidebar-search-results" aria-label="统一搜索结果">
             {topicSearchResults.map((topic) => <button key={`topic:${topic.id}`} type="button" aria-label={`打开主题笔记：${topic.title}`} onClick={() => { void navigateToTopic(topic); }}><strong>{topic.title}</strong><small>主题</small></button>)}
             {noteSearchResults.map((entry) => <button key={`file:${entry.path}`} type="button" aria-label={`打开笔记：${vaultEntryTitle(entry)}`} onClick={() => { void navigateToMarkdownFile(entry.path); }}><strong>{vaultEntryTitle(entry)}</strong><small>{entry.path}</small></button>)}
+            {knowledgeSearchResults.map((entry) => <button key={`knowledge:${entry.path}`} type="button" aria-label={`阅读人工知识稿：${vaultEntryTitle(entry)}`} onClick={() => { void navigateToMarkdownFile(entry.path, undefined, true, null, undefined, true); }}><strong>{vaultEntryTitle(entry)}</strong><small>人工知识稿 · {entry.path}</small></button>)}
             {visibleItems.slice(0, 10).map((item) => <button key={`item:${item.id}`} type="button" aria-label={`查看资料：${titleForItem(item)}`} onClick={() => openDetail(item.id)}><strong>{titleForItem(item)}</strong><small>资料 · {item.subjectPath.join(' / ')}</small></button>)}
-            {topicSearchResults.length === 0 && noteSearchResults.length === 0 && visibleItems.length === 0 && !loading ? <p>没有匹配的知识或资料。</p> : null}
+            {knowledgeSearchError !== null ? <p role="alert">知识稿搜索暂不可用：{knowledgeSearchError}</p> : null}
+            {topicSearchResults.length === 0 && noteSearchResults.length === 0 && knowledgeSearchResults.length === 0 && visibleItems.length === 0 && !loading && !knowledgeSearchLoading && knowledgeSearchError === null ? <p>没有匹配的知识或资料。</p> : null}
           </nav>}
         </section>}
 

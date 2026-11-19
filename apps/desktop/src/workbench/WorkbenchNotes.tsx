@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
+import { ApiClientError } from '@noltri/api-client';
 import type { CachedNoteMetadata, NoteFile, NoteHistoryResponse, NoteSearchResponse, VaultEntry, VaultSettings, VaultSnapshot } from '@noltri/schema';
 import YAML from 'yaml';
 import { describeError } from './api';
@@ -28,7 +29,7 @@ interface WorkbenchNotesProps {
   onRequestToolChange?: (tool: RightTool) => void;
   onSearchRequest?: (query: string) => void;
   onNavigateRequest?: (path: string | null, subpath?: string | null, intent?: { newTab: boolean; split: boolean }) => void;
-  requestedOpen: { path: string; intent: { newTab: boolean; split: boolean }; id: number; subpath?: string | null; draftContent?: string; legacyDraft?: { topicId: string; chapterId: string | null; content: string }; semanticIdentity?: SemanticNoteIdentity } | null;
+  requestedOpen: { path: string; intent: { newTab: boolean; split: boolean }; id: number; subpath?: string | null; draftContent?: string; legacyDraft?: { topicId: string; chapterId: string | null; content: string }; semanticIdentity?: SemanticNoteIdentity; readOnOpen?: boolean } | null;
   scopePaths: ReadonlySet<string> | null;
   scopeTitle: string | null;
   libraryView: 'all' | 'organize' | 'archive';
@@ -98,6 +99,19 @@ function sortedEntries(entries: readonly VaultEntry[]): VaultEntry[] {
 
 function basename(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/i, '');
+}
+
+function literalVaultQuery(query: string): string {
+  return `/${query.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/i`;
+}
+
+export async function searchVaultWithLiteralFallback(api: WorkbenchApi, query: string, limit: number, scope = '', isCurrent = (): boolean => true): Promise<NoteSearchResponse> {
+  const expression = (value: string): string => scope === '' ? value : `${scope} (${value})`;
+  try { return await api.searchVault(expression(query), limit); }
+  catch (error) {
+    if (!isCurrent() || !(error instanceof ApiClientError) || error.code !== 'invalid_request') throw error;
+    return api.searchVault(expression(literalVaultQuery(query)), limit);
+  }
 }
 
 function frontmatterStrings(value: unknown): string[] {
@@ -1267,6 +1281,7 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
     if (active && snapshot !== null && requestedOpen !== null && requestedOpen.id !== lastOpenRequestId.current) {
       lastOpenRequestId.current = requestedOpen.id;
       if (requestedOpen.semanticIdentity !== undefined) semanticIdentityByPathRef.current.set(requestedOpen.path, requestedOpen.semanticIdentity);
+      if (requestedOpen.readOnOpen) setMode('read');
       void openNote(requestedOpen.path, requestedOpen.subpath, requestedOpen.intent).then(() => {
         if (requestedOpen.draftContent === undefined || requestedOpen.intent.split || noteRef.current?.path !== requestedOpen.path) return;
         commitContent(requestedOpen.draftContent);
@@ -1423,7 +1438,8 @@ export function WorkbenchNotes({ api, active, displayMode = 'editor', contentVie
     if (searchQuery.trim() === '') { setSearch(null); return; }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void api.searchVault(searchQuery.trim(), 80).then((result) => { if (!cancelled) setSearch(result); }).catch((cause) => { if (!cancelled) setError(errorText(cause)); });
+      void searchVaultWithLiteralFallback(api, searchQuery.trim(), 80, '', () => !cancelled)
+        .then((result) => { if (!cancelled) setSearch(result); }).catch((cause) => { if (!cancelled) setError(errorText(cause)); });
     }, 160);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [api, searchQuery]);
